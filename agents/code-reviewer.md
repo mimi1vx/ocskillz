@@ -31,3 +31,7 @@ Review recent changes for quality and security issues.
 ```
 
 If no issues found, state "No issues found" with brief confirmation of what was checked.
+
+## Important constrains
+
+Before any action modifing code ask user for approval
