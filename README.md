@@ -16,6 +16,11 @@ Generates storytelling-focused Conventional Commits messages with human-in-the-l
 
 **Triggers:** User types "commit", "git commit", or asks to create a commit
 
+### python-testing-patterns
+Comprehensive guide to implementing robust testing strategies in Python using pytest, fixtures, mocking, parameterization, and test-driven development practices.
+
+**Triggers:** User writes Python tests, sets up test suites, or asks about testing patterns
+
 ### spec-to-plan
 Transforms project descriptions and feature requests into comprehensive specifications and actionable task lists. Uses a 5-phase workflow:
 1. Create initial specification
