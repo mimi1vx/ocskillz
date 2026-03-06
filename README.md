@@ -21,6 +21,11 @@ Comprehensive guide to implementing robust testing strategies in Python using py
 
 **Triggers:** User writes Python tests, sets up test suites, or asks about testing patterns
 
+### python-tooling
+Modern Python tooling with uv, ruff, and ty. Covers uv for package management and virtual environments, ruff for linting/formatting, and ty for type checking.
+
+**Triggers:** Setting up Python dev environment, configuring venv, adding linting/formatting, type checking setup
+
 ### spec-to-plan
 Transforms project descriptions and feature requests into comprehensive specifications and actionable task lists. Uses a 5-phase workflow:
 1. Create initial specification
