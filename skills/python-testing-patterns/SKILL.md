@@ -1,6 +1,10 @@
 ---
 name: python-testing-patterns
 description: Implement comprehensive testing strategies with pytest, fixtures, mocking, and test-driven development. Use when writing Python tests, setting up test suites, or implementing testing best practices.
+metadata:
+  language: python
+  scope: testing
+  packages: pytest, responses, freezegun, unittest
 ---
 
 # Python Testing Patterns

@@ -1,6 +1,9 @@
 ---
 name: python-tooling
 description: Modern Python tooling with uv, ruff, and ty. Focuses on uv venv for virtual environments, ruff for linting/formatting, and ty for type checking.
+metadata:
+  language: python
+  scope: tooling, package managment, pip migration, type checking, code formatting
 ---
 
 # Python Tooling
