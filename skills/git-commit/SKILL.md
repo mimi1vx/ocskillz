@@ -202,3 +202,4 @@ Future validation changes only need to be made in one place.
 - **Be specific** in technical summaries
 - **Think about the reader** - someone debugging this code in 6 months
 - **No co-authors** - Never add "Co-Authored-By" or mention agent
+- **Don't try add any new files or unstaged changes** - Only stagged changes matters
