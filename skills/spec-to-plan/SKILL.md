@@ -1,6 +1,7 @@
 ---
 name: spec-to-plan
 description: "Transform project descriptions and feature requests into comprehensive specifications and actionable task lists. Use when the user wants to: (1) Create a specification from a project/feature description, (2) Generate a detailed plan with task breakdown, (3) Clarify requirements before implementation, (4) Convert ideas into structured development plans with progress tracking. Works with or without existing codebase files."
+license: MIT
 ---
 
 # Spec-to-Plan Skill
