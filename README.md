@@ -37,6 +37,11 @@ Transforms project descriptions and feature requests into comprehensive specific
 ### changelog-generator
 Automatically creates user-facing changelogs from git commits. Categorizes changes (features, improvements, bug fixes) and translates technical commits into customer-friendly release notes.
 
+### karpathy-guidelines
+Behavioral guidelines to reduce common LLM coding mistakes: think before coding, prefer simplicity, make surgical changes, and define verifiable success criteria.
+
+**Triggers:** Writing, reviewing, or refactoring code where caution and minimal-change discipline matter
+
 ## Agents
 
 ### code-reviewer
