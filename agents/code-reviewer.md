@@ -1,18 +1,16 @@
 ---
 name: code-reviewer
 description: Reviews code for quality, security, and adherence to project conventions. Use after writing or modifying code, or when explicitly requested.
-tools:
-  read: true
-  grep: true
-  glob: true
-  bash: false
-  write: false
 permission:
+  read: allow
+  grep: allow
+  glob: allow
   edit: deny
+  question: allow
   bash:
+    "*": ask
     "git diff": allow
     "git log*": allow
-    "*": ask
 ---
 
 Review recent changes for quality and security issues.
