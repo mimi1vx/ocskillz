@@ -5,59 +5,70 @@ Custom skills, agents, and commands for opencode (and other coding agents).
 ## Overview
 
 This repository contains personalized extensions that enhance coding agent capabilities:
-- **Skills** - Specialized workflows for common tasks
-- **Agents** - Reusable agent definitions with specific tool access
-- **Commands** - Quick actions triggered with arguments
+- **Skills** — Specialized workflows for common tasks
+- **Agents** — Reusable agent definitions with specific tool access
+- **Commands** — Quick actions triggered with arguments
+- **Scripts** — Maintenance helpers (e.g. skill validation)
 
-## Skills
+## Inventory
 
-### git-commit
-Generates storytelling-focused Conventional Commits messages with human-in-the-loop context gathering. Creates detailed commit messages that answer "what", "why", and "what problem it solves" for future code archeology.
+### Skills (`skills/`)
 
-**Triggers:** User types "commit", "git commit", or asks to create a commit
+| Skill | Trigger | Description |
+|-------|---------|-------------|
+| [git-commit](./skills/git-commit/SKILL.md) | "commit", "git commit", "create a commit" | Storytelling-focused Conventional Commits with human-in-the-loop "why" gathering. |
+| [changelog-generator](./skills/changelog-generator/SKILL.md) | "create changelog", "release notes" | Turns commit history into user-friendly changelog entries. |
+| [karpathy-guidelines](./skills/karpathy-guidelines/SKILL.md) | Writing/reviewing/refactoring code | Guardrails to reduce common LLM coding mistakes: surgical changes, simplicity first, verifiable success. |
+| [debug-loop](./skills/debug-loop/SKILL.md) | Bug hunting, especially flaky/intermittent | Reproduce → isolate → hypothesize → failing test → fix → verify. |
+| [pr-review](./skills/pr-review/SKILL.md) | Opening or reviewing a PR | Pre-PR checklist + structured review framework. Pairs with `code-reviewer` agent. |
+| [spec-to-plan](./skills/spec-to-plan/SKILL.md) | "create a spec", "plan this feature" | 5-phase workflow: spec → clarify → markdown spec → todo → plan. |
+| [python-tooling](./skills/python-tooling/SKILL.md) | Python project setup, migrating from pip/black/mypy | Modern stack: uv, ruff, ty. |
+| [python-testing-patterns](./skills/python-testing-patterns/SKILL.md) | Writing Python tests | pytest, fixtures, mocking, parametrize, async, coverage. Slim index + topic references. |
+| [typescript-tooling](./skills/typescript-tooling/SKILL.md) | TypeScript project setup or modernization | Bun + Biome + tsc. Includes monorepo guidance. |
 
-### python-testing-patterns
-Comprehensive guide to implementing robust testing strategies in Python using pytest, fixtures, mocking, parameterization, and test-driven development practices.
+### Agents (`agents/`)
 
-**Triggers:** User writes Python tests, sets up test suites, or asks about testing patterns
+| Agent | Tool access | Purpose |
+|-------|-------------|---------|
+| [code-reviewer](./agents/code-reviewer.md) | read-only + git diff/log | Reviews recent changes; outputs Critical / Warnings / Suggestions. |
+| [refactor](./agents/refactor.md) | read + edit (with `ask`); bash limited | Cautious behavior-preserving refactors. Embeds karpathy-guidelines. |
+| [planner](./agents/planner.md) | read-only | Planning agent with strong clarifying-question discipline. Custom personality on top of opencode's built-in `plan` mode. |
 
-### python-tooling
-Modern Python tooling with uv, ruff, and ty. Covers uv for package management and virtual environments, ruff for linting/formatting, and ty for type checking.
+opencode also ships built-in `build` and `plan` agents — referenced by some commands below.
 
-**Triggers:** Setting up Python dev environment, configuring venv, adding linting/formatting, type checking setup
+### Commands (`commands/`)
 
-### spec-to-plan
-Transforms project descriptions and feature requests into comprehensive specifications and actionable task lists. Uses a 5-phase workflow:
-1. Create initial specification
-2. Clarify questions
-3. Generate markdown spec
-4. Create comprehensive todo
-5. Output plan markdown
+| Command | Agent | Purpose |
+|---------|-------|---------|
+| [test](./commands/test.md) | `build` (built-in) | Run pytest with coverage; prefers `uv run pytest`, falls back to `python3 -m pytest`. |
+| [clean-init](./commands/clean-init.md) | `build` (built-in) | Analyze codebase and write/update `AGENTS.md`. |
 
-### changelog-generator
-Automatically creates user-facing changelogs from git commits. Categorizes changes (features, improvements, bug fixes) and translates technical commits into customer-friendly release notes.
+### Scripts (`scripts/`)
 
-### karpathy-guidelines
-Behavioral guidelines to reduce common LLM coding mistakes: think before coding, prefer simplicity, make surgical changes, and define verifiable success criteria.
+| Script | Purpose |
+|--------|---------|
+| [validate-skills.sh](./scripts/validate-skills.sh) | Lint every `skills/*/SKILL.md` for required frontmatter (`name`, `description`) and verify `name` matches the directory. Exits non-zero on failure. |
 
-**Triggers:** Writing, reviewing, or refactoring code where caution and minimal-change discipline matter
+## Validation
 
-## Agents
+Run the skill validator any time you add or modify a skill:
 
-### code-reviewer
-Reviews code for quality, security, and adherence to project conventions. Outputs findings by priority (Critical, Warnings, Suggestions).
+```bash
+./scripts/validate-skills.sh
+```
 
-## Commands
+Output:
 
-### test
-Runs Python test suite with coverage using pytest. Activates the `build` agent.
-
-### clean-init
-Analyzes codebase and creates/updates AGENTS.md with build commands, code style guidelines, and conventions. Activates the `build` agent.
+```
+ok   [changelog-generator]
+ok   [debug-loop]
+...
+Checked: 9  Errors: 0
+```
 
 ## Installation
 
-These configurations are designed for opencode. Place this repository at `~/.config/opencode/` or link it:
+These configurations are designed for opencode. Place this repository at `~/.config/opencode/` or symlink it:
 
 ```bash
 ln -s /path/to/ocskillz ~/.config/opencode
@@ -65,4 +76,4 @@ ln -s /path/to/ocskillz ~/.config/opencode
 
 ## License
 
-MIT
+MIT. All bundled skills declare `license: MIT` in their frontmatter for consistency.
