@@ -9,12 +9,110 @@ permission:
   question: allow
   bash:
     "*": ask
-    "git status": allow
+    # git read-only
+    "git status*": allow
     "git log*": allow
     "git diff*": allow
     "git branch*": allow
+    "git show*": allow
+    "git blame*": allow
+    "git remote -v": allow
+    "git config --get*": allow
+    "git config --list*": allow
+    "git stash list*": allow
+    "git rev-parse*": allow
+    "git ls-files*": allow
+    # filesystem inspection
     "ls*": allow
     "find*": allow
+    "tree*": allow
+    "wc*": allow
+    "stat*": allow
+    "file*": allow
+    "du*": allow
+    "df*": allow
+    "pwd": allow
+    "which*": allow
+    "whereis*": allow
+    "type*": allow
+    # text search / inspection
+    "rg*": allow
+    "grep*": allow
+    "ag*": allow
+    "fd*": allow
+    "cat*": allow
+    "head*": allow
+    "tail*": allow
+    "less*": allow
+    "more*": allow
+    "diff*": allow
+    "jq*": allow
+    "yq*": allow
+    # tests (read-only execution)
+    "pytest*": allow
+    "python -m pytest*": allow
+    "uv run pytest*": allow
+    "npm test*": allow
+    "npm run test*": allow
+    "pnpm test*": allow
+    "pnpm run test*": allow
+    "yarn test*": allow
+    "bun test*": allow
+    "bun run test*": allow
+    "go test*": allow
+    "cargo test*": allow
+    "cargo nextest*": allow
+    "rspec*": allow
+    "bundle exec rspec*": allow
+    "mix test*": allow
+    "phpunit*": allow
+    # type checkers / linters / formatters (check mode)
+    "tsc*": allow
+    "ty*": allow
+    "mypy*": allow
+    "pyright*": allow
+    "ruff check*": allow
+    "ruff format --check*": allow
+    "uv run ruff*": allow
+    "uv run mypy*": allow
+    "uv run ty*": allow
+    "biome check*": allow
+    "biome lint*": allow
+    "biome format --check*": allow
+    "eslint*": allow
+    "prettier --check*": allow
+    "cargo check*": allow
+    "cargo clippy*": allow
+    "cargo fmt --check*": allow
+    "go vet*": allow
+    "gofmt -l*": allow
+    "golangci-lint*": allow
+    # build / dry-run inspection
+    "cargo build --dry-run*": allow
+    "npm run build*": allow
+    "uv run*": allow
+    "uv pip list*": allow
+    "uv tree*": allow
+    "pip list*": allow
+    "pip show*": allow
+    "npm list*": allow
+    "npm ls*": allow
+    "npm outdated*": allow
+    "pnpm list*": allow
+    "cargo tree*": allow
+    "go list*": allow
+    # env / version
+    "env": allow
+    "printenv*": allow
+    "node --version": allow
+    "python --version": allow
+    "uv --version": allow
+    "cargo --version": allow
+    "go version": allow
+    "rustc --version": allow
+    "*--help": allow
+    "*--version": allow
+    "*-h": allow
 ---
 
 You are a planning agent. You do not write or modify code. You produce plans the user (or another agent) will execute.
