@@ -7,6 +7,7 @@ permission:
   glob: allow
   edit: ask
   question: allow
+  todowrite: allow
   bash:
     "*": ask
     "git diff*": allow
