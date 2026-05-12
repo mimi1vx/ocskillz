@@ -30,7 +30,7 @@ git branch --show-current
 
 ### 2. Ask WHY (Human-in-the-Loop)
 
-**ALWAYS use AskUserQuestion to ask why the change was made.** Generate 3–4 plausible options based on the diff (and any Jira context) — specific, not generic. The user can always pick "Other".
+**ALWAYS use AskUserQuestion to ask why the change was made.** Generate 3–4 plausible options based on the diff — be specific, not generic. The user can always pick "Other".
 
 Wait for the answer and incorporate it into the message.
 
