@@ -1,0 +1,12 @@
+---
+description: Propose a reorganization plan for scattered code files
+agent: planner
+---
+
+We really have WAY too many code files scattered inside src/x with no rhyme or reason to the structure and location of code files; I feel like we could make things a lot more organized, logical, intuitive, etc. by reorganizing these into a nice, sensible folder structure, although I don't want something that has too many levels of nesting; basically, we should at least start out with making "no brainer" type changes to the folder structure, like putting all the "x" functionality-related code files into an "x" folder (and perhaps that inside of a data_sources folder which might also contain a "y" folder, etc.).
+
+Before making any of these changes, I really need you to take the time to explore and read ALL of the many, many files in that folder and understand what they do, how they fit together, which code files import which others, how they interact in functional ways, etc., and then propose a reorganization plan in a new document called PROPOSED_CODE_FILE_REORGANIZATION_PLAN.md so I can review it before doing anything; this plan should include not just your detailed reorganization plan but the super-detailed rationale and justification for your proposed file/folder structure and why you think it's optimal for aiding any developer or coding agent working on this project to immediately and intuitively understand the project structure and where to look for things, etc.
+
+I'm also open to merging/consolidating/splitting individual code files; if we have multiple small related code files that you think should be combined into a single code file, explain why. If you think any particular code files are WAY too big and really should be refactored into several smaller code files, then explain that too and your proposed strategy for how to restructure them.
+
+Always keep in mind, and track in this plan document, changes you will need to make to any calling code to properly reflect the new folder structure and file structure so that we don't break anything. I don't want to discover after you do all this that nothing works anymore and we have to do a massive slog to get anything running again properly.
