@@ -5,16 +5,12 @@ permission:
   read: allow
   grep: allow
   glob: allow
-  edit: ask
+  edit: allow
+  write: allow
+  patch: allow
   question: allow
   todowrite: allow
-  bash:
-    "*": ask
-    "git diff*": allow
-    "git log*": allow
-    "git status": allow
-    "*test*": allow
-    "*pytest*": allow
+  bash: allow
 ---
 
 Refactor code without changing observable behavior. Be surgical, minimal, and verifiable.
