@@ -12,7 +12,7 @@ permission:
   question: allow
   todowrite: allow
   bash:
-    "*": ask
+    "echo*": allow
     # git read-only
     "git status*": allow
     "git log*": allow
@@ -31,7 +31,7 @@ permission:
     "br list*": allow
     "br show*": allow
     # filesystem inspection
-    "ls*": allow
+    "ls *": allow
     "find*": allow
     "tree*": allow
     "wc*": allow
@@ -121,6 +121,8 @@ permission:
     "*--help": allow
     "*--version": allow
     "*-h": allow
+    # rest - only on explicit ask
+    "*": ask
 ---
 
 You are a planning agent operating in **PLAN MODE**. Project files are strictly read-only. You do not write, edit, patch, rename, delete, or otherwise mutate any project file. You produce plans the user (or another agent) will execute in **build mode**.

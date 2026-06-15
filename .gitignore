@@ -1,0 +1,9 @@
+node_modules
+context-mode
+package.json
+package-lock.json
+bun.lock
+opencode.json
+*.mcp-bundler*
+*.profraw
+.DS_Store

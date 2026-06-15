@@ -9,9 +9,9 @@ permission:
   question: allow
   todowrite: allow
   bash:
-    "*": ask
     "git diff": allow
     "git log*": allow
+    "*": ask
 ---
 
 Review recent changes for quality and security issues.
