@@ -79,7 +79,8 @@ await_holding_lock = "deny"
   cargo refuses to build on older toolchains with a clear error instead of
   cryptic syntax failures.
 - **Test it**: a CI job building with the pinned MSRV toolchain
-  (`cargo +1.85 check --all-features`); `cargo msrv verify` / `cargo msrv find`
+  (`cargo check --all-features` after CI provisions that compiler); `cargo msrv
+  verify` / `cargo msrv find`
   to maintain. An untested MSRV claim is false within two dependency bumps —
   note deps' MSRV bumps in *minor* versions can break you; this is what the
   MSRV-aware resolver (Rust 1.84+, `resolver.incompatible-rust-versions =
@@ -88,7 +89,8 @@ await_holding_lock = "deny"
   MSRV bump is a semver-minor (common convention) — pick one and say it.
 - Applications: pin the toolchain exactly with `rust-toolchain.toml`
   (reproducible builds, same clippy everywhere). Libraries: MSRV floor +
-  stable-latest CI matrix.
+  repository-supported stable CI matrix. For local work, use the installed
+  system version when it satisfies those constraints.
 
 ## 5. Feature flag hygiene
 
@@ -152,7 +154,8 @@ rustdoc-args = ["--cfg", "docsrs"]
 ## 7. Edition 2024 notes
 
 Current edition as of mid-2026; new code starts here (`edition = "2024"`,
-Rust ≥1.85; verify latest stable at releases.rs). The next edition is expected
+Rust ≥1.85). Use the installed system compiler when it meets this requirement;
+do not upgrade merely to obtain the latest stable. The next edition is expected
 ~2027 on the usual three-year cadence — nothing to migrate toward yet.
 Migration: `cargo fix --edition` then review. Key changes that affect rules in
 this skill:
@@ -207,13 +210,15 @@ jobs:
     - cargo nextest run --workspace --all-features
     - cargo test --doc --workspace
   msrv:
-    - cargo +${MSRV} check --workspace --all-features
+    # Run after CI provisions MSRV as the PATH-resolved system toolchain.
+    - cargo check --workspace --all-features
   features:
     - cargo hack check --workspace --feature-powerset --depth 2
   supply-chain:        # rules/05
     - cargo deny check
   unsafe-crates-only:  # rules/03
-    - cargo +nightly miri test -p crate-with-unsafe
+    # Run with a system-provided nightly containing Miri.
+    - cargo miri test -p crate-with-unsafe
 ```
 
 Plus scheduled: `cargo audit` (new advisories), fuzz jobs, bench regression

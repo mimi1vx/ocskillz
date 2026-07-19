@@ -28,6 +28,16 @@ toolchain unless the user requests a migration. Additional gates such as
 nextest, cargo-deny, Miri, or an MSRV matrix are risk-based recommendations,
 not permission to replace working project conventions unasked.
 
+Prefer the system-installed, PATH-resolved `rustc`, `cargo`, `rustfmt`, and
+`clippy`. Check their versions directly and run plain `cargo ...` commands;
+do not install, invoke, or recommend rustup or `cargo +toolchain` when the
+system toolchain can perform the task. Prefer the installed system Rust version
+over downloading, selecting, or recommending a newer version; upgrade only
+when the project explicitly requires a version the system compiler does not
+satisfy. If a required nightly, target, component, or historical MSRV compiler
+is unavailable system-wide, report the missing requirement and ask before
+using rustup; in CI, follow the repository's existing toolchain provisioning.
+
 `sota-testing` owns language-agnostic test strategy. `deep-performance-audit`
 owns baseline/profile/equivalence methodology; this skill owns Rust-specific
 test runner and optimization mechanics.
@@ -36,9 +46,9 @@ test runner and optimization mechanics.
 
 This skill encodes the 2026 state of the art for production Rust: the idioms,
 security posture, performance discipline, and CI baseline expected of an
-expert Rust codebase. Baseline as of mid-2026: a recent stable Rust toolchain (verify the current
-release at blog.rust-lang.org),
-edition 2024 (next edition expected ~2027), tokio still 1.x. It serves two modes — **BUILD** (write new code to this
+expert Rust codebase. Baseline as of mid-2026: the system-installed Rust
+version when it satisfies the repository's declared requirements, edition
+2024 where supported, and tokio still 1.x. It serves two modes — **BUILD** (write new code to this
 standard) and **AUDIT** (find where existing code falls short, with severity
 and evidence). The detailed rules live in `rules/*.md`; load only the files
 relevant to the task (see index below). Every rules file ends with an "Audit

@@ -146,8 +146,7 @@ Any crate with non-trivial `unsafe` runs **Miri in CI**:
 
 ```yaml
 # .github/workflows/miri.yml (core job)
-- run: rustup toolchain install nightly --component miri
-- run: cargo +nightly miri test
+- run: cargo miri test
   env:
     # many-seeds for nondeterminism; strict provenance catches ptr-int abuse
     MIRIFLAGS: "-Zmiri-strict-provenance"
@@ -156,8 +155,13 @@ Any crate with non-trivial `unsafe` runs **Miri in CI**:
 - Miri checks the (Tree Borrows / Stacked Borrows) aliasing model, init,
   alignment, leaks — but **only on executed paths**: unsafe code without tests
   is unaudited code. Write tests that exercise every unsafe branch.
+- Miri requires a nightly compiler with the Miri component. Prefer a
+  system-provided nightly and `cargo miri`; only provision it through rustup
+  when the environment has no suitable system toolchain and the user or
+  repository explicitly permits rustup.
 - Miri can't run FFI/syscall-heavy paths; for those use sanitizers:
-  `RUSTFLAGS="-Zsanitizer=address" cargo +nightly test` (ASan), TSan for
+  `RUSTFLAGS="-Zsanitizer=address" cargo test` under a system-provided nightly
+  (ASan), TSan for
   concurrency claims, and `loom` for testing lock-free/atomic algorithms
   exhaustively.
 - Parsers and any unsafe-touching decoder: fuzz with `cargo fuzz` (libFuzzer)
