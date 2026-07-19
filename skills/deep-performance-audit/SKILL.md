@@ -5,6 +5,11 @@ description: Hyper-intensively investigate and study the codebase to identify gr
 
 # Deep Performance Audit
 
+This skill is the canonical owner of measure-first performance methodology:
+baselines, profiles, equivalence proofs, opportunity ranking, and regression
+guardrails. Language and domain skills provide hotspot-specific techniques;
+do not duplicate this workflow from them.
+
 First read ALL of the AGENTS.md file and README.md file super carefully and understand ALL of both! Then use your code investigation agent mode to fully understand the code, and technical architecture and purpose of the project. Then, once you've done an extremely thorough and meticulous job at all that and deeply understood the entire existing system and what it does, its purpose, and how it is implemented and how all the pieces connect with each other, I need you to hyper-intensively investigate and study and ruminate on these questions as they pertain to this project: are there any other gross inefficiencies in the core system? places in the codebase where 1) changes would actually move the needle in terms of overall latency/responsiveness and throughput; 2) such that our changes would be provably isomorphic in terms of functionality so that we would know for sure that it wouldn't change the resulting outputs given the same inputs; 3) where you have a clear vision to an obviously better approach in terms of algorithms or data structures.
 
 Consider these optimization patterns:

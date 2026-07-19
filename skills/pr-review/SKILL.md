@@ -8,6 +8,10 @@ license: MIT
 
 Pre-flight checklist for opening a pull request, and a structured framework for reviewing one. Pairs with `git-commit` (commit message quality) and the `code-reviewer` agent (line-level findings).
 
+This skill owns PR workflow: diff scope, breaking-change analysis, coverage
+delta, and reviewer briefing. Load relevant `sota-*` skills for domain-specific
+checklists instead of copying those rules here.
+
 ## When to Use This Skill
 
 - About to open a PR — sanity-check before pushing

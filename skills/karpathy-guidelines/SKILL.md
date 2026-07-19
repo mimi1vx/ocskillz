@@ -10,6 +10,10 @@ Behavioral guidelines to reduce common LLM coding mistakes, derived from [Andrej
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
+These guidelines govern how all domain skills are applied. Domain guidance does
+not authorize speculative scaffolding, unrelated cleanup, or migration away
+from an established project toolchain unless the user requests it.
+
 ## 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**

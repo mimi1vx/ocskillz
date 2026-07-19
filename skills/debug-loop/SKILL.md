@@ -8,6 +8,10 @@ license: MIT
 
 A disciplined debugging methodology. Pairs naturally with `karpathy-guidelines` (smallest change, verifiable success).
 
+This skill owns the debugging sequence: reproduce, isolate, hypothesize,
+encode the regression, fix, and verify. Use `sota-testing` for test-design
+quality rather than duplicating its strategy here.
+
 ## When to Use This Skill
 
 - Bug reports without a clear root cause

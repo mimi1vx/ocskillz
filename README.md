@@ -22,8 +22,16 @@ This repository contains personalized extensions that enhance coding agent capab
 | [debug-loop](./skills/debug-loop/SKILL.md) | Bug hunting, especially flaky/intermittent | Reproduce → isolate → hypothesize → failing test → fix → verify. |
 | [pr-review](./skills/pr-review/SKILL.md) | Opening or reviewing a PR | Pre-PR checklist + structured review framework. Pairs with `code-reviewer` agent. |
 | [spec-to-plan](./skills/spec-to-plan/SKILL.md) | "create a spec", "plan this feature" | 5-phase workflow: spec → clarify → markdown spec → todo → plan. |
-| [python-tooling](./skills/python-tooling/SKILL.md) | Python project setup, migrating from pip/black/mypy | Modern stack: uv, ruff, ty. |
-| [python-testing-patterns](./skills/python-testing-patterns/SKILL.md) | Writing Python tests | pytest, fixtures, mocking, parametrize, async, coverage. Slim index + topic references. |
+| [sota-python](./skills/sota-python/SKILL.md) | Python code, tooling, frameworks, or audits | Production Python guidance with strong new-project defaults for uv, Ruff, and ty. |
+| [sota-rust](./skills/sota-rust/SKILL.md) | Rust code, Cargo, Tokio, unsafe, or audits | Ownership, errors, async, unsafe discipline, security, performance, and CI. |
+| [sota-ml-engineering](./skills/sota-ml-engineering/SKILL.md) | Classical ML and MLOps systems | Training, serving, evaluation, drift, reproducibility, and governance. |
+| [sota-llm-engineering](./skills/sota-llm-engineering/SKILL.md) | LLM, RAG, prompt, eval, or agent work | Eval-first LLM application quality, retrieval, orchestration, and operations. |
+| [sota-testing](./skills/sota-testing/SKILL.md) | Test strategy or suite audits | Language-agnostic test design, doubles, integration, property testing, and suite health. |
+| [sota-code-security](./skills/sota-code-security/SKILL.md) | Secure coding or security audits | Trust boundaries, injection, auth, crypto, web, data exposure, and LLM security. |
+| [sota-sandboxing](./skills/sota-sandboxing/SKILL.md) | Untrusted code, parsers, or agent isolation | Isolation boundaries, OS/container hardening, privilege separation, and agent containment. |
+| [sota-privacy-compliance](./skills/sota-privacy-compliance/SKILL.md) | Privacy, PII, GDPR, or compliance | Data lifecycle, consent, user rights, evidence, and breach readiness. |
+| [sota-observability](./skills/sota-observability/SKILL.md) | Logging, metrics, tracing, SLOs, or incidents | Generic telemetry and operational-readiness practices. |
+| [sota-data-engineering](./skills/sota-data-engineering/SKILL.md) | Batch, streaming, warehouse, or lakehouse work | Pipelines, CDC, contracts, storage, quality, and governance. |
 | [typescript-tooling](./skills/typescript-tooling/SKILL.md) | TypeScript project setup or modernization | Bun + Biome + tsc. Includes monorepo guidance. |
 | [deep-performance-audit](./skills/deep-performance-audit/SKILL.md) | "performance audit", "optimize codebase" | Hyper-intensively investigate the codebase to identify gross inefficiencies and propose isomorphic improvements. |
 | [deep-project-primer](./skills/deep-project-primer/SKILL.md) | "project primer", "initialize project" | Initialization instructions for any project. Investigates code to understand architecture and purpose. |
@@ -70,7 +78,7 @@ Output:
 ok   [changelog-generator]
 ok   [debug-loop]
 ...
-Checked: 13  Errors: 0
+Checked: 21  Errors: 0
 ```
 
 ## Installation
@@ -83,4 +91,7 @@ ln -s /path/to/ocskillz ~/.config/opencode
 
 ## License
 
-MIT. All bundled skills declare `license: MIT` in their frontmatter for consistency.
+Original local skills are MIT-licensed where declared in their frontmatter.
+The adapted `sota-*` skills are CC BY 4.0. See
+[SOTA-ATTRIBUTION.md](./skills/SOTA-ATTRIBUTION.md) for source, modification,
+pinning, and refresh details.
