@@ -47,6 +47,9 @@ test gates pass locally. Self-review the diff before asking anyone else to.
 - **TypeScript:** `bun` (runtime + deps + test), `biome` (lint + format), `tsc
   --noEmit` (types). Not npm, ESLint+Prettier, or ts-node.
 - **Haskell:** `cabal` (build + deps), `hlint` (lint), `ghc --make` (compile). Not stack or ghcide.
+- **Perl:** `cpanfile` + current `cpm` (deps), `perltidy` (format), a curated
+  `Perl::Critic` profile (lint), and `prove`/Test2 (tests) for new projects.
+  Preserve established Carton/Carmel/cpanm and authoring workflows.
 - **Rust:** `cargo` (build + deps + test), `rustfmt` (format), `clippy` (lint). Not rustup.
 - **Shell:** `shfmt` (format), `shellcheck` (lint).
 - Respect a project's existing toolchain when it differs — match what's there
