@@ -23,6 +23,7 @@ This repository contains personalized extensions that enhance coding agent capab
 | [pr-review](./skills/pr-review/SKILL.md) | Opening or reviewing a PR | Pre-PR checklist + structured review framework. Pairs with `code-reviewer` agent. |
 | [spec-to-plan](./skills/spec-to-plan/SKILL.md) | "create a spec", "plan this feature" | 5-phase workflow: spec → clarify → markdown spec → todo → plan. |
 | [sota-python](./skills/sota-python/SKILL.md) | Python code, tooling, frameworks, or audits | Production Python guidance with strong new-project defaults for uv, Ruff, and ty. |
+| [sota-haskell](./skills/sota-haskell/SKILL.md) | Haskell code, Cabal, GHC, concurrency, FFI, or audits | Type-driven Haskell engineering with GHCup, Cabal, Fourmolu, HLint, profiling, testing, and packaging. |
 | [sota-perl](./skills/sota-perl/SKILL.md) | Perl code, CPAN tooling, frameworks, or audits | Perl semantics, dependencies, APIs, async/processes, security, performance, testing, and releases. |
 | [sota-rust](./skills/sota-rust/SKILL.md) | Rust code, Cargo, Tokio, unsafe, or audits | Ownership, errors, async, unsafe discipline, security, performance, and CI. |
 | [sota-ml-engineering](./skills/sota-ml-engineering/SKILL.md) | Classical ML and MLOps systems | Training, serving, evaluation, drift, reproducibility, and governance. |
@@ -79,7 +80,7 @@ Output:
 ok   [changelog-generator]
 ok   [debug-loop]
 ...
-Checked: 22  Errors: 0
+Checked: 23  Errors: 0
 ```
 
 ## Installation
@@ -92,7 +93,7 @@ ln -s /path/to/ocskillz ~/.config/opencode
 
 ## License
 
-Original local skills, including `sota-perl`, are MIT-licensed where declared
+Original local skills, including `sota-haskell` and `sota-perl`, are MIT-licensed where declared
 in their frontmatter. The externally adapted `sota-*` skills are CC BY 4.0. See
 [SOTA-ATTRIBUTION.md](./skills/SOTA-ATTRIBUTION.md) for source, modification,
 pinning, and refresh details.
