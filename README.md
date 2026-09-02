@@ -22,6 +22,7 @@ This repository contains personalized extensions that enhance coding agent capab
 | [karpathy-guidelines](./skills/karpathy-guidelines/SKILL.md) | Writing/reviewing/refactoring code | Guardrails to reduce common LLM coding mistakes: surgical changes, simplicity first, verifiable success. |
 | [debug-loop](./skills/debug-loop/SKILL.md) | Bug hunting, especially flaky/intermittent | Reproduce → isolate → hypothesize → failing test → fix → verify. |
 | [pr-review](./skills/pr-review/SKILL.md) | Opening or reviewing a PR | Pre-PR checklist + structured review framework. Pairs with `code-reviewer` agent. |
+| [change-walkthrough](./skills/change-walkthrough/SKILL.md) | "walk me through", "explain this PR" | Paced, conversational diff explanation grouped by behavioral effect, one topic at a time. |
 | [spec-to-plan](./skills/spec-to-plan/SKILL.md) | "create a spec", "plan this feature" | 5-phase workflow: spec → clarify → markdown spec → todo → plan. |
 | [sota-python](./skills/sota-python/SKILL.md) | Python code, tooling, frameworks, or audits | Production Python guidance with strong new-project defaults for uv, Ruff, and ty. |
 | [sota-haskell](./skills/sota-haskell/SKILL.md) | Haskell code, Cabal, GHC, concurrency, FFI, or audits | Type-driven Haskell engineering with GHCup, Cabal, Fourmolu, HLint, profiling, testing, and packaging. |
@@ -61,6 +62,7 @@ opencode also ships built-in `build` and `plan` agents — referenced by some co
 | [bug-hunter](./commands/bug-hunter.md) | `general` | Randomly explore code to find and fix bugs. |
 | [code-reorganizer](./commands/code-reorganizer.md) | `planner` | Propose a reorganization plan for scattered code files. |
 | [de-slopify](./commands/de-slopify.md) | `refactor` | Remove AI slop style writing from text. |
+| [walkthrough](./commands/walkthrough.md) | `plan` (built-in) | Walk through a PR/diff one behavioral topic at a time using `change-walkthrough`. |
 
 ### Scripts (`scripts/`)
 
@@ -90,9 +92,9 @@ ok   [changelog-generator]
 ok   [agent: planner]
 ok   [command: test]
 
-registration: 24 skills, 3 agents, 5 commands
+registration: 25 skills, 3 agents, 6 commands
 
-Checked: 32  Errors: 0
+Checked: 34  Errors: 0
 ```
 
 Three phases run:
@@ -123,3 +125,6 @@ Original local skills, including `sota-haskell` and `sota-perl`, are MIT-license
 in their frontmatter. The externally adapted `sota-*` skills are CC BY 4.0. See
 [SOTA-ATTRIBUTION.md](./skills/SOTA-ATTRIBUTION.md) for source, modification,
 pinning, and refresh details.
+
+`change-walkthrough` is an original MIT-licensed skill, inspired by the concept
+of `rekram1-node/skills`, not derived from its text.
