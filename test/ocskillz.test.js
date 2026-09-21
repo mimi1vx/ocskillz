@@ -4,6 +4,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { Agent } from "@opencode/plugin"
+import { parse as parseYaml } from "yaml"
 import ocskillz from "../plugin/ocskillz.js"
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
@@ -39,6 +40,12 @@ function makeAgentEditor(declared) {
 function makeCommandEditor() {
   const items = []
   return { add: (definition) => items.push(definition), items }
+}
+
+function readFrontmatter(file) {
+  const content = fs.readFileSync(file, "utf8")
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
+  return parseYaml(match?.[1] ?? "") ?? {}
 }
 
 /**
@@ -122,7 +129,21 @@ test("preserves a meaningful user override instead of the bundled value", async 
   assert.equal(agentEditor.get("code-reviewer").description, "custom description")
 })
 
-test("fills mode only when a bundled agent specifies one", async () => {
+test("hydrates the exact bundled agent modes", async () => {
+  const { ctx, agentEditor } = makeContext({
+    declaredAgents: {
+      "code-reviewer": Agent.Info.default("code-reviewer"),
+      planner: Agent.Info.default("planner"),
+      refactor: Agent.Info.default("refactor"),
+    },
+  })
+  await ocskillz.setup(ctx)
+  assert.equal(agentEditor.get("code-reviewer").mode, "primary")
+  assert.equal(agentEditor.get("planner").mode, "primary")
+  assert.equal(agentEditor.get("refactor").mode, "subagent")
+})
+
+test("preserves a user-provided non-default mode override", async () => {
   const { ctx, agentEditor } = makeContext({
     declaredAgents: { planner: { ...Agent.Info.default("planner"), mode: "all" } },
   })
@@ -147,11 +168,28 @@ test("skips a command name that already exists", async () => {
   assert.ok(commandEditor.items.some((c) => c.name === "bug-hunter"))
 })
 
-test("registers all six bundled commands when nothing collides", async () => {
+test("registers all five bundled commands when nothing collides", async () => {
   const { ctx, commandEditor } = makeContext()
   await ocskillz.setup(ctx)
   const names = commandEditor.items.map((c) => c.name).sort()
-  assert.deepEqual(names, ["bug-hunter", "clean-init", "code-reorganizer", "de-slopify", "test", "walkthrough"])
+  assert.deepEqual(names, ["bug-hunter", "clean-init", "code-reorganizer", "test", "walkthrough"])
+})
+
+test("no bundled command targets a subagent-only agent", () => {
+  const modes = {
+    build: "primary",
+    plan: "primary",
+    general: "subagent",
+    explore: "subagent",
+  }
+  for (const file of fs.readdirSync(path.join(ROOT, "agents")).filter((name) => name.endsWith(".md"))) {
+    modes[file.slice(0, -3)] = readFrontmatter(path.join(ROOT, "agents", file)).mode
+  }
+
+  for (const file of fs.readdirSync(path.join(ROOT, "commands")).filter((name) => name.endsWith(".md"))) {
+    const agent = readFrontmatter(path.join(ROOT, "commands", file)).agent
+    assert.notEqual(modes[agent], "subagent", `${file} targets subagent-only agent '${agent}'`)
+  }
 })
 
 test("replaces $ARGUMENTS with the invocation text", async () => {

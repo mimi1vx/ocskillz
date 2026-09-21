@@ -1,4 +1,5 @@
 ---
+mode: subagent
 description: Cautious refactoring agent. Applies karpathy-guidelines (surgical changes, simplicity first, verifiable success criteria). Use when restructuring code without changing behavior.
 permissions:
   - action: read
@@ -14,9 +15,6 @@ permissions:
     resource: "*"
     effect: allow
   - action: question
-    resource: "*"
-    effect: allow
-  - action: todowrite
     resource: "*"
     effect: allow
   - action: shell

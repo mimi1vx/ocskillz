@@ -49,9 +49,9 @@ Requires OpenCode V2. V1 is no longer supported — see [Installation](#installa
 
 | Agent | Tool access | Purpose |
 |-------|-------------|---------|
-| [code-reviewer](./agents/code-reviewer.md) | read-only + git diff/log + todowrite/question | Reviews recent changes; outputs Critical / Warnings / Suggestions. |
-| [refactor](./agents/refactor.md) | read + edit (with `ask`) + todowrite/question | Cautious behavior-preserving refactors. Embeds karpathy-guidelines. |
-| [planner](./agents/planner.md) | read-only + todowrite/question + extended bash/br read | Planning agent with strong clarifying-question discipline. Custom personality on top of opencode's built-in `plan` mode. |
+| [code-reviewer](./agents/code-reviewer.md) | primary; read-only + git diff/log + question | Reviews recent changes; outputs Critical / Warnings / Suggestions. |
+| [refactor](./agents/refactor.md) | subagent; read + edit + question | Cautious behavior-preserving refactors. Embeds karpathy-guidelines. |
+| [planner](./agents/planner.md) | primary; read-only project access + question + extended shell/br read | Planning agent with strong clarifying-question discipline. Persists requested plans only under `~/.opencode/plan/`. |
 
 opencode also ships built-in `build` and `plan` agents — referenced by some commands below.
 
@@ -63,8 +63,9 @@ opencode also ships built-in `build` and `plan` agents — referenced by some co
 | [clean-init](./commands/clean-init.md) | `build` (built-in) | Analyze codebase and write/update `AGENTS.md`. |
 | [bug-hunter](./commands/bug-hunter.md) | `build` (built-in) | Randomly explore code to find and fix bugs. |
 | [code-reorganizer](./commands/code-reorganizer.md) | `planner` | Propose a reorganization plan for scattered code files. |
-| [de-slopify](./commands/de-slopify.md) | `refactor` | Remove AI slop style writing from text. |
 | [walkthrough](./commands/walkthrough.md) | `plan` (built-in) | Walk through a PR/diff one behavioral topic at a time using `change-walkthrough`. |
+
+Launch `refactor` through the `subagent` tool rather than selecting it as the session's primary agent.
 
 ### Scripts (`scripts/`)
 
@@ -94,16 +95,16 @@ ok   [changelog-generator]
 ok   [agent: planner]
 ok   [command: test]
 
-registration: 25 skills, 3 agents, 6 commands
+registration: 25 skills, 3 agents, 5 commands
 
-Checked: 34  Errors: 0
+Checked: 33  Errors: 0
 ```
 
 Three phases run:
 
 1. **Skills** — `skills/*/SKILL.md` has `name` and `description`, and `name` matches the directory.
-2. **Agents and commands** — frontmatter has a `description`, the body is non-empty, no legacy V1 fields remain (`name`, `permission`, `disable`, `prompt`, `tools`, `maxSteps`, `temperature`, `top_p`, `variant`), `permissions` (if present) is a native ordered sequence of `{action, resource, effect}` rules, `mode` is valid, and every command's `agent` names an agent that exists.
-3. **Registration** — loads the plugin into a throwaway project and asserts it's active and every skill, agent stub, and command reaches opencode's V2 registries via `opencode api get /api/plugin|/api/skill|/api/agent|/api/command`.
+2. **Agents and commands** — frontmatter has a `description`, the body is non-empty, no legacy V1 fields remain (`name`, `permission`, `disable`, `prompt`, `tools`, `maxSteps`, `temperature`, `top_p`, `variant`), `permissions` (if present) is a native ordered sequence of current V2 `{action, resource, effect}` rules, every agent has its intended explicit `mode`, and commands target only primary-capable agents.
+3. **Registration** — loads the plugin into a throwaway project and asserts it's active and every skill, agent stub, and command reaches opencode's V2 registries with the expected agent modes via `opencode api get /api/plugin|/api/skill|/api/agent|/api/command`.
 
 Phase 3 is skipped with a notice — not a failure — when `opencode` or `python3` is not on `PATH`, when dependencies are not installed, or when the local opencode instance can't report live plugin state. Install dependencies with `npm install` to enable it.
 
@@ -116,18 +117,20 @@ Requires OpenCode V2. Add ocskillz to the `plugins` array in your `opencode.json
   "$schema": "https://opencode.ai/config.json",
   "plugins": ["ocskillz@git+https://github.com/mimi1vx/ocskillz"],
   "agents": {
-    "code-reviewer": {},
-    "planner": { "mode": "all" },
-    "refactor": {}
+    "code-reviewer": { "mode": "primary" },
+    "planner": { "mode": "primary" },
+    "refactor": { "mode": "subagent" }
   }
 }
 ```
 
 Restart opencode. The plugin registers all skills and commands from wherever opencode cached the package, and fills in the `description`, `system` prompt, `mode`, and `permissions` for the three declared agent stubs above — leaving `~/.config/opencode/` free for your own configuration.
 
-Anything meaningful you define yourself wins: a skill or command with the same ID is left alone, and any agent field you set to something other than opencode's empty-stub default is preserved instead of being overwritten by the bundled value.
+`code-reviewer` and `planner` are selectable primary agents. `refactor` is subagent-only; ask a primary agent to launch it with the `subagent` tool.
 
-V1 is no longer supported: `@opencode-ai/plugin` and the singular `plugin`/`agent`/`command`/`permission` config fields do not work with this package.
+Anything meaningful you define yourself wins: a skill or command with the same ID is left alone, and any agent field you set to something other than opencode's empty-stub default is preserved instead of being overwritten by the bundled value. V2 does not let a plugin distinguish an explicit value that equals the empty-stub default from an omitted value.
+
+See [OpenCode V2 compatibility](./docs/opencode-v2.md) for plugin limitations, migration details, and verification steps. V1 is not supported by this package.
 
 ## License
 

@@ -1,4 +1,5 @@
 ---
+mode: primary
 description: Reviews code for quality, security, and adherence to project conventions. Use after writing or modifying code, or when explicitly requested.
 # The last matching rule wins, so each catch-all precedes its overrides.
 permissions:
@@ -11,16 +12,10 @@ permissions:
   - action: glob
     resource: "*"
     effect: allow
-  - action: list
-    resource: "*"
-    effect: allow
   - action: edit
     resource: "*"
     effect: deny
   - action: question
-    resource: "*"
-    effect: allow
-  - action: todowrite
     resource: "*"
     effect: allow
   - action: shell
