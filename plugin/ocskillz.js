@@ -167,7 +167,7 @@ export default Plugin.define({
       }
     })
 
-    const existingCommands = new Set((await ctx.command.list()).map((command) => command.name))
+    const existingCommands = new Set((await ctx.command.list()).data.map((command) => command.name))
     await ctx.command.transform((editor) => {
       for (const command of loadCommands()) {
         if (existingCommands.has(command.name)) continue

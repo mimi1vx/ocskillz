@@ -59,7 +59,7 @@ function makeContext({ existingSkills = [], declaredAgents = {}, builtinAgents =
       get: async ({ agentID }) => agentEditor.get(agentID) ?? builtinAgents[agentID],
     },
     command: {
-      list: async () => existingCommandNames.map((name) => ({ name })),
+      list: async () => ({ location: { directory: ROOT }, data: existingCommandNames.map((name) => ({ name })) }),
       transform: async (cb) => cb(commandEditor),
     },
     session: {
