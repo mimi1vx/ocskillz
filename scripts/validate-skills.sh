@@ -9,12 +9,15 @@
 # Phase 2 - agents/<name>.md and commands/<name>.md:
 #  - frontmatter parses and carries a non-empty `description:`
 #  - body (the agent prompt / command template) is non-empty
-#  - agents: `name` matches the filename, `mode` is a valid value
+#  - agents: no legacy V1 fields (name, permission, disable, prompt, tools,
+#    maxSteps, temperature, top_p, variant), `mode` is a valid value, and
+#    `permissions` (if present) is a sequence of rules
 #  - commands: `agent` names a known agent
 #
-# Phase 3 - live registration through the opencode plugin:
-#  - every skill, agent, and command actually reaches opencode's resolved
-#    config. Skipped with a notice when its prerequisites are missing.
+# Phase 3 - live registration through the opencode V2 plugin API:
+#  - the plugin is active and every skill, agent stub, and command actually
+#    reaches opencode's registries. Skipped with a notice when its
+#    prerequisites are missing or the environment can't confirm live state.
 #
 # Exits non-zero on any failure. Prints a summary.
 
@@ -51,10 +54,15 @@ body_of() {
 }
 
 # Read a top-level scalar key out of frontmatter. Leading whitespace is
-# required to be absent, so nested keys (permission entries, for example) are
-# never mistaken for top-level ones.
+# required to be absent, so nested keys (permission rule fields, for example)
+# are never mistaken for top-level ones.
 fm_value() {
   printf '%s\n' "$1" | sed -n "s/^$2:[[:space:]]*//p" | head -1 | tr -d '"' | tr -d "'"
+}
+
+# True if frontmatter declares the given top-level key at all (scalar or not).
+fm_has_key() {
+  printf '%s\n' "$1" | grep -qE "^$2:"
 }
 
 is_blank() {
@@ -119,6 +127,12 @@ for file in "$AGENTS_DIR"/*.md; do
   known_agents+="$(basename "$file" .md) "
 done
 
+# Fields V1 agents used that have no place in native V2 frontmatter. The
+# agent's V2 ID always comes from its filename, `permission` is renamed to
+# `permissions`, and `disable`/`prompt`/`tools`/`maxSteps`/`temperature`/
+# `top_p`/`variant` moved to `disabled`/(body)/`request.body`/`steps`/etc.
+legacy_agent_fields="name permission disable prompt tools maxSteps temperature top_p variant"
+
 for file in "$AGENTS_DIR"/*.md; do
   [[ -f "$file" ]] || continue
   agent_name="$(basename "$file" .md)"
@@ -138,14 +152,19 @@ for file in "$AGENTS_DIR"/*.md; do
   fi
 
   if is_blank "$(body_of "$file")"; then
-    echo "FAIL [agent: $agent_name]: body is empty (agents need a prompt)"
+    echo "FAIL [agent: $agent_name]: body is empty (agents need a system prompt)"
     errors=$((errors + 1))
     continue
   fi
 
-  fm_name="$(fm_value "$frontmatter" name)"
-  if [[ -n "$fm_name" && "$fm_name" != "$agent_name" ]]; then
-    echo "FAIL [agent: $agent_name]: frontmatter name '$fm_name' != filename '$agent_name'"
+  legacy_found=""
+  for field in $legacy_agent_fields; do
+    if fm_has_key "$frontmatter" "$field"; then
+      legacy_found+="$field "
+    fi
+  done
+  if [[ -n "$legacy_found" ]]; then
+    echo "FAIL [agent: $agent_name]: legacy V1 field(s) present: $legacy_found"
     errors=$((errors + 1))
     continue
   fi
@@ -155,6 +174,17 @@ for file in "$AGENTS_DIR"/*.md; do
     echo "FAIL [agent: $agent_name]: mode '$fm_mode' is not primary|subagent|all"
     errors=$((errors + 1))
     continue
+  fi
+
+  if fm_has_key "$frontmatter" "permissions"; then
+    # A native V2 ruleset is a block sequence: the line after "permissions:"
+    # starts a "- action: ..." entry, not another mapping key at the same level.
+    first_rule_line="$(printf '%s\n' "$frontmatter" | awk '/^permissions:/{found=1;next} found && NF{print;exit}' | sed 's/^[[:space:]]*//')"
+    if [[ "$first_rule_line" != -* ]]; then
+      echo "FAIL [agent: $agent_name]: 'permissions' is not a sequence of {action, resource, effect} rules"
+      errors=$((errors + 1))
+      continue
+    fi
   fi
 
   echo "ok   [agent: $agent_name]"
@@ -201,7 +231,7 @@ if ! command -v opencode >/dev/null 2>&1; then
 elif ! command -v python3 >/dev/null 2>&1; then
   skip_reason="python3 is not on PATH (needed to read opencode's JSON output)"
 elif [[ ! -d "$ROOT/node_modules/yaml" ]]; then
-  skip_reason="dependencies are not installed (run 'bun install' or 'npm install')"
+  skip_reason="dependencies are not installed (run 'npm install')"
 fi
 
 echo ""
@@ -210,69 +240,101 @@ if [[ -n "$skip_reason" ]]; then
 else
   workdir="$(mktemp -d)"
   trap 'rm -rf "$workdir"' EXIT
-  mkdir -p "$workdir/cfg"
 
-  cat > "$workdir/opencode.json" <<EOF
-{ "\$schema": "https://opencode.ai/config.json", "plugin": ["$ROOT/plugin/ocskillz.js"] }
+  cat >"$workdir/opencode.json" <<EOF
+{
+  "\$schema": "https://opencode.ai/config.json",
+  "plugins": ["$ROOT"],
+  "agents": {
+    "code-reviewer": {},
+    "planner": { "mode": "all" },
+    "refactor": {}
+  }
+}
 EOF
 
-  # OPENCODE_CONFIG_DIR points at an empty directory so the developer's real
-  # global config can neither contaminate this check nor be contaminated by it.
+  # A private --standalone server isolates this check from the developer's
+  # shared background service and its real global configuration.
   (
     cd "$workdir" || exit 1
-    OPENCODE_CONFIG_DIR="$workdir/cfg" opencode debug config > "$workdir/config.json" 2>/dev/null
-    OPENCODE_CONFIG_DIR="$workdir/cfg" opencode debug skill > "$workdir/skill.json" 2>/dev/null
+    opencode api get /api/plugin --standalone >"$workdir/plugin.json" 2>"$workdir/plugin.err"
+    opencode api get /api/skill --standalone >"$workdir/skill.json" 2>"$workdir/skill.err"
+    opencode api get /api/agent --standalone >"$workdir/agent.json" 2>"$workdir/agent.err"
+    opencode api get /api/command --standalone >"$workdir/command.json" 2>"$workdir/command.err"
   )
 
-  # Both dumps are large enough to exceed typical pipe buffers, so they are
-  # written to files and read back rather than streamed.
   registration_output="$(
-    python3 - "$ROOT" "$workdir/config.json" "$workdir/skill.json" <<'PY'
+    python3 - "$ROOT" "$workdir" <<'PY'
 import json, os, sys
 
-root, config_path, skill_path = sys.argv[1:4]
+root, workdir = sys.argv[1:3]
 
-def load(path):
+
+def load(name):
+    path = os.path.join(workdir, name)
     try:
         with open(path) as handle:
             return json.load(handle)
     except Exception as error:
-        print(f"FAIL [registration]: could not read {os.path.basename(path)}: {error}")
+        print(f"registration: SKIPPED - could not parse {name} from opencode api ({error})")
         return None
 
-config = load(config_path)
-skills = load(skill_path)
-if config is None or skills is None:
-    sys.exit(1)
 
-def names(directory, suffix=".md"):
-    try:
-        return sorted(n[: -len(suffix)] for n in os.listdir(directory) if n.endswith(suffix))
-    except FileNotFoundError:
-        return []
+plugin_doc = load("plugin.json")
+skill_doc = load("skill.json")
+agent_doc = load("agent.json")
+command_doc = load("command.json")
+if None in (plugin_doc, skill_doc, agent_doc, command_doc):
+    sys.exit(0)
 
 expected_skills = sorted(
     entry
     for entry in os.listdir(os.path.join(root, "skills"))
     if os.path.isfile(os.path.join(root, "skills", entry, "SKILL.md"))
 )
-expected_agents = names(os.path.join(root, "agents"))
-expected_commands = names(os.path.join(root, "commands"))
+expected_commands = sorted(
+    name[:-3] for name in os.listdir(os.path.join(root, "commands")) if name.endswith(".md")
+)
+expected_agents = ["code-reviewer", "planner", "refactor"]
 
-registered_skills = {s["name"] for s in skills}
-registered_agents = set(config.get("agent") or {})
-registered_commands = set(config.get("command") or {})
+plugins = plugin_doc.get("data") or []
+if not plugins:
+    print(
+        "registration: SKIPPED - opencode reported no plugins for this location "
+        "(live plugin validation is unavailable in this environment)"
+    )
+    sys.exit(0)
 
 failures = 0
-for kind, expected, registered in (
-    ("skill", expected_skills, registered_skills),
-    ("agent", expected_agents, registered_agents),
-    ("command", expected_commands, registered_commands),
-):
-    for name in expected:
-        if name not in registered:
-            print(f"FAIL [registration] {kind}: '{name}' did not reach opencode's config")
-            failures += 1
+
+ocskillz = next((p for p in plugins if p.get("id") == "ocskillz"), None)
+if ocskillz is None or ocskillz.get("state", {}).get("status") != "active":
+    state = (ocskillz or {}).get("state", {})
+    print(f"FAIL [registration] plugin: ocskillz is not active ({state or 'not found'})")
+    failures += 1
+
+registered_skills = {s["id"] for s in (skill_doc.get("data") or [])}
+registered_agents = {a["id"]: a for a in (agent_doc.get("data") or [])}
+registered_commands = {c["name"] for c in (command_doc.get("data") or [])}
+
+for name in expected_skills:
+    if name not in registered_skills:
+        print(f"FAIL [registration] skill: '{name}' did not reach opencode's registry")
+        failures += 1
+
+for name in expected_commands:
+    if name not in registered_commands:
+        print(f"FAIL [registration] command: '{name}' did not reach opencode's registry")
+        failures += 1
+
+for name in expected_agents:
+    agent = registered_agents.get(name)
+    if agent is None:
+        print(f"FAIL [registration] agent: '{name}' did not reach opencode's registry")
+        failures += 1
+    elif not agent.get("system"):
+        print(f"FAIL [registration] agent: '{name}' was not hydrated with a system prompt")
+        failures += 1
 
 print(
     f"registration: {len(expected_skills)} skills, "

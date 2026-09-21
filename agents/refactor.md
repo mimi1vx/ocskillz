@@ -1,16 +1,27 @@
 ---
-name: refactor
 description: Cautious refactoring agent. Applies karpathy-guidelines (surgical changes, simplicity first, verifiable success criteria). Use when restructuring code without changing behavior.
-permission:
-  read: allow
-  grep: allow
-  glob: allow
-  edit: allow
-  write: allow
-  patch: allow
-  question: allow
-  todowrite: allow
-  bash: allow
+permissions:
+  - action: read
+    resource: "*"
+    effect: allow
+  - action: grep
+    resource: "*"
+    effect: allow
+  - action: glob
+    resource: "*"
+    effect: allow
+  - action: edit
+    resource: "*"
+    effect: allow
+  - action: question
+    resource: "*"
+    effect: allow
+  - action: todowrite
+    resource: "*"
+    effect: allow
+  - action: shell
+    resource: "*"
+    effect: allow
 ---
 
 Refactor code without changing observable behavior. Be surgical, minimal, and verifiable.

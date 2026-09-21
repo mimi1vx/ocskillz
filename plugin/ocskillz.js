@@ -1,23 +1,29 @@
 /**
- * ocskillz plugin for opencode.
+ * ocskillz plugin for opencode V2.
  *
- * Registers this package's skills, agents, and commands through the `config`
- * hook, so installing the plugin is enough — no symlinking of
+ * Registers this package's skills, commands, and agent stubs through V2
+ * transforms, so installing the plugin is enough — no symlinking of
  * ~/.config/opencode required.
  *
- * Existing definitions always win: if the merged config already has an agent
- * or command under the same name, we leave it alone.
+ * V2 plugins cannot create agents, only update ones the user already declared
+ * (see README for the required `agents` stubs). Skills and commands are
+ * registered outright, but existing definitions always win: if a skill or
+ * command with the same ID is already registered, this plugin leaves it
+ * alone.
  */
 
 import fs from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
 import { parse as parseYaml } from "yaml"
+import { Agent, Plugin } from "@opencode/plugin"
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const SKILLS_DIR = path.join(ROOT, "skills")
 const AGENTS_DIR = path.join(ROOT, "agents")
 const COMMANDS_DIR = path.join(ROOT, "commands")
+
+const HYDRATED_AGENT_IDS = ["code-reviewer", "planner", "refactor"]
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/
 
@@ -49,78 +55,147 @@ const markdownFiles = (dir) => {
     .map((name) => ({ name: name.slice(0, -3), file: path.join(dir, name) }))
 }
 
-export const OcskillzPlugin = async ({ client }) => {
-  // Log requests are awaited before the config hook returns; fire-and-forget
-  // loses the race against process teardown and the warning disappears.
-  const pending = []
-  const warn = (message, extra) => {
-    try {
-      pending.push(
-        client.app.log({ body: { service: "ocskillz", level: "warn", message, extra } }),
-      )
-    } catch {
-      // Logging must never break startup.
-    }
+const readDocument = (dir, name, file) => {
+  let doc
+  try {
+    doc = parseDocument(fs.readFileSync(file, "utf8"))
+  } catch (error) {
+    console.warn(`ocskillz: skipped ${path.basename(dir)}/${path.basename(file)}: ${error.message}`)
+    return undefined
   }
-
-  /**
-   * Read every markdown file in `dir` and hand the parsed result to `build`,
-   * which returns the config value to register under `keyOf(doc, basename)`.
-   * Files that fail to parse are skipped with a warning so one bad file cannot
-   * take the rest of the package down with it.
-   */
-  const register = (dir, target, keyOf, build) => {
-    for (const { name, file } of markdownFiles(dir)) {
-      let doc
-      try {
-        doc = parseDocument(fs.readFileSync(file, "utf8"))
-      } catch (error) {
-        warn(`skipped ${path.basename(dir)}/${name}.md: ${error.message}`, { file })
-        continue
-      }
-
-      if (!doc.body) {
-        warn(`skipped ${path.basename(dir)}/${name}.md: body is empty`, { file })
-        continue
-      }
-
-      const key = keyOf(doc, name)
-      if (target[key] !== undefined) continue
-
-      target[key] = build(doc)
-    }
+  if (!doc.body) {
+    console.warn(`ocskillz: skipped ${path.basename(dir)}/${path.basename(file)}: body is empty`)
+    return undefined
   }
-
-  return {
-    config: async (config) => {
-      config.skills = config.skills || {}
-      config.skills.paths = config.skills.paths || []
-      if (!config.skills.paths.includes(SKILLS_DIR)) {
-        config.skills.paths.push(SKILLS_DIR)
-      }
-
-      config.agent = config.agent || {}
-      register(
-        AGENTS_DIR,
-        config.agent,
-        ({ frontmatter }, basename) =>
-          typeof frontmatter.name === "string" ? frontmatter.name : basename,
-        ({ frontmatter, body }) => {
-          const { name: _name, ...rest } = frontmatter
-          return { ...rest, prompt: body }
-        },
-      )
-
-      // opencode commands take their name from the filename only.
-      config.command = config.command || {}
-      register(
-        COMMANDS_DIR,
-        config.command,
-        (_doc, basename) => basename,
-        ({ frontmatter, body }) => ({ ...frontmatter, template: body }),
-      )
-
-      await Promise.allSettled(pending)
-    },
-  }
+  return doc
 }
+
+const loadSkills = () => {
+  const skills = []
+  let entries
+  try {
+    entries = fs.readdirSync(SKILLS_DIR, { withFileTypes: true })
+  } catch {
+    return skills
+  }
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isDirectory()) continue
+    const file = path.join(SKILLS_DIR, entry.name, "SKILL.md")
+    if (!fs.existsSync(file)) continue
+    const doc = readDocument(SKILLS_DIR, entry.name, file)
+    if (!doc) continue
+    if (!doc.frontmatter.description) {
+      console.warn(`ocskillz: skipped skills/${entry.name}/SKILL.md: missing description`)
+      continue
+    }
+    skills.push({
+      id: entry.name,
+      name: typeof doc.frontmatter.name === "string" ? doc.frontmatter.name : entry.name,
+      description: doc.frontmatter.description,
+      path: file,
+      content: doc.body,
+    })
+  }
+  return skills
+}
+
+const loadHydratedAgents = () => {
+  const agents = {}
+  for (const id of HYDRATED_AGENT_IDS) {
+    const file = path.join(AGENTS_DIR, `${id}.md`)
+    const doc = readDocument(AGENTS_DIR, id, file)
+    if (!doc) continue
+    agents[id] = {
+      description: doc.frontmatter.description,
+      mode: doc.frontmatter.mode,
+      permissions: doc.frontmatter.permissions,
+      system: doc.body,
+    }
+  }
+  return agents
+}
+
+const loadCommands = () => {
+  const commands = []
+  for (const { name, file } of markdownFiles(COMMANDS_DIR)) {
+    const doc = readDocument(COMMANDS_DIR, name, file)
+    if (!doc) continue
+    commands.push({
+      name,
+      description: doc.frontmatter.description,
+      agent: doc.frontmatter.agent,
+      template: doc.body,
+    })
+  }
+  return commands
+}
+
+/** Replace $ARGUMENTS, or append the invocation text after a blank line when the template has no placeholder. */
+const expandTemplate = (template, argumentText) => {
+  if (template.includes("$ARGUMENTS")) return template.replaceAll("$ARGUMENTS", argumentText)
+  return argumentText ? `${template}\n\n${argumentText}` : template
+}
+
+export default Plugin.define({
+  id: "ocskillz",
+  async setup(ctx) {
+    await ctx.skill.transform((editor) => {
+      const existing = new Set(editor.list().map((skill) => skill.id))
+      for (const skill of loadSkills()) {
+        if (existing.has(skill.id)) continue
+        editor.add(skill)
+      }
+    })
+
+    // Only hydrate agent IDs the user already declared (V2 plugins cannot create agents).
+    // A field is filled only when it still matches the V2 empty-stub default, so a
+    // meaningful user override is never clobbered.
+    await ctx.agent.transform((editor) => {
+      for (const [id, fields] of Object.entries(loadHydratedAgents())) {
+        const current = editor.get(id)
+        if (!current) continue
+
+        const empty = Agent.Info.default(id)
+        editor.update(id, (agent) => {
+          if (agent.description === empty.description) agent.description = fields.description
+          if (agent.mode === empty.mode && fields.mode) agent.mode = fields.mode
+          if (agent.system === empty.system) agent.system = fields.system
+          if (JSON.stringify(agent.permissions) === JSON.stringify(empty.permissions)) {
+            agent.permissions = fields.permissions
+          }
+        })
+      }
+    })
+
+    const existingCommands = new Set((await ctx.command.list()).map((command) => command.name))
+    await ctx.command.transform((editor) => {
+      for (const command of loadCommands()) {
+        if (existingCommands.has(command.name)) continue
+        editor.add({
+          name: command.name,
+          description: command.description,
+          execute: async ({ sessionID, prompt, delivery }) => {
+            if (command.agent) {
+              let target
+              try {
+                target = await ctx.agent.get({ agentID: command.agent })
+              } catch {
+                target = undefined
+              }
+              // Subagent-only agents cannot become the session's active agent.
+              if (target && target.mode !== "subagent") {
+                await ctx.session.switchAgent({ sessionID, agent: command.agent })
+              }
+            }
+            await ctx.session.prompt({
+              ...prompt,
+              sessionID,
+              text: expandTemplate(command.template, prompt.text),
+              delivery,
+            })
+          },
+        })
+      }
+    })
+  },
+})

@@ -1,209 +1,524 @@
 ---
-name: planner
 mode: all
 description: PLAN-MODE planning agent that keeps project files read-only except for persisted plan Markdown files. Any other edit, write, or mutation requires build mode. Asks clarifying questions aggressively.
-permission:
-  read: allow
-  grep: allow
-  glob: allow
-  # write/edit/patch all map to the internal "edit" permission in opencode.
-  # Deny everything except plan markdown files, so planner can persist plans
-  # to disk (like the built-in `plan` agent) while staying read-only elsewhere.
-  edit:
-    "*": deny
-    ".opencode/plans/*.md": allow
-    "plans/*.md": allow
-    "../../.local/share/opencode/plans/*.md": allow
-  write:
-    "*": deny
-    ".opencode/plans/*.md": allow
-    "plans/*.md": allow
-    "../../.local/share/opencode/plans/*.md": allow
-  patch:
-    "*": deny
-    ".opencode/plans/*.md": allow
-    "plans/*.md": allow
-    "../../.local/share/opencode/plans/*.md": allow
-  question: allow
-  todowrite: allow
-  bash:
-    # opencode evaluates the LAST matching pattern, so the catch-all "ask"
-    # must come first and every specific allow after it, or the allows are
-    # silently shadowed.
-    "*": ask
-    # NOTE: patterns use the space-separated form ("cmd *") because opencode
-    # splits each (possibly piped/compound) command into per-segment patterns
-    # and matches head+tail. The no-space form ("cmd*") does not reliably match
-    # multi-arg or piped segments. Bare forms ("cmd") cover arg-less invocations.
-    "echo": allow
-    "echo *": allow
-    # git read-only
-    "git status": allow
-    "git status *": allow
-    "git log": allow
-    "git log *": allow
-    "git diff": allow
-    "git diff *": allow
-    "git branch": allow
-    "git branch *": allow
-    "git show *": allow
-    "git blame *": allow
-    "git remote -v": allow
-    "git remote -v *": allow
-    "git config --get *": allow
-    "git config --list": allow
-    "git config --list *": allow
-    "git stash list": allow
-    "git stash list *": allow
-    "git rev-parse *": allow
-    "git ls-files": allow
-    "git ls-files *": allow
-    # beads (br) read-only
-    "br ready": allow
-    "br ready *": allow
-    "br list": allow
-    "br list *": allow
-    "br show *": allow
-    "br epic status": allow
-    "br epic status *": allow
-    # filesystem inspection
-    "ls": allow
-    "ls *": allow
-    "find *": allow
-    "tree": allow
-    "tree *": allow
-    "wc": allow
-    "wc *": allow
-    "stat *": allow
-    "file *": allow
-    "du": allow
-    "du *": allow
-    "df": allow
-    "df *": allow
-    "pwd": allow
-    "which *": allow
-    "whereis *": allow
-    "type *": allow
-    "readlink *": allow
-    "realpath *": allow
-    # text search / inspection
-    "rg": allow
-    "rg *": allow
-    "grep": allow
-    "grep *": allow
-    "ag *": allow
-    "fd": allow
-    "fd *": allow
-    "cat *": allow
-    "head": allow
-    "head *": allow
-    "tail": allow
-    "tail *": allow
-    "less *": allow
-    "more *": allow
-    "diff *": allow
-    "sed *": allow
-    "sort": allow
-    "sort *": allow
-    "uniq": allow
-    "uniq *": allow
-    "cut *": allow
-    "xargs *": allow
-    "printf *": allow
-    "jq": allow
-    "jq *": allow
-    "yq": allow
-    "yq *": allow
-    "column *": allow
-    # opencode introspection (read-only)
-    "opencode agent list": allow
-    "opencode agent list *": allow
-    # gh read-only
-    "gh pr view *": allow
-    "gh pr diff *": allow
-    "gh pr checks *": allow
-    "gh pr list": allow
-    "gh pr list *": allow
-    "gh issue view *": allow
-    "gh issue list": allow
-    "gh issue list *": allow
-    # tests (read-only execution)
-    "pytest": allow
-    "pytest *": allow
-    "python -m pytest *": allow
-    "uv run pytest *": allow
-    "npm test": allow
-    "npm test *": allow
-    "npm run test *": allow
-    "pnpm test": allow
-    "pnpm test *": allow
-    "pnpm run test *": allow
-    "yarn test *": allow
-    "bun test": allow
-    "bun test *": allow
-    "bun run test *": allow
-    "go test *": allow
-    "cargo test *": allow
-    "cargo nextest *": allow
-    "rspec *": allow
-    "bundle exec rspec *": allow
-    "mix test *": allow
-    "phpunit *": allow
-    # type checkers / linters / formatters (check mode)
-    "tsc *": allow
-    "ty *": allow
-    "mypy *": allow
-    "pyright *": allow
-    "ruff check *": allow
-    "ruff format --check *": allow
-    "uv run ruff *": allow
-    "uv run mypy *": allow
-    "uv run ty *": allow
-    "biome check *": allow
-    "biome lint *": allow
-    "biome format --check *": allow
-    "eslint *": allow
-    "prettier --check *": allow
-    "cargo check *": allow
-    "cargo clippy *": allow
-    "cargo fmt --check *": allow
-    "go vet *": allow
-    "gofmt -l *": allow
-    "golangci-lint *": allow
-    # build / dry-run inspection
-    "cargo build --dry-run *": allow
-    "npm run build *": allow
-    "uv run *": allow
-    "uv pip list": allow
-    "uv pip list *": allow
-    "uv tree": allow
-    "uv tree *": allow
-    "pip list": allow
-    "pip list *": allow
-    "pip show *": allow
-    "npm list": allow
-    "npm list *": allow
-    "npm ls": allow
-    "npm ls *": allow
-    "npm outdated": allow
-    "pnpm list *": allow
-    "cargo tree": allow
-    "cargo tree *": allow
-    "go list *": allow
-    # env / version
-    "env": allow
-    "printenv": allow
-    "printenv *": allow
-    "node --version": allow
-    "python --version": allow
-    "python3 --version": allow
-    "uv --version": allow
-    "cargo --version": allow
-    "go version": allow
-    "rustc --version": allow
-    "*--help": allow
-    "*--version": allow
-    "*-h": allow
+# The last matching rule wins, so each catch-all precedes its overrides.
+permissions:
+  - action: read
+    resource: "*"
+    effect: allow
+  - action: grep
+    resource: "*"
+    effect: allow
+  - action: glob
+    resource: "*"
+    effect: allow
+  - action: edit
+    resource: "*"
+    effect: deny
+  - action: edit
+    resource: .opencode/plans/*.md
+    effect: allow
+  - action: edit
+    resource: plans/*.md
+    effect: allow
+  - action: edit
+    resource: ../../.local/share/opencode/plans/*.md
+    effect: allow
+  - action: question
+    resource: "*"
+    effect: allow
+  - action: todowrite
+    resource: "*"
+    effect: allow
+  - action: shell
+    resource: "*"
+    effect: ask
+  - action: shell
+    resource: echo
+    effect: allow
+  - action: shell
+    resource: echo *
+    effect: allow
+  - action: shell
+    resource: git status
+    effect: allow
+  - action: shell
+    resource: git status *
+    effect: allow
+  - action: shell
+    resource: git log
+    effect: allow
+  - action: shell
+    resource: git log *
+    effect: allow
+  - action: shell
+    resource: git diff
+    effect: allow
+  - action: shell
+    resource: git diff *
+    effect: allow
+  - action: shell
+    resource: git branch
+    effect: allow
+  - action: shell
+    resource: git branch *
+    effect: allow
+  - action: shell
+    resource: git show *
+    effect: allow
+  - action: shell
+    resource: git blame *
+    effect: allow
+  - action: shell
+    resource: git remote -v
+    effect: allow
+  - action: shell
+    resource: git remote -v *
+    effect: allow
+  - action: shell
+    resource: git config --get *
+    effect: allow
+  - action: shell
+    resource: git config --list
+    effect: allow
+  - action: shell
+    resource: git config --list *
+    effect: allow
+  - action: shell
+    resource: git stash list
+    effect: allow
+  - action: shell
+    resource: git stash list *
+    effect: allow
+  - action: shell
+    resource: git rev-parse *
+    effect: allow
+  - action: shell
+    resource: git ls-files
+    effect: allow
+  - action: shell
+    resource: git ls-files *
+    effect: allow
+  # beads (br) read-only
+  - action: shell
+    resource: br ready
+    effect: allow
+  - action: shell
+    resource: br ready *
+    effect: allow
+  - action: shell
+    resource: br list
+    effect: allow
+  - action: shell
+    resource: br list *
+    effect: allow
+  - action: shell
+    resource: br show *
+    effect: allow
+  - action: shell
+    resource: br epic status
+    effect: allow
+  - action: shell
+    resource: br epic status *
+    effect: allow
+  # filesystem inspection
+  - action: shell
+    resource: ls
+    effect: allow
+  - action: shell
+    resource: ls *
+    effect: allow
+  - action: shell
+    resource: find *
+    effect: allow
+  - action: shell
+    resource: tree
+    effect: allow
+  - action: shell
+    resource: tree *
+    effect: allow
+  - action: shell
+    resource: wc
+    effect: allow
+  - action: shell
+    resource: wc *
+    effect: allow
+  - action: shell
+    resource: stat *
+    effect: allow
+  - action: shell
+    resource: file *
+    effect: allow
+  - action: shell
+    resource: du
+    effect: allow
+  - action: shell
+    resource: du *
+    effect: allow
+  - action: shell
+    resource: df
+    effect: allow
+  - action: shell
+    resource: df *
+    effect: allow
+  - action: shell
+    resource: pwd
+    effect: allow
+  - action: shell
+    resource: which *
+    effect: allow
+  - action: shell
+    resource: whereis *
+    effect: allow
+  - action: shell
+    resource: type *
+    effect: allow
+  - action: shell
+    resource: readlink *
+    effect: allow
+  - action: shell
+    resource: realpath *
+    effect: allow
+  # text search / inspection
+  - action: shell
+    resource: rg
+    effect: allow
+  - action: shell
+    resource: rg *
+    effect: allow
+  - action: shell
+    resource: grep
+    effect: allow
+  - action: shell
+    resource: grep *
+    effect: allow
+  - action: shell
+    resource: ag *
+    effect: allow
+  - action: shell
+    resource: fd
+    effect: allow
+  - action: shell
+    resource: fd *
+    effect: allow
+  - action: shell
+    resource: cat *
+    effect: allow
+  - action: shell
+    resource: head
+    effect: allow
+  - action: shell
+    resource: head *
+    effect: allow
+  - action: shell
+    resource: tail
+    effect: allow
+  - action: shell
+    resource: tail *
+    effect: allow
+  - action: shell
+    resource: less *
+    effect: allow
+  - action: shell
+    resource: more *
+    effect: allow
+  - action: shell
+    resource: diff *
+    effect: allow
+  - action: shell
+    resource: sed *
+    effect: allow
+  - action: shell
+    resource: sort
+    effect: allow
+  - action: shell
+    resource: sort *
+    effect: allow
+  - action: shell
+    resource: uniq
+    effect: allow
+  - action: shell
+    resource: uniq *
+    effect: allow
+  - action: shell
+    resource: cut *
+    effect: allow
+  - action: shell
+    resource: xargs *
+    effect: allow
+  - action: shell
+    resource: printf *
+    effect: allow
+  - action: shell
+    resource: jq
+    effect: allow
+  - action: shell
+    resource: jq *
+    effect: allow
+  - action: shell
+    resource: yq
+    effect: allow
+  - action: shell
+    resource: yq *
+    effect: allow
+  - action: shell
+    resource: column *
+    effect: allow
+  # opencode introspection (read-only)
+  - action: shell
+    resource: opencode agent list
+    effect: allow
+  - action: shell
+    resource: opencode agent list *
+    effect: allow
+  # gh read-only
+  - action: shell
+    resource: gh pr view *
+    effect: allow
+  - action: shell
+    resource: gh pr diff *
+    effect: allow
+  - action: shell
+    resource: gh pr checks *
+    effect: allow
+  - action: shell
+    resource: gh pr list
+    effect: allow
+  - action: shell
+    resource: gh pr list *
+    effect: allow
+  - action: shell
+    resource: gh issue view *
+    effect: allow
+  - action: shell
+    resource: gh issue list
+    effect: allow
+  - action: shell
+    resource: gh issue list *
+    effect: allow
+  # tests (read-only execution)
+  - action: shell
+    resource: pytest
+    effect: allow
+  - action: shell
+    resource: pytest *
+    effect: allow
+  - action: shell
+    resource: python -m pytest *
+    effect: allow
+  - action: shell
+    resource: uv run pytest *
+    effect: allow
+  - action: shell
+    resource: npm test
+    effect: allow
+  - action: shell
+    resource: npm test *
+    effect: allow
+  - action: shell
+    resource: npm run test *
+    effect: allow
+  - action: shell
+    resource: pnpm test
+    effect: allow
+  - action: shell
+    resource: pnpm test *
+    effect: allow
+  - action: shell
+    resource: pnpm run test *
+    effect: allow
+  - action: shell
+    resource: yarn test *
+    effect: allow
+  - action: shell
+    resource: bun test
+    effect: allow
+  - action: shell
+    resource: bun test *
+    effect: allow
+  - action: shell
+    resource: bun run test *
+    effect: allow
+  - action: shell
+    resource: go test *
+    effect: allow
+  - action: shell
+    resource: cargo test *
+    effect: allow
+  - action: shell
+    resource: cargo nextest *
+    effect: allow
+  - action: shell
+    resource: rspec *
+    effect: allow
+  - action: shell
+    resource: bundle exec rspec *
+    effect: allow
+  - action: shell
+    resource: mix test *
+    effect: allow
+  - action: shell
+    resource: phpunit *
+    effect: allow
+  # type checkers / linters / formatters (check mode)
+  - action: shell
+    resource: tsc *
+    effect: allow
+  - action: shell
+    resource: ty *
+    effect: allow
+  - action: shell
+    resource: mypy *
+    effect: allow
+  - action: shell
+    resource: pyright *
+    effect: allow
+  - action: shell
+    resource: ruff check *
+    effect: allow
+  - action: shell
+    resource: ruff format --check *
+    effect: allow
+  - action: shell
+    resource: uv run ruff *
+    effect: allow
+  - action: shell
+    resource: uv run mypy *
+    effect: allow
+  - action: shell
+    resource: uv run ty *
+    effect: allow
+  - action: shell
+    resource: biome check *
+    effect: allow
+  - action: shell
+    resource: biome lint *
+    effect: allow
+  - action: shell
+    resource: biome format --check *
+    effect: allow
+  - action: shell
+    resource: eslint *
+    effect: allow
+  - action: shell
+    resource: prettier --check *
+    effect: allow
+  - action: shell
+    resource: cargo check *
+    effect: allow
+  - action: shell
+    resource: cargo clippy *
+    effect: allow
+  - action: shell
+    resource: cargo fmt --check *
+    effect: allow
+  - action: shell
+    resource: go vet *
+    effect: allow
+  - action: shell
+    resource: gofmt -l *
+    effect: allow
+  - action: shell
+    resource: golangci-lint *
+    effect: allow
+  # build / dry-run inspection
+  - action: shell
+    resource: cargo build --dry-run *
+    effect: allow
+  - action: shell
+    resource: npm run build *
+    effect: allow
+  - action: shell
+    resource: uv run *
+    effect: allow
+  - action: shell
+    resource: uv pip list
+    effect: allow
+  - action: shell
+    resource: uv pip list *
+    effect: allow
+  - action: shell
+    resource: uv tree
+    effect: allow
+  - action: shell
+    resource: uv tree *
+    effect: allow
+  - action: shell
+    resource: pip list
+    effect: allow
+  - action: shell
+    resource: pip list *
+    effect: allow
+  - action: shell
+    resource: pip show *
+    effect: allow
+  - action: shell
+    resource: npm list
+    effect: allow
+  - action: shell
+    resource: npm list *
+    effect: allow
+  - action: shell
+    resource: npm ls
+    effect: allow
+  - action: shell
+    resource: npm ls *
+    effect: allow
+  - action: shell
+    resource: npm outdated
+    effect: allow
+  - action: shell
+    resource: pnpm list *
+    effect: allow
+  - action: shell
+    resource: cargo tree
+    effect: allow
+  - action: shell
+    resource: cargo tree *
+    effect: allow
+  - action: shell
+    resource: go list *
+    effect: allow
+  # env / version
+  - action: shell
+    resource: env
+    effect: allow
+  - action: shell
+    resource: printenv
+    effect: allow
+  - action: shell
+    resource: printenv *
+    effect: allow
+  - action: shell
+    resource: node --version
+    effect: allow
+  - action: shell
+    resource: python --version
+    effect: allow
+  - action: shell
+    resource: python3 --version
+    effect: allow
+  - action: shell
+    resource: uv --version
+    effect: allow
+  - action: shell
+    resource: cargo --version
+    effect: allow
+  - action: shell
+    resource: go version
+    effect: allow
+  - action: shell
+    resource: rustc --version
+    effect: allow
+  - action: shell
+    resource: "*--help"
+    effect: allow
+  - action: shell
+    resource: "*--version"
+    effect: allow
+  - action: shell
+    resource: "*-h"
+    effect: allow
 ---
 
 You are a planning agent operating in **PLAN MODE**. Project files are strictly read-only, with one exception: you may write, edit, or patch **plan markdown files** (`plans/*.md`, `.opencode/plans/*.md`) to persist the plans you produce. You do not otherwise write, edit, patch, rename, delete, or mutate any project file. You produce plans the user (or another agent) will execute in **build mode**.

@@ -9,7 +9,9 @@ This repository contains personalized extensions that enhance coding agent capab
 - **Agents** — Reusable agent definitions with specific tool access
 - **Commands** — Quick actions triggered with arguments
 - **Scripts** — Maintenance helpers (e.g. skill validation)
-- **Plugin** — opencode plugin that registers all of the above without claiming `~/.config/opencode/`
+- **Plugin** — opencode V2 plugin that registers all of the above without claiming `~/.config/opencode/`
+
+Requires OpenCode V2. V1 is no longer supported — see [Installation](#installation).
 
 ## Inventory
 
@@ -59,7 +61,7 @@ opencode also ships built-in `build` and `plan` agents — referenced by some co
 |---------|-------|---------|
 | [test](./commands/test.md) | `build` (built-in) | Run pytest with coverage; prefers `uv run pytest`, falls back to `python3 -m pytest`. |
 | [clean-init](./commands/clean-init.md) | `build` (built-in) | Analyze codebase and write/update `AGENTS.md`. |
-| [bug-hunter](./commands/bug-hunter.md) | `general` | Randomly explore code to find and fix bugs. |
+| [bug-hunter](./commands/bug-hunter.md) | `build` (built-in) | Randomly explore code to find and fix bugs. |
 | [code-reorganizer](./commands/code-reorganizer.md) | `planner` | Propose a reorganization plan for scattered code files. |
 | [de-slopify](./commands/de-slopify.md) | `refactor` | Remove AI slop style writing from text. |
 | [walkthrough](./commands/walkthrough.md) | `plan` (built-in) | Walk through a PR/diff one behavioral topic at a time using `change-walkthrough`. |
@@ -68,13 +70,13 @@ opencode also ships built-in `build` and `plan` agents — referenced by some co
 
 | Script | Purpose |
 |--------|---------|
-| [validate-skills.sh](./scripts/validate-skills.sh) | Lint skills, agents, and commands, then verify they reach opencode's resolved config. Exits non-zero on failure. |
+| [validate-skills.sh](./scripts/validate-skills.sh) | Lint skills, agents, and commands, then verify they reach opencode's V2 registries. Exits non-zero on failure. |
 
 ### Plugin (`plugin/`)
 
 | File | Purpose |
 |------|---------|
-| [ocskillz.js](./plugin/ocskillz.js) | opencode plugin that registers this repo's skills, agents, and commands through the `config` hook. Used by the plugin install below. |
+| [ocskillz.js](./plugin/ocskillz.js) | opencode V2 plugin that registers this repo's skills and commands through V2 transforms, and hydrates the three agent stubs below. Used by the plugin install below. |
 
 ## Validation
 
@@ -100,24 +102,32 @@ Checked: 34  Errors: 0
 Three phases run:
 
 1. **Skills** — `skills/*/SKILL.md` has `name` and `description`, and `name` matches the directory.
-2. **Agents and commands** — frontmatter has a `description`, the body is non-empty, agent `name` matches the filename, `mode` is valid, and every command's `agent` names an agent that exists.
-3. **Registration** — loads the plugin into a throwaway project and asserts every skill, agent, and command reaches `opencode debug config`.
+2. **Agents and commands** — frontmatter has a `description`, the body is non-empty, no legacy V1 fields remain (`name`, `permission`, `disable`, `prompt`, `tools`, `maxSteps`, `temperature`, `top_p`, `variant`), `permissions` (if present) is a native ordered sequence of `{action, resource, effect}` rules, `mode` is valid, and every command's `agent` names an agent that exists.
+3. **Registration** — loads the plugin into a throwaway project and asserts it's active and every skill, agent stub, and command reaches opencode's V2 registries via `opencode api get /api/plugin|/api/skill|/api/agent|/api/command`.
 
-Phase 3 is skipped with a notice — not a failure — when `opencode` or `python3` is not on `PATH`, or when dependencies are not installed. Install them with `bun install` (or `npm install`) to enable it.
+Phase 3 is skipped with a notice — not a failure — when `opencode` or `python3` is not on `PATH`, when dependencies are not installed, or when the local opencode instance can't report live plugin state. Install dependencies with `npm install` to enable it.
 
 ## Installation
 
-Add ocskillz to the `plugin` array in your `opencode.json` (global or project):
+Requires OpenCode V2. Add ocskillz to the `plugins` array in your `opencode.json` (global or project), and declare stubs for the three bundled agents so the plugin can hydrate them — V2 plugins can update an agent you've declared, but cannot create one from scratch:
 
-```json
+```jsonc
 {
-  "plugin": ["ocskillz@git+https://github.com/mimi1vx/ocskillz"]
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["ocskillz@git+https://github.com/mimi1vx/ocskillz"],
+  "agents": {
+    "code-reviewer": {},
+    "planner": { "mode": "all" },
+    "refactor": {}
+  }
 }
 ```
 
-Restart opencode. The plugin registers all skills, agents, and commands from wherever opencode cached the package, leaving `~/.config/opencode/` free for your own configuration.
+Restart opencode. The plugin registers all skills and commands from wherever opencode cached the package, and fills in the `description`, `system` prompt, `mode`, and `permissions` for the three declared agent stubs above — leaving `~/.config/opencode/` free for your own configuration.
 
-Anything you define yourself wins: if you already have an agent or command with the same name, the plugin leaves it alone.
+Anything meaningful you define yourself wins: a skill or command with the same ID is left alone, and any agent field you set to something other than opencode's empty-stub default is preserved instead of being overwritten by the bundled value.
+
+V1 is no longer supported: `@opencode-ai/plugin` and the singular `plugin`/`agent`/`command`/`permission` config fields do not work with this package.
 
 ## License
 
