@@ -39,6 +39,7 @@ Requires OpenCode V2. V1 is no longer supported — see [Installation](#installa
 | [sota-privacy-compliance](./skills/sota-privacy-compliance/SKILL.md) | Privacy, PII, GDPR, or compliance | Data lifecycle, consent, user rights, evidence, and breach readiness. |
 | [sota-observability](./skills/sota-observability/SKILL.md) | Logging, metrics, tracing, SLOs, or incidents | Generic telemetry and operational-readiness practices. |
 | [sota-data-engineering](./skills/sota-data-engineering/SKILL.md) | Batch, streaming, warehouse, or lakehouse work | Pipelines, CDC, contracts, storage, quality, and governance. |
+| [sota-async-concurrency](./skills/sota-async-concurrency/SKILL.md) | Async, threads, races, deadlocks, or backpressure | Cross-language concurrency design, correctness, bug catalog, and audit severity. |
 | [apple-container](./skills/apple-container/SKILL.md) | Apple `container` CLI on macOS, arm64 pinning | Command reference plus forcing `linux/arm64`, catching silent amd64 fallback, and verifying image architecture. |
 | [deep-performance-audit](./skills/deep-performance-audit/SKILL.md) | "performance audit", "optimize codebase" | Hyper-intensively investigate the codebase to identify gross inefficiencies and propose isomorphic improvements. |
 | [deep-project-primer](./skills/deep-project-primer/SKILL.md) | "project primer", "initialize project" | Initialization instructions for any project. Investigates code to understand architecture and purpose. |

@@ -4,6 +4,8 @@ Haskell's lightweight threads make concurrency cheap, not automatically safe.
 Every thread needs an owner, every queue needs a bound, and every shared-state
 protocol needs an invariant that survives exceptions and shutdown.
 
+Cross-runtime design and the audit bug catalog live in `sota-async-concurrency`.
+
 ## 1. Give every thread structured ownership
 
 Prefer `withAsync`, `concurrently`, `mapConcurrently`, and `race` from `async`

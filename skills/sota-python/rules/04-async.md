@@ -4,6 +4,8 @@ asyncio's failure modes are silent: lost exceptions, garbage-collected tasks, a 
 that "works" until production load. The cure is structured concurrency plus a hard ban on
 synchronous work inside coroutines.
 
+Cross-runtime design and the audit bug catalog live in `sota-async-concurrency`.
+
 ## 1. TaskGroup is the default; gather is legacy
 
 ```python

@@ -4,6 +4,8 @@ JavaScript is single-threaded with a cooperative event loop. Nothing preempts
 your code, so the failure modes are not data races — they are **dropped work,
 unbounded work, and work that never finishes**.
 
+Cross-runtime design and the audit bug catalog live in `sota-async-concurrency`.
+
 ## 4.1 No floating promises
 
 An un-awaited promise is a piece of work nobody owns. Its result is discarded,

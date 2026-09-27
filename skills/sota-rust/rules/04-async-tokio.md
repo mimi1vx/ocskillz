@@ -4,6 +4,8 @@ Async Rust's failure modes are quiet: a blocked worker thread, a future dropped
 mid-write, a lock held across `.await`. These rules cover tokio idioms,
 cancellation safety, structured concurrency, channels, and shutdown.
 
+Cross-runtime design and the audit bug catalog live in `sota-async-concurrency`.
+
 ## 1. Never block the runtime
 
 A tokio worker thread running blocking code stalls **every task scheduled on

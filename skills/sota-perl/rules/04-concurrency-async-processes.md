@@ -4,6 +4,8 @@ Perl offers processes, event loops, futures/promises, and interpreter threads.
 Choose one model from workload and framework constraints, then make every
 operation's lifetime and cancellation behavior explicit.
 
+Cross-runtime design and the audit bug catalog live in `sota-async-concurrency`.
+
 ## 1. Choose the model deliberately
 
 | Workload | Default direction |
