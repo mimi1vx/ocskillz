@@ -76,6 +76,31 @@ quantity at every scale that matters:
   store + manifest), changelog per release, eval results pinned to dataset
   version. "Which data trained the model in prod?" must have an exact answer.
 
+### 2a. Training-side safety
+
+When you do tune (§1), the data and the training loop can remove safety the
+base model had.
+
+- **Start aligned, and re-check after.** Prefer a base model whose model or
+  system card documents safety alignment covering your disallowed categories;
+  re-run the safety-tagged eval cases (rules/01 §5) on every tuned checkpoint.
+- **Filter content, not only PII.** Run every example through a
+  disallowed-content classifier before it enters a training set and log what
+  was removed; keep examples to the task's scope, so irrelevant records
+  (especially personal ones) never enter it.
+- **Reward hacking is a measurable failure.** In preference tuning, hold out a
+  human-judged or rubric eval the reward model never sees; a reward score that
+  climbs while that eval stays flat or falls is over-optimisation — stop and
+  inspect, don't ship the higher-reward checkpoint.
+- **Screen the feedback loop before humans see it.** Feedback headed for
+  training or eval pools (§3) passes automated checks first — per-account
+  volume, bursts, near-duplicate submissions, one account steering one topic —
+  and flagged items are held, not merged.
+- **Every labelling action is logged:** annotator, item, label before and
+  after, time, in an append-only store, so a poisoned label can be traced to
+  its author. OWASP: AISVS 1.3.4, 3.5.2, 11.1.1, 11.4.3, 12.5.2; OWASP
+  LLMSVS 2.11.
+
 ## 3. Feedback loops: signals into eval sets
 
 Production feedback is the cheapest continuous source of truth — if wired.
@@ -136,11 +161,29 @@ stores: sota-code-security rules/07. The LLM-engineering obligations:
   needs — schema-projected records, not whole user objects; pseudonymize
   stable identifiers (user_123 → token) where the task allows, re-hydrate
   after.
+- **Outbound AI traffic crosses a DLP boundary.** Calls to external model
+  services go through one egress gateway (the rules/05 §1 gateway, or a
+  network-level one) that inspects prompts and attachments for secrets and
+  personal data, blocks or redacts what it finds, and keeps an audit trail
+  of who sent what to which provider. Developer coding assistants are the
+  same data flow with a wider aperture — they upload whatever files they
+  read: record what they send (the tool's request logging, or an outbound
+  proxy you control) and scope what they can read (sota-sandboxing rules/05
+  §4). Code or data under a regulatory or classification regime goes only to
+  self-hosted or air-gapped models, behind an explicit approval to use AI on
+  it at all. OWASP: OWASP DSOMM; OWASP Secure Coding with AI cheat sheet.
 - **Redact before persistence:** prompt/completion logging (rules/05 §5),
   eval-set promotion (rules/01 §7), and dataset curation (§2) all pass
   through a redaction layer (NER/pattern-based PII detection + allowlists).
   Raw-prompt logging with PII into a general log platform with broad access
   is a High finding; wholesale, unredacted, unbounded-retention → Critical.
+  **The embedding path is persistence too:** detect sensitive fields before
+  text is chunked and embedded, and mask, tokenise or drop them — a vector
+  store is a durable copy that approximately preserves its input
+  (sota-code-security rules/08 §4), and a chunk's payload text is stored
+  verbatim. An embedding model fine-tuned on one tenant's data is that
+  tenant's data: serve it to that tenant only. OWASP: AISVS 8.2.1; OWASP RAG
+  Security cheat sheet.
 - **Retention & access:** LLM traces get their own retention clock (shortest
   that supports debugging/evals) and access control distinct from app logs;
   deletion requests must reach traces, eval sets, memory stores (rules/04
@@ -150,9 +193,15 @@ stores: sota-code-security rules/07. The LLM-engineering obligations:
   defaults you inherit.** Verify per provider and per platform: API data
   used (or not) for training, retention window options (standard vs
   zero-data-retention agreements), regional processing. Note ZDR interacts
-  with features — some models/features require minimum retention (verified:
-  at least one frontier model requires 30-day retention and is unavailable
-  under ZDR, June 2026) and some platforms differ from first-party APIs.
+  with features — some models/features require minimum retention (verified
+  2026-09-26: Anthropic designates four frontier "Covered Models" that
+  require 30-day retention and are unavailable under ZDR unless expressly
+  authorised) and some platforms differ from first-party APIs. **A ZDR
+  agreement does not block ineligible features:** Anthropic's API accepts a
+  stateful feature (batch, files, code execution) from a ZDR organisation and
+  applies that feature's own retention, whereas a HIPAA-enabled organisation
+  gets a `400` — so enforce the eligible-feature allowlist yourself, in the
+  gateway (rules/05 §1), rather than assuming the provider refuses.
   Record the chosen settings in the repo (compliance docs) so they're
   auditable; re-verify on provider/platform change.
 - Memory stores and semantic caches hold user data too: scope per user/
@@ -179,8 +228,24 @@ stores: sota-code-security rules/07. The LLM-engineering obligations:
 - [ ] PII minimized at the model boundary (projection, pseudonymization);
       redaction layer in front of trace logging, eval promotion, and dataset
       storage; traces have distinct retention + access control.
+- [ ] Sensitive fields masked, tokenised or dropped before embedding and
+      indexing; tenant-trained embedding models never shared across tenants
+      (§5). **High**. Probe — embedding calls with no redaction step on the
+      line: `grep -rnE 'embed(_documents|_query|_content|Content|dings\.create)?\(' . | grep -vE 'redact|mask|scrub'`
+- [ ] Calls to external AI services leave through one scanning egress
+      gateway with an audit trail; coding-assistant uploads logged or
+      proxied; regulated code only on self-hosted/air-gapped models with an
+      approval gate (§5). **High**. Probe — provider hosts hard-coded outside
+      the gateway module: `grep -rnE 'api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis\.com' .`
 - [ ] Deletion requests propagate to traces, eval sets, memory, semantic
       caches, and vector indexes.
 - [ ] Provider data-retention/training-use settings explicitly configured,
       documented in-repo, and re-verified on provider/platform/model change
-      (including ZDR-vs-feature constraints).
+      (including ZDR-vs-feature constraints); under ZDR, the gateway
+      enforces an eligible-feature allowlist — the provider may not block
+      ineligible ones (§5).
+- [ ] Tuning: aligned base model with the safety eval re-run per checkpoint;
+      disallowed-content filtering and task scoping of training data; a
+      held-out eval guarding against reward hacking; feedback screened for
+      poisoning before review; labelling actions logged append-only (§2a).
+      **High** when tuned models serve users.

@@ -1,7 +1,7 @@
 ---
 name: sota-python
 description: >-
-  State-of-the-art Python engineering (2026 baseline) for both writing new Python and
+  State-of-the-art Python engineering for both writing new Python and
   auditing existing Python code. Covers uv-based tooling and project setup, strict typing,
   idioms and pitfalls, asyncio structured concurrency, security (injection, deserialization,
   supply chain), performance, and FastAPI/Django/pytest practice. Use whenever the task
@@ -11,7 +11,7 @@ description: >-
   ty, ruff, pydantic, SQLAlchemy, venv.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@efeb1dee4d959b51d61dbe4783f22e4110c93ed5
+  source: martinholovsky/SOTA-skills@a02c19971ad39254846890f87300a46b19e3e82e
   adapted-for: opencode
 ---
 
@@ -75,7 +75,9 @@ When reviewing existing Python code:
 1. **Sweep mechanically first.** Run the repository's configured lint, type, test, and
    security gates, then use relevant rule-file checklists. If the user permits supplemental
    ephemeral tools, Ruff, Bandit, and pip-audit can provide additional heat maps; derive
-   source paths from the repository rather than assuming `src/`.
+   source paths from the repository rather than assuming `src/`. When auditing dependencies,
+   audit the *project's* lock — bare `uvx pip-audit` audits its own tool venv and exits 0
+   on any project; rules/08 §1 has the counted form.
 2. **Then read for design:** trust-boundary placement (validation at edges?), exception
    strategy, async ownership of tasks, N+1 patterns, cache invalidation, test independence.
    Greps find syntax; you find architecture.
@@ -117,13 +119,14 @@ information, not omission).
 
 | File | Read this when... |
 |---|---|
-| `rules/01-tooling-project-setup.md` | starting/scaffolding a project; reviewing pyproject/uv/ruff/CI setup; choosing type checker; questions about uv lockfiles, PEP 723 scripts, src/ layout, 3.12–3.14 features, free-threading |
-| `rules/02-typing-correctness.md` | annotating APIs; choosing TypedDict vs dataclass vs pydantic; Protocol vs ABC; generics/`Self`/`ParamSpec`; Any leaks; `assert_never` exhaustiveness; where runtime validation belongs |
-| `rules/03-idioms-pitfalls.md` | any general Python code; mutable defaults, closures, comprehensions, context managers, pathlib, EAFP, dataclass/enum patterns, itertools/functools; designing exceptions; logging setup |
-| `rules/04-async.md` | any `async def` in sight: TaskGroup vs gather, blocking-the-loop, fire-and-forget, timeouts/cancellation, async generators, anyio, sync-ORM-in-async bugs |
-| `rules/05-security.md` | auditing for vulnerabilities; handling untrusted input; subprocess/SQL/paths/archives/secrets; pickle/eval/yaml; SSRF/XML; dependency auditing and supply chain |
+| `rules/01-tooling-project-setup.md` | starting/scaffolding a project; reviewing pyproject/uv/ruff/CI setup; choosing type checker; questions about uv lockfiles, **`pylock.toml` (PEP 751) exports for non-uv tools**, PEP 723 scripts, src/ layout, 3.12–3.14 features, free-threading; **what 3.12/3.13 REMOVED (PEP 594, `distutils`, `imp`, `lib2to3`)** before a floor bump |
+| `rules/02-typing-correctness.md` | annotating APIs; choosing TypedDict vs dataclass vs pydantic; Protocol vs ABC; generics/`Self`/`ParamSpec`; Any leaks; **in-band sentinels (`-1` for absent) — the defect `int \| None` exists to prevent, invisible to the type checker**; `assert_never` exhaustiveness; where runtime validation belongs |
+| `rules/03-idioms-pitfalls.md` | any general Python code; mutable defaults, closures, comprehensions, context managers, pathlib, EAFP, dataclass/enum patterns, itertools/functools; designing exceptions; logging setup; **the public API surface** (`__all__`, keyword-only parameters, `__slots__`, deprecation) |
+| `rules/04-async.md` | any `async def` in sight: TaskGroup vs gather, blocking-the-loop, fire-and-forget, timeouts/cancellation, async generators, anyio, sync-ORM-in-async bugs; **per-request `ContextVar`/thread-local state reset in `finally`** |
+| `rules/05-security.md` | auditing for vulnerabilities; handling untrusted input; subprocess/SQL/paths/archives/secrets; pickle/eval/yaml and reflection by name (`import_module`, `getattr`); SSRF/XML (dependency auditing, supply chain, adopting a new dependency and the insecure defaults of the libraries you call moved to rules/08); temp-file and permission hygiene; where crypto is owned; remote-host trust; debug consoles, debug switches and dev servers (`runserver`, `flask run`, `--reload`) in production; **3.14 t-string (`Template`) consumers that render values raw; remote debugger attach (PEP 768) and its switches**; **escape hatches into raw memory**: `ctypes`/`cffi` and C extensions |
 | `rules/06-performance.md` | anything slow: profiling tool choice, hot-loop suspects, numpy/polars vectorization, functools caching caveats, threads vs processes vs asyncio, lazy imports/startup |
-| `rules/07-frameworks-testing.md` | FastAPI (DI, boundary models, sync-in-async), Django (N+1, select_related, migrations), pytest (fixtures, parametrize, independence, hypothesis). **Test *strategy* — suite shape, TDD, doubles, test data, flake policy — lives in `sota-testing`; load it for any build that writes logic. This file owns Python runner mechanics only.** |
+| `rules/07-frameworks-testing.md` | FastAPI (DI, boundary models, sync-in-async), Django (N+1, select_related, migrations), **cookies the app sets (`set_cookie` defaults: Secure/HttpOnly off)**, pytest (fixtures, parametrize, independence, hypothesis). **Test *strategy* — suite shape, TDD, doubles, test data, flake policy — lives in `sota-testing`; load it for any build that writes logic. This file owns Python runner mechanics only.** |
+| `rules/08-supply-chain.md` | Adding or auditing dependencies: lockfiles and hashes (**pip-audit on a project with no dependencies exits 1 — the counted form**), typosquats and adoption checks, code that runs at install time, publishing credentials and provenance, static-analysis gates (formerly rules/05 sections 9–10, now §1–§2) |
 
 ## Top-10 non-negotiables
 

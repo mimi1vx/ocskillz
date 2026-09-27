@@ -67,27 +67,42 @@ all that apply.
 - **Distribution drift:** track means/quantiles/category mix on
   business-critical columns; alert on significant shift. Warn-tier — drift
   is a question, not a verdict.
+- **Reconciliation / control totals:** a row count alone passes a load that
+  truncated a column, zeroed an amount or swapped keys. For every data set
+  moved between systems (extract, replication, cross-engine copy), compute
+  at the source *and* at the destination: the row count, a sum over each
+  key numeric measure, and an order-independent fingerprint of the key
+  columns (per-row hash of a canonical text form, summed modulo a large
+  prime). Compare before publishing; a mismatch is block-tier. Pin the
+  canonical form (NULL token, float/decimal scale, timestamp zone) so both
+  engines hash the same bytes. Aggregate with a sum, not XOR: XOR is also
+  order-free but an even number of duplicated rows cancels out. OWASP:
+  Go-SCP (validation).
 
 ```yaml
 # GOOD: minimum battery on a critical mart, tiered (dbt syntax; Soda/GX
 # equivalents exist for all of these)
+# Test inputs go under `arguments:` (top-level ones warn by default since 1.10.8);
+# `{{ this }}` inside a generic test is the TEST node, so name the model.
 models:
   - name: fct_orders
-    tests:
+    data_tests:
       - dbt_utils.recency:            # freshness — blocks
-          datepart: hour, field: loaded_at, interval: 26
+          arguments: {datepart: hour, field: loaded_at, interval: 26}
       - dbt_utils.expression_is_true: # volume — warns, human triages
-          expression: >
-            (SELECT count(*) FROM {{ this }} WHERE order_date = current_date - 1)
-            BETWEEN 0.5 * {{ var("orders_daily_median") }}
-                AND 2.0 * {{ var("orders_daily_median") }}
+          arguments:
+            expression: >
+              (SELECT count(*) FROM {{ ref('fct_orders') }} WHERE order_date = current_date - 1)
+              BETWEEN 0.5 * {{ var("orders_daily_median") }}
+                  AND 2.0 * {{ var("orders_daily_median") }}
           config: {severity: warn}
     columns:
       - name: order_line_id
-        tests: [unique, not_null]     # grain — blocks, always
+        data_tests: [unique, not_null] # grain — blocks, always
       - name: customer_id
-        tests:
-          - relationships: {to: ref('dim_customer'), field: customer_id}
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dim_customer'), field: customer_id}
 ```
 
 ## Severity tiers: block vs warn
@@ -205,6 +220,11 @@ unit_tests:
 - [ ] Zero-row and duplicate-key conditions block on critical marts?
 - [ ] Warn alerts owned and triaged — no weeks-old ignored failures?
 - [ ] Referential integrity checked between facts and dimensions?
+- [ ] HIGH: data sets moved between systems reconciled on control totals
+      (count + key-measure sums + order-independent key hash), block-tier —
+      not on row count alone? Probe (lists reconciliation files with no
+      sum/hash):
+      `grep -rliE 'reconcil|row_?count' --null --include='*.sql' --include='*.py' --include='*.yml' . | xargs -0 -r grep -LiE 'sum\(|hash|checksum|md5|sha'`
 - [ ] Anomaly detection (if any) supplements explicit checks and isn't an
       alert-fatigue source?
 - [ ] Lineage derivable from code; column-level where PII/regulatory needs

@@ -36,10 +36,17 @@ asyncio.create_task(send_email(user))
 # Acceptable when truly detached work is required — keep a strong ref + done callback
 _background: set[asyncio.Task[None]] = set()
 
+def _reap(t: asyncio.Task[None]) -> None:
+    _background.discard(t)
+    if t.cancelled():
+        return
+    if (exc := t.exception()) is not None:        # NEVER just discard: an unobserved
+        log.exception("detached task failed", exc_info=exc)   # exception is a silent failure
+
 def spawn(coro: Coroutine[None, None, None]) -> None:
     t = asyncio.create_task(coro)
     _background.add(t)
-    t.add_done_callback(_background.discard)
+    t.add_done_callback(_reap)   # strong ref fixes LIFETIME; this fixes ERROR VISIBILITY
 ```
 
 Better: don't fire-and-forget. Put background work in a long-lived TaskGroup owned by the app
@@ -133,6 +140,17 @@ async with aclosing(stream_rows()) as rows:
   `get_event_loop().run_until_complete` inside libraries is a design error.
 - asyncio primitives (`asyncio.Lock`, `Queue`) are not thread-safe; crossing threads uses
   `loop.call_soon_threadsafe` / `asyncio.run_coroutine_threadsafe`.
+- **Per-request ambient state (tenant, user, locale, log context) is set and reset in the
+  same scope.** Keep it in a `contextvars.ContextVar`, never a module global or a
+  `threading.local`, and pair every `token = var.set(x)` with `var.reset(token)` in a
+  `finally` (or a context manager that does). Each asyncio task and each `asyncio.to_thread`
+  call runs in a copied context, so a value set there does not escape — measured on 3.13.
+  A thread that is *reused* is different: in a `ThreadPoolExecutor(max_workers=1)`, a
+  `threading.local` attribute and a `ContextVar` set by one job were both still visible to
+  the next job, and a `reset(token)` in `finally` cleared it. That is a threaded WSGI worker
+  or any pool serving request N+1 with request N's tenant. structlog's
+  `bind_contextvars` needs a `clear_contextvars()` at request start (or `bound_contextvars`
+  as a `with`). OWASP: Multi-Tenant Security cheat sheet; Session Management cheat sheet.
 
 ## 7. Common bugs checklist
 
@@ -142,9 +160,15 @@ async with aclosing(stream_rows()) as rows:
   rules/01 mandates a checker. Enable `-W error::RuntimeWarning` in tests.
 - **`async def` that never awaits** — either it shouldn't be async (caller pays scheduling
   cost, pretends concurrency) or it's missing the await.
-- **Blocking ORM in async views:** Django sync ORM call inside `async def` view, or
-  SQLAlchemy sync `Session` in FastAPI async path — works in dev, serializes all traffic in
-  prod. Django: use `await Model.objects.aget(...)` / `sync_to_async`; FastAPI: see rules/07.
+- **Blocking ORM in async views — and the two frameworks fail *differently*:**
+  **Django raises**, it does not silently serialize. A sync ORM call from a thread with a
+  running event loop gets `SynchronousOnlyOperation`; it only blocks instead if someone set
+  `DJANGO_ALLOW_ASYNC_UNSAFE`, which the docs warn risks data loss
+  ([Django async safety](https://docs.djangoproject.com/en/5.2/topics/async/), verified
+  2026-09-16). So "works in dev, dies in prod" is the wrong symptom to hunt for in Django —
+  hunt for the exception, or for the env var that disabled the guard. A sync SQLAlchemy
+  `Session` on a FastAPI async path **does** block silently, because nothing is watching.
+  Django: `await Model.objects.aget(...)` / `sync_to_async`; FastAPI: see rules/07.
 - **Lock-free check-then-act across awaits:** state can change at every `await`. Guard
   multi-step invariants with `asyncio.Lock`, or design single-writer.
 - **`time.monotonic` vs loop time** for timing inside coroutines; never `time.time()` deltas.
@@ -217,40 +241,45 @@ async def pipeline(items: AsyncIterator[Item]) -> None:
 
 ## Audit checklist
 
-```bash
-# Ruff async rules first — blocking calls, sync sleep, etc.
-uvx ruff check --select ASYNC --statistics .
-
-# Blocking calls inside async defs [HIGH in servers]
-grep -rn "time\.sleep" --include="*.py" src/                 # cross-check: inside async def?
-grep -rn "requests\.\(get\|post\|put\|delete\|Session\)" --include="*.py" src/
-grep -rn "subprocess\.\(run\|check_output\|call\)" --include="*.py" src/   # in async modules?
-
-# Fire-and-forget tasks [MEDIUM-HIGH]
-grep -rn "asyncio.create_task" --include="*.py" src/         # is the return value kept + callback added?
-grep -rn "ensure_future" --include="*.py" src/               # legacy spelling, same issue
-
-# gather usage [review each]
-grep -rn "asyncio.gather" --include="*.py" src/
-grep -rn "return_exceptions=True" --include="*.py" src/      # are results isinstance-checked after?
-
-# Swallowed cancellation [HIGH]
-grep -rn -A3 "except asyncio.CancelledError" --include="*.py" src/ | grep -L raise
-grep -rn "except BaseException" --include="*.py" src/
-
-# Timeouts
-grep -rn "asyncio.timeout\|wait_for" --include="*.py" src/ | wc -l    # zero in a network service = finding
-grep -rn "AsyncClient()" --include="*.py" src/               # per-request client construction? [MEDIUM]
-
-# Loop-bound objects at import time [MEDIUM]
-grep -rn "^[a-zA-Z_]* = asyncio.\(Queue\|Lock\|Event\)" --include="*.py" src/
-grep -rn "get_event_loop" --include="*.py" src/              # legacy API [LOW-MEDIUM]
-
-# Async generators holding resources without aclosing
-grep -rln "async def.*->.*AsyncIterator\|AsyncGenerator" --include="*.py" src/
-grep -rn "aclosing" --include="*.py" src/                    # compare counts
-
-# Forgotten awaits — runtime + type checker
-grep -rn "asyncio_mode" pyproject.toml setup.cfg 2>/dev/null
-python -W error::RuntimeWarning -m pytest -x 2>&1 | grep "never awaited"
-```
+- [ ] **Ruff async rules first — blocking calls, sync sleep, etc.** —
+      `uvx ruff check --select ASYNC --statistics .`
+- [ ] **Blocking calls inside async defs [HIGH in servers]** —
+      `grep -rn "time\.sleep" --include="*.py" src/` (cross-check: inside async def?);
+      `grep -rn "requests\.\(get\|post\|put\|delete\|Session\)" --include="*.py" src/` ;
+      `grep -rn "subprocess\.\(run\|check_output\|call\)" --include="*.py" src/` (in async
+      modules?)
+- [ ] **Fire-and-forget tasks [MEDIUM-HIGH]** —
+      `grep -rn "asyncio.create_task" --include="*.py" src/` (is the return value kept +
+      callback added?); `grep -rn "ensure_future" --include="*.py" src/` (legacy spelling, same
+      issue)
+- [ ] **gather usage [review each]** — `grep -rn "asyncio.gather" --include="*.py" src/` ;
+      `grep -rn "return_exceptions=True" --include="*.py" src/` (are results isinstance-checked
+      after?)
+- [ ] **Swallowed cancellation [HIGH]** —
+      `grep -rn -A3 "except asyncio.CancelledError" --include="*.py" src/ | grep -L raise` ;
+      `grep -rn "except BaseException" --include="*.py" src/`
+- [ ] **Timeouts** — `grep -rn "asyncio.timeout\|wait_for" --include="*.py" src/ | wc -l` (zero
+      in a network service = finding); `grep -rn "AsyncClient()" --include="*.py" src/`
+      (per-request client construction? [MEDIUM])
+- [ ] **Loop-bound objects at import time [MEDIUM]** —
+      `grep -rn "^[a-zA-Z_]* = asyncio.\(Queue\|Lock\|Event\)" --include="*.py" src/` ;
+      `grep -rn "get_event_loop" --include="*.py" src/` (legacy API [LOW-MEDIUM])
+- [ ] **Async generators holding resources without aclosing** —
+      `grep -rln "async def.*->.*AsyncIterator\|AsyncGenerator" --include="*.py" src/` ;
+      `grep -rn "aclosing" --include="*.py" src/` (compare counts)
+- [ ] **Forgotten awaits — runtime + type checker** —
+      `grep -rn "asyncio_mode" pyproject.toml setup.cfg 2>/dev/null` ;
+      `python -W error::RuntimeWarning -m pytest -x 2>&1 | grep "never awaited"`
+- [ ] **Unbounded queue or fan-out (§9) — MEDIUM, HIGH when the producer is user traffic** —
+      `grep -rnE 'asyncio\.Queue(\[[^]]*\])?\((maxsize[[:space:]]*=[[:space:]]*0)?\)' --include='*.py' src/`
+      (measured on 3.14: `asyncio.Queue().maxsize` is `0`, and 10,000 `put_nowait` calls never
+      made it `full()`) ;
+      `grep -rlE 'create_task\(|TaskGroup\(' --include='*.py' src/` against
+      `grep -rlE 'Semaphore\(' --include='*.py' src/` (a file that spawns tasks and holds no
+      semaphore: read each loop that spawns one task per item)
+- [ ] **--- Request-scoped ambient state: ContextVar / thread-local not reset (§6) --- [HIGH
+      where it carries a tenant or user id; MEDIUM for log context]** —
+      `grep -rnE 'threading\.local\(|^[[:space:]]*[[:alnum:]_.]+\.set\([^)]|bind_contextvars\(' --include='*.py' src/`
+      (a `.set(x)` whose token is discarded cannot be reset; a `threading.local` survives into
+      the next request on a reused thread; a `bind_contextvars` needs a `clear_contextvars()`
+      at request start)

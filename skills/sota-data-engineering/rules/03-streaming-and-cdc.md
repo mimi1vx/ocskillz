@@ -23,8 +23,8 @@ earn its place.
 
 ## Kafka-style log fundamentals
 
-(Kafka 4.x is current — ZooKeeper is gone, KRaft-only; the KIP-848 consumer
-rebalance protocol is GA in 4.0+ and consumers opt in via
+(Kafka 4.0 removed ZooKeeper — KRaft-only; the KIP-848 consumer
+rebalance protocol is GA since 4.0 and consumers opt in via
 `group.protocol=consumer`. Same fundamentals apply to Pulsar/Kinesis/Redpanda.)
 
 - **Ordering exists only within a partition.** Choose the partition key as
@@ -108,7 +108,7 @@ for batch in consumer.batches():
 
 ## CDC patterns
 
-- **Log-based CDC (Debezium-class, 3.x current) is the default** for
+- **Log-based CDC (Debezium-class) is the default** for
   replicating OLTP into the analytical platform: reads the WAL/binlog,
   emits ordered change events, near-zero source impact. Query-based
   ("`SELECT WHERE updated_at >`") misses deletes and intermediate states —
@@ -138,8 +138,9 @@ WHEN MATCHED AND s.op = 'd' THEN DELETE
 WHEN MATCHED THEN UPDATE SET ...
 WHEN NOT MATCHED AND s.op != 'd' THEN INSERT ...;
 ```
-- Use the **outbox pattern** for application-emitted events to avoid dual-write
-  inconsistency; don't tail business tables to fake events.
+- **Outbox pattern** for application-emitted events (avoiding dual-write
+  inconsistency) is owned by `sota-architecture` — use it; don't tail
+  business tables to fake events.
 - Schema changes on source tables flow through CDC: test ADD COLUMN and
   type-widening paths; alert on incompatible DDL rather than silently
   dropping fields.
@@ -175,7 +176,8 @@ WHEN NOT MATCHED AND s.op != 'd' THEN INSERT ...;
 ## Backpressure
 
 Consumers must degrade by slowing intake (pause/resume, bounded buffers),
-not by buffering unboundedly in memory. In Kafka terms: bound in-flight work, watch lag as
+not by buffering unboundedly in memory. Mechanics and patterns are owned by
+`sota-async-concurrency`; in Kafka terms: bound in-flight work, watch lag as
 the system-level backpressure signal, scale consumers before lag approaches
 retention.
 

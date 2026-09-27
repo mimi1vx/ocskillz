@@ -3,7 +3,7 @@ name: sota-privacy-compliance
 description: State-of-the-art privacy and compliance engineering guidance for building privacy-respecting systems and auditing existing code for privacy/compliance gaps. Use when work involves privacy, GDPR, PII, personal data, consent, data retention, deletion, DSAR (data subject access requests), SOC 2, ISO 27001, HIPAA, PCI DSS, compliance evidence, data residency/sovereignty, data classification, anonymization/pseudonymization, breach notification, or EU AI Act obligations — whether designing new data flows, implementing user-rights features (export/delete), preparing for an audit, or reviewing a codebase for places personal data is over-collected, under-protected, retained forever, or impossible to delete.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@efeb1dee4d959b51d61dbe4783f22e4110c93ed5
+  source: martinholovsky/SOTA-skills@a02c19971ad39254846890f87300a46b19e3e82e
   adapted-for: opencode
 ---
 
@@ -94,7 +94,7 @@ retention / deletion), not by file — that is how regulators and auditors think
 | File | Read this when... |
 |---|---|
 | [rules/01-data-inventory-classification.md](rules/01-data-inventory-classification.md) | Starting any privacy work; building/auditing a data map; defining classification tiers; hunting PII in schemas, logs, buckets, backups, analytics; mapping flows to processors |
-| [rules/02-privacy-by-design.md](rules/02-privacy-by-design.md) | Designing schemas/APIs that touch personal data; minimization and purpose limitation in code; choosing pseudonymization vs anonymization vs tokenization; exposing aggregate stats; evaluating re-identification risk |
+| [rules/02-privacy-by-design.md](rules/02-privacy-by-design.md) | Designing schemas/APIs that touch personal data; minimization and purpose limitation in code; choosing pseudonymization vs anonymization vs tokenization; exposing aggregate stats; evaluating re-identification risk; anti-bot fingerprinting; blocking remote content (IP leakage, HTML email); duress/panic mode for at-risk users |
 | [rules/03-consent-and-user-rights.md](rules/03-consent-and-user-rights.md) | Building consent management, cookie/tracker governance, DSAR export, deletion (hard/soft/crypto-shred + propagation), or retention automation; auditing whether user rights actually work |
 | [rules/04-regulatory-landscape.md](rules/04-regulatory-landscape.md) | Determining which regimes apply; GDPR engineering mechanics (lawful basis, transfers, DPIA, 72h); US state laws; HIPAA; PCI DSS 4.x scoping; EU AI Act timeline; DORA/NIS2; data residency architecture |
 | [rules/05-audit-ready-engineering.md](rules/05-audit-ready-engineering.md) | Preparing for SOC 2 / ISO 27001; automating evidence; mapping controls to engineering practice; vendor/subprocessor management; policy-as-code; avoiding common audit findings |

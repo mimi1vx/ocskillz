@@ -59,25 +59,21 @@ defend.
 
 ## Audit checklist
 
-```bash
-# Experiment tracking present? — MEDIUM if absent
-grep -rniE 'mlflow|wandb|neptune|comet|sacred|tensorboard' . | head || echo "no experiment tracking"
-
-# Seeds / determinism — MEDIUM (reproducibility)
-grep -rniE 'seed|random_state|set_seed|manual_seed|deterministic' --include='*.py' . | head \
-  || echo "no seeds set — runs not reproducible"
-
-# Config as code — MEDIUM
-grep -rniE 'hydra|omegaconf|pydantic|argparse|yaml.safe_load|config' --include='*.py' . | head
-grep -rnE '= ?(0\.[0-9]+|[0-9]{2,})' --include='*.py' . | grep -iE 'lr|rate|epoch|batch|threshold' | head  # magic numbers
-
-# Hyperparameter search hygiene — MEDIUM
-grep -rniE 'GridSearch|RandomizedSearch|optuna|ray.tune|hyperopt' --include='*.py' . | head
-#   verify search uses validation set, not test
-
-# Notebook-only training — LOW/MEDIUM (debt)
-find . -name '*.ipynb' | head    # is production training a notebook?
-
-# Checkpointing for long/distributed runs — MEDIUM
-grep -rniE 'checkpoint|save_model|state_dict|ModelCheckpoint' --include='*.py' . | head
-```
+- [ ] **Experiment tracking present? — MEDIUM if absent** —
+      `out=$(grep -rniE 'mlflow|wandb|neptune|comet|sacred|tensorboard' . 2>&1); rc=$?` ;
+      `case $rc in 0) printf '%s\n' "$out" | head ;; 1) echo "no experiment tracking" ;; *) echo "SWEEP FAILED, not a finding about their code: $out" ;; esac`
+- [ ] **Seeds / determinism — MEDIUM (reproducibility)** —
+      `out=$(grep -rniE 'seed|random_state|set_seed|manual_seed|deterministic' --include='*.py' . 2>&1); rc=$?` ;
+      `case $rc in 0) printf '%s\n' "$out" | head ;; 1) echo "no seeds set — runs not reproducible" ;; *) echo "SWEEP FAILED, not a finding about their code: $out" ;; esac`
+- [ ] **Config as code — MEDIUM** —
+      `grep -rniE 'hydra|omegaconf|pydantic|argparse|yaml.safe_load|config' --include='*.py' . | head`
+      ;
+      `grep -rnE '= ?(0\.[0-9]+|[0-9]{2,})' --include='*.py' . | grep -iE 'lr|rate|epoch|batch|threshold' | head`
+      (magic numbers)
+- [ ] **Hyperparameter search hygiene — MEDIUM** —
+      `grep -rniE 'GridSearch|RandomizedSearch|optuna|ray.tune|hyperopt' --include='*.py' . | head`
+      (verify search uses validation set, not test)
+- [ ] **Notebook-only training — LOW/MEDIUM (debt)** — `find . -name '*.ipynb' | head` (is
+      production training a notebook?)
+- [ ] **Checkpointing for long/distributed runs — MEDIUM** —
+      `grep -rniE 'checkpoint|save_model|state_dict|ModelCheckpoint' --include='*.py' . | head`

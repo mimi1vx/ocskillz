@@ -11,10 +11,11 @@ description: >-
   Rust code, reviewing or auditing existing Rust, designing crate APIs,
   debugging borrow checker or Send/Sync errors, or hardening Rust services.
   Triggers: Rust, cargo, crate, tokio, unsafe, lifetime, borrow checker,
-  clippy, async Rust, Cargo.toml, thiserror, anyhow, serde, Miri, MSRV.
+  clippy, async Rust, Cargo.toml, thiserror, anyhow, serde, Miri, MSRV,
+  std::process::Command, subprocess, spawn a process.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@efeb1dee4d959b51d61dbe4783f22e4110c93ed5
+  source: martinholovsky/SOTA-skills@a02c19971ad39254846890f87300a46b19e3e82e
   adapted-for: opencode
 ---
 
@@ -47,8 +48,9 @@ test runner and optimization mechanics.
 This skill encodes the 2026 state of the art for production Rust: the idioms,
 security posture, performance discipline, and CI baseline expected of an
 expert Rust codebase. Baseline as of mid-2026: the system-installed Rust
-version when it satisfies the repository's declared requirements, edition
-2024 where supported, and tokio still 1.x. It serves two modes — **BUILD** (write new code to this
+version when it satisfies the repository's declared requirements (Rust ≥1.85),
+edition 2024 where supported, and tokio still 1.x. Verify the latest toolchain
+release at blog.rust-lang.org. It serves two modes — **BUILD** (write new code to this
 standard) and **AUDIT** (find where existing code falls short, with severity
 and evidence). The detailed rules live in `rules/*.md`; load only the files
 relevant to the task (see index below). Every rules file ends with an "Audit
@@ -59,8 +61,8 @@ checklist" of grep/clippy patterns — use those verbatim in AUDIT mode.
 When writing or modifying Rust code:
 
 1. **Scope the work, load the rules.** Pick the relevant `rules/` files from
-   the index. Touching async code? Load 04. Adding a dependency or parsing
-   network input? Load 05. Writing any `unsafe`? Load 03 — no exceptions.
+   the index. Touching async code? Load 04. Adding a dependency, parsing
+   network input, or spawning an external program? Load 05. Writing any `unsafe`? Load 03 — no exceptions.
 2. **Design types first.** Newtypes for domain primitives, errors per
    subsystem (thiserror for libs, anyhow for apps), ownership tree before
    `Arc<Mutex<_>>`, public API minimal and borrowed (`&str`/`&[T]` params).
@@ -131,13 +133,14 @@ fixes with outsized value).
 
 | File | Read this when... |
 |---|---|
-| [rules/01-ownership-and-api-design.md](rules/01-ownership-and-api-design.md) | Designing structs/traits/modules/workspaces; fighting the borrow checker; deciding clone vs borrow vs Rc/Arc; newtype, typestate, builder patterns; sealed traits, coherence; comparison-trait (`Eq`/`Ord`) invariants; exhaustive matching; iterator-chain idioms |
-| [rules/02-errors-and-panics.md](rules/02-errors-and-panics.md) | Choosing thiserror vs anyhow/eyre; designing error enums; unwrap/expect policy and invariant messages; context discipline; panic policy for servers, FFI, and `Drop` (no panic in destructors); Option/Result combinator flow |
-| [rules/03-unsafe-discipline.md](rules/03-unsafe-discipline.md) | Writing or reviewing ANY `unsafe`; SAFETY comment standards; UB catalog (aliasing, uninit, transmute, FFI lifetimes); Miri/sanitizers/loom in CI; cargo-geiger; soundness review protocol |
-| [rules/04-async-tokio.md](rules/04-async-tokio.md) | Anything async: tokio, spawn vs spawn_blocking, Send/Sync bound errors, `select!` and cancellation safety, JoinSet/TaskTracker, channel selection, locks across await, async traits, graceful shutdown |
-| [rules/05-security-supply-chain.md](rules/05-security-supply-chain.md) | Network-facing or deployed code; adding dependencies; cargo audit/deny/vet; integer overflow on untrusted input; panic-DoS; zeroize/constant-time for secrets; serde hardening (untagged enums, size limits); service-edge defaults |
-| [rules/06-performance.md](rules/06-performance.md) | Performance work or claims: profiling (samply/perf/flamegraph, criterion/divan), allocation reduction (Cow/SmallVec/buffer reuse), accidental clones, iterator fusion, release profile (LTO, codegen-units, panic=abort), PGO |
-| [rules/07-tooling-ci.md](rules/07-tooling-ci.md) | Setting up or auditing repo scaffolding: clippy policy and pedantic triage, rustfmt, nextest, MSRV declaration+testing, additive feature flags, docs.rs discipline, edition 2024 migration, CI baseline. **Test *strategy* — suite shape, TDD, doubles, test data, flake policy — lives in `sota-testing`; load it for any build that writes logic. This file owns Rust runner mechanics only.** |
+| [rules/01-ownership-and-api-design.md](rules/01-ownership-and-api-design.md) | Designing structs/traits/modules/workspaces; fighting the borrow checker; deciding clone vs borrow vs Rc/Arc; newtype, typestate, builder patterns; sealed traits, coherence; comparison-trait (`Eq`/`Ord`) invariants and the 1.98 derived-`PartialOrd` fast path; exhaustive matching; iterator-chain idioms; **money as integer minor units or decimal, and arithmetic edge cases (NaN/`inf` from `parse::<f64>`, `MIN / -1`, `Duration::try_from_secs_f64`, §3)** |
+| [rules/02-errors-and-panics.md](rules/02-errors-and-panics.md) | Choosing thiserror vs anyhow/eyre; designing error enums; unwrap/expect policy and invariant messages; context discipline; panic policy for servers, FFI (a panic leaving `extern "C"` aborts since 1.81), and `Drop` (no panic in destructors); `assert!` is a panic and `debug_assert!` is not a check in release; Option/Result combinator flow; **not unwrapping an `Option` back into a sentinel** (`unwrap_or(-1)`, `serde(default)` on numbers) |
+| [rules/03-unsafe-discipline.md](rules/03-unsafe-discipline.md) | Writing or reviewing ANY `unsafe`; SAFETY comment standards; UB catalog (aliasing, uninit, transmute, FFI lifetimes); **the FFI boundary** (values of restricted types arriving from C, null pointers and callbacks, `core::ffi` widths, bindgen/cbindgen, opaque handles); **leak APIs** (`mem::forget`, `Box::leak`, `into_raw` without `from_raw`); Miri/sanitizers/loom in CI; cargo-geiger; soundness review protocol |
+| [rules/04-async-tokio.md](rules/04-async-tokio.md) | Anything async: tokio, spawn vs spawn_blocking, Send/Sync bound errors, `select!` and cancellation safety, JoinSet/TaskTracker, channel selection, locks across await, async traits, graceful shutdown; **request-scoped state: `task_local!` scope, never a `thread_local!` (§4)** |
+| [rules/05-security-supply-chain.md](rules/05-security-supply-chain.md) | Network-facing or deployed code; adding dependencies; cargo audit/deny/vet; integer overflow on untrusted input; panic-DoS; zeroize/constant-time for secrets; serde hardening (untagged enums, size limits); service-edge defaults; **outbound requests to a caller-influenced URL (SSRF: reqwest `dns_resolver` connect-time check, redirect policy, IP literals, §7)**; **regex as a control (`regex::escape`, whole-input anchors, `fancy-regex` backtracking limit, §7)**; **app-set cookie attributes and debug build / tokio-console in production (§7)**; **raw-SQL sinks (sqlx `QueryBuilder::push`/`AssertSqlSafe`, diesel `sql_query`/`sql::<T>`, §7)**; spawning external programs moved to rules/08 |
+| [rules/06-performance.md](rules/06-performance.md) | Performance work or claims: profiling (samply/perf/flamegraph, criterion/divan), allocation reduction (Cow/SmallVec/buffer reuse), accidental clones, iterator fusion, release profile (LTO, codegen-units, panic=abort), PGO; hasher choice vs HashDoS (unkeyed FxHash/fnv vs runtime-seeded ahash, §4) |
+| [rules/07-tooling-ci.md](rules/07-tooling-ci.md) | Setting up or auditing repo scaffolding: clippy policy and pedantic triage, rustfmt, nextest, MSRV declaration+testing, **build config outside `Cargo.toml`** (`RUSTFLAGS`/`.cargo/config.toml` in any ancestor overriding the profile, `rustc-wrapper`, dev/test profiles keeping overflow checks, stable channel, target tier), additive feature flags, docs.rs discipline, edition 2024 migration (newly `unsafe` `env::set_var`), crates.io Trusted Publishing (GitHub Actions; GitLab.com public beta), CI baseline. **Test *strategy* — suite shape, TDD, doubles, test data, flake policy — lives in `sota-testing`; load it for any build that writes logic. This file owns Rust runner mechanics only.** |
+| [rules/08-external-programs.md](rules/08-external-programs.md) | Spawning processes with `std::process::Command`: argv vs shell, `.bat`/`.cmd` on Windows, environment and working directory, kill-and-wait on every exit path, deadlines, output limits (formerly rules/05 section 9, now §1); **code evaluation from input — mlua stdlib, rhai limits, `libloading` (R9.8)** |
 
 ## Top-10 non-negotiables
 

@@ -21,7 +21,10 @@ make "parse attacker bytes in the main service process" indefensible.
 3. Worker applies its own sandbox *before* touching input bytes:
    `no_new_privs` → drop caps → Landlock (empty fs policy) → strict seccomp
    allowlist (compute-only: read/write/mmap/brk/futex/exit; **no openat, no socket,
-   no exec**) → rlimits (`RLIMIT_FSIZE`, `RLIMIT_CORE=0`) → cgroup budget.
+   no exec**) → rlimits (`RLIMIT_FSIZE`, `RLIMIT_CORE=0`) → cgroup budget. Memory
+   belongs in the cgroup or in `RLIMIT_DATA` — **never `RLIMIT_AS`**, which kills a
+   Go or JVM worker at startup (`02` R7.2a); when no cgroup can be created here,
+   `02` R7.2b has the ladder.
 4. Worker writes the *normalized* result (decoded RGBA, extracted text, re-encoded
    archive listing) to the output FD; parent enforces output size/shape limits.
 5. Worker exits; one worker per input; **never reuse a worker across inputs** from
@@ -110,9 +113,10 @@ let engine = Engine::new(&config)?;
 let mut store = Store::new(&engine, ctx);
 store.set_fuel(5_000_000)?;                     // CPU budget
 store.limiter(|s| &mut s.limits);               // StoreLimits: memory/table caps
-let wasi = WasiCtxBuilder::new()
-    .preopened_dir(dir_fd, ambient_authority(), "/job")?  // ONLY this dir
-    .build();                                   // note: no inherit_env/stdio/net
+let mut b = WasiCtxBuilder::new();
+b.preopened_dir("/srv/jobs/42", "/job", FsPerms::ReadWrite)?; // ONLY this dir
+let wasi = b.build();       // no inherit_env/stdio/network; TCP/UDP/DNS off by default
+// (preopened_dir signature per docs.rs wasmtime-wasi, verified 2026-09-26)
 ```
 
 **R3.2 — The host functions you import ARE the attack surface.** WASM's guarantees
@@ -155,9 +159,20 @@ subprocess.run(f"convert {path} out.png", shell=True)
 subprocess.run(["convert", "--", path, "out.png"], shell=False, ...)
 ```
 Same rule per language: Python `shell=False`; Node `execFile`/`spawn` (never
-`exec`, never `spawn(..., {shell:true})`); Go `exec.Command` (fine; never wrap in
-`sh -c`); Rust `Command` (fine; beware `.arg` vs `.args` splitting); Java
-`ProcessBuilder` with list.
+`exec`, never `spawn(..., {shell:true})` — measured 2026-08-19, and **Node itself now
+deprecates that spelling**, `DEP0190`, because args are concatenated unescaped); Go
+`exec.Command` (fine; never wrap in
+`sh -c`); Rust `Command` (fine — measured 2026-08-19, **neither `.arg` nor `.args`
+splits on whitespace**, so the argv guarantee holds; the documented exception is
+Windows `.bat`/`.cmd`, `sota-rust` rules/08 §1); Java `ProcessBuilder` with a
+**list** (measured 2026-08-20 on Temurin 25.0.3: it does *not* split on whitespace and
+no shell is involved — `ProcessBuilder("echo", "$HOME")` prints `$HOME` literally).
+Java's footgun is the *other* API: **`Runtime.getRuntime().exec(String)` tokenizes the
+string on whitespace** (measured: `exec("printf [%s]\n one two")` printed `[one]` and
+`[two]` separately), which is the same defect as `shell:true` — and the JDK says so
+itself: all three `String`-taking `exec` overloads carry
+`@Deprecated(since="18", forRemoval=false)` while the `String[]` ones carry nothing
+(read from `Runtime.class` reflection on the running JDK, not from docs).
 
 **R5.2 — Argument-level injection still exists with argv arrays:** values starting
 with `-` become flags (use `--` separators); some tools have argument-driven exec
@@ -173,6 +188,46 @@ program path (no PATH lookup of attacker-named binaries), `close_fds=True` /
 `O_CLOEXEC` everywhere, cwd set to a safe directory, timeout + kill-on-timeout
 (kill the *process group*: `start_new_session=True` then `killpg`), and stdout/stderr
 size caps (a child that prints 10GB is a DoS on your log pipeline).
+
+**R5.3a — a timeout that waits on inherited pipes is not a deadline, and the
+semantics differ per language.** Verified 2026-08-18: Python 3.14's
+`subprocess.run(..., timeout=)` raises `TimeoutExpired` on schedule even when a
+*grandchild* still holds the pipe — but Go's `exec.CommandContext` kills the child
+on context cancel and then blocks in `Wait` anyway, because "if `WaitDelay` is zero
+(the default), I/O pipes will be read until EOF, which might not occur until
+orphaned subprocesses of the command have also closed their descriptors for the
+pipes" (`os/exec` package docs). Set `cmd.WaitDelay` (Go 1.20+). Do not generalise
+from whichever language you used last — three of them behave three different ways
+under the same test. Go's `Wait` blocks past context cancellation until
+`cmd.WaitDelay` is set; Python's raises on schedule; **Rust/tokio's `timeout` fires
+on schedule but leaves the child and its grandchild running**, because cancelling
+the future is not killing the process (`.kill_on_drop(true)`, measured 2026-08-19).
+Read that language's subprocess section before trusting the timeout: Go language guidance, `sota-python` rules/05 §2, `sota-rust` rules/08 §1,
+`sota-typescript` ("Command injection via child_process").
+
+**Five** runtimes measured under the same test:
+
+| runtime | deadline fires? | process tree killed? | caller told? |
+|---|---|---|---|
+| Go 1.26 | **no** — `Wait` blocks past ctx cancel until `WaitDelay` is set | — | — |
+| Python 3.14 | yes, on schedule | not by the timeout | yes — `TimeoutExpired` |
+| Rust 1.97 + tokio | yes (2.0 s) | no — child *and* grandchild keep running | yes — `Err` from `timeout` |
+| Node 22 | yes (305 ms on a 300 ms budget) | no — grandchild still running | **no — `err` was `null`** |
+| Java 25 (Temurin 25.0.3) | yes (2003 ms on a 2 s budget) | not by the timeout, and `destroy()` orphans the grandchild — **but `Process.descendants()` + `destroyForcibly()` does kill it** | yes — `waitFor(t, unit)` returns `false` |
+
+**Not one of the five kills the process tree as part of the timeout.** Read the last
+column next: Node does not even surface an error, so "the timeout worked" and "the work
+is still running" are the same observation there. Then read Java's middle cell — it is
+the only one of the five with a **portable process-tree API** (`descendants()`,
+Java 9+), so it is the only one where cleaning up after the deadline is a language
+feature rather than a `pgrep`/process-group exercise.
+
+*(Correction, 2026-08-20: this paragraph previously claimed "no two agree on all three
+questions". At this table's granularity that was already overstated before Java was
+added — Python and Rust answer all three the same way and differ only in mechanism.
+Replaced with what the table actually shows. Do not restore the stronger phrasing.)*
+This is the shape of trap that lives in the *language* skill while you are reading
+the *domain* one, so the routing that brought you here will not bring you to it.
 
 **R5.4 — Files handed to children:** pass FDs not paths where possible; if paths,
 re-validate with `openat2(RESOLVE_BENEATH)` semantics; never let a child write to a
@@ -236,6 +291,10 @@ building block, not a per-process sandbox API.
       reachable (`find -exec`, `tar --checkpoint-action`, delegates…).
 - [ ] Subprocesses get explicit minimal env, absolute paths, `close_fds`,
       process-group kill on timeout, bounded stdout/stderr.
+- [ ] The timeout is a real deadline in *this* language — pipes held by a
+      grandchild cannot extend it past the limit (Go: `cmd.WaitDelay` set) — and
+      memory is capped with `RLIMIT_DATA`/cgroup, never `RLIMIT_AS` (R5.3a, `02`
+      R7.2a).
 - [ ] macOS: shipped apps use App Sandbox + Hardened Runtime with minimal
       entitlements; untrusted code on macOS runs in VMs, not sandbox-exec alone;
       any sandbox-exec use documented as unsupported-interface risk.

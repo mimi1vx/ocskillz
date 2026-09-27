@@ -18,7 +18,7 @@ description: >-
   suites.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@efeb1dee4d959b51d61dbe4783f22e4110c93ed5
+  source: martinholovsky/SOTA-skills@a02c19971ad39254846890f87300a46b19e3e82e
   adapted-for: opencode
 ---
 
@@ -105,14 +105,14 @@ End every audit with: findings table, top-3 risks, and a prioritized fix list
 | File | Read this when... |
 |------|-------------------|
 | `rules/01-strategy-and-shape.md` | choosing pyramid/trophy/honeycomb, defining unit vs integration boundaries, deciding what NOT to test, risk-based prioritization, budgeting test cost |
-| `rules/02-test-design-quality.md` | writing or reviewing any test: behavior-over-implementation, AAA, naming, one logical assertion, determinism (clock/random/network), test smells catalog, snapshot discipline |
+| `rules/02-test-design-quality.md` | writing or reviewing any test: behavior-over-implementation, AAA, naming, one logical assertion, determinism (clock/random/network — incl. **proving hermeticity by running the suite with egress blocked**, and tests that pass because a real call succeeded), test smells catalog (assertion-free, tautological, the liar, mystery guest, resource optimism), snapshot discipline |
 | `rules/03-doubles-and-test-data.md` | deciding mock vs fake vs stub, fixing over-mocked suites, building test data (builders/factories vs fixtures), seeding test DBs, using production data |
-| `rules/04-integration-contract-system.md` | testing against real DBs/brokers (Testcontainers-style), contract testing between services (Pact, schema-based), API testing, migrations, message/queue tests, ephemeral environments |
+| `rules/04-integration-contract-system.md` | testing against real DBs/brokers (Testcontainers-style), contract testing between services (Pact, schema-based), API testing, migrations, message/queue tests, ephemeral environments, and **a bench that fails silently — including a green run that quietly ran fewer tests** |
 | `rules/05-e2e-and-ui.md` | building or pruning an e2e suite: critical-path selection, selector strategy, auto-waiting, page objects/screenplay, visual regression, when to delete e2e tests |
-| `rules/06-property-fuzzing-mutation.md` | going beyond examples: property-based testing (what properties to encode), fuzzing parsers, mutation testing ROI, approval testing for legacy code, chaos pointer |
-| `rules/07-suite-health-and-ci.md` | flaky-test policy and quarantine, coverage philosophy (ratchets not targets), speed budgets, parallelization correctness, CI sharding, failure triage |
+| `rules/06-property-fuzzing-mutation.md` | going beyond examples: property-based testing (what properties to encode), fuzzing parsers, mutation testing ROI — **including that the revert is part of the probe**, not cleanup — approval testing for legacy code, chaos pointer |
+| `rules/07-suite-health-and-ci.md` | flaky-test policy and quarantine, coverage philosophy (ratchets not targets), speed budgets, parallelization correctness **and the opposite case of two independent runs sharing one database**, CI sharding, failure triage, **a threshold measured on one population and asserted over a pooled one**, **a PR-diff check that routes deleted, skipped or weakened tests to human sign-off** |
 | `rules/08-bdd-spec-by-example.md` | BDD / specification by example: Given-When-Then done declaratively, the three-amigos value (and when there's no cross-role audience), outside-in double loop with TDD, scenario-explosion and UI-script anti-patterns, Gherkin tooling, and tracing scenarios to acceptance criteria |
-| `rules/09-security-testing.md` | security testing as a test type: WSTG as the verification map, the security-regression set (IDOR/BOLA, BFLA, authn/session, injection, mass-assignment, rate-limit, SSRF, tenant isolation), business-logic/abuse-case tests from threat models, where SAST/DAST/fuzz fit and their ceiling, security-critical coverage floor. Pairs with installed `sota-code-security`; optional upstream skills cover threat modeling and DevSecOps. |
+| `rules/09-security-testing.md` | security testing as a test type: WSTG as the verification map, the security-regression set (IDOR/BOLA, BFLA, authn/session, injection, mass-assignment, rate-limit, SSRF, tenant isolation run as the production DB role and pooler, cross-identity cache tests), **a role × method × path authz matrix, OpenAPI-derived auth negatives and a test that the enforcer is still wired**, independent authorship of security tests, business-logic/abuse-case tests from threat models, where SAST/DAST/fuzz fit and their ceiling, security-critical coverage floor, stack fingerprinting and external recon, WebSocket and message-size tests, the penetration-testing process and manual REST technique, security stress runs, logging kept on during security runs. Pairs with installed `sota-code-security`; optional upstream skills cover threat modeling and DevSecOps. |
 
 ## Top-10 non-negotiables
 

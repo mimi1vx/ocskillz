@@ -75,6 +75,13 @@ Rules:
   fallbacks are for surviving the night, not for permanent operation.
 - Test degradation paths in CI or chaos drills; an unexercised fallback is
   assumed broken.
+- **One shared helper, deduped per cause.** Route every degradation through a
+  single `degraded(component, reason)` call rather than ad-hoc warnings, and
+  dedupe per (component, reason) — not per request. Per-request warnings get
+  filtered by operators and stop being read, which returns the system to silent
+  failure. This matters most for **security controls**: a scanner or policy
+  engine running inert must be a distinct health state, not a quiet default
+  (`sota-code-security` rules/10).
 
 ## 3. Debug endpoints: powerful and dangerous
 
@@ -212,6 +219,48 @@ Rules:
 - No averaged percentiles, no per-instance p99 walls (rules/02 §4); prefer
   route/tenant breakdowns over instance breakdowns for symptom dashboards.
 
+## 7a. The question with no instrument, and the substitute that answers a different one
+
+§7 assumes the data exists. The harder failure is a question with **no** instrument
+behind it — and it never presents as a gap, because somebody always finds a proxy
+and the proxy returns a number.
+
+The canonical case is a removal decision. *"Is this feature still used?"* is a
+question about **requests**, and it is answerable only from request-level telemetry
+at the edge: gateway/ingress/load-balancer access logs, or per-route and per-field
+usage metrics (API design guidance step 4, rules/03 §11 — *without
+per-field usage data you can never delete anything*). With those absent, the
+reachable substitute is the **stored data**: query the corpus, count what carries
+the feature's shape, conclude.
+
+That answers *"does data shaped like this exist"* — a different question, with a
+different answer and a **known direction of error**. Stored data outlives its last
+reader, so the corpus systematically over-reports use and the substitute is biased
+toward keep-it. The shape recurs: commit count standing in for maintenance, a
+dependency's presence in a manifest standing in for it being reached (CI and supply-chain controls), a dashboard existing standing in for someone opening it.
+
+Rules:
+- **Edge access logs are a required telemetry stream**, not an optional one, wherever
+  a gateway/ingress/LB fronts a versioned or deprecable surface. Sample if volume
+  demands, but **retain across one deprecation runway** — API design guidance publishes a ≥ 6-month runway, so 30-day retention cannot support
+  the decision it exists for.
+  Log the route *template* and the principal *id*, not the raw path and identity
+  (cardinality and PII: rules/01).
+- **Instrument the question you will be asked, not only the ones you are asked
+  today.** "Which surfaces can we retire?" is asked of every system that lives long
+  enough; it needs a per-route/per-field usage counter from the day the surface
+  ships (API design guidance "usage metric … the day its successor
+  ships").
+- **When you substitute, say so in the same sentence as the number.** Name the
+  question you could answer, the question you were asked, and the direction the
+  substitution errs. *"Zero rows carry this field"* is evidence; *"nobody uses this
+  feature"* is a claim that measurement does not support.
+- **Prefer instrumenting forward over inferring backward.** If the signal is absent
+  and the decision is reversible, adding the counter and waiting one runway is
+  usually cheaper and always sounder than building a more elaborate proxy. Record
+  the gap as a finding in its own right — *a decision was made on a substitute
+  measure* is a durable observability defect, and it recurs on the next removal.
+
 ## 8. Synthetic monitoring
 
 Real-user telemetry goes silent exactly when traffic does — overnight
@@ -230,6 +279,34 @@ Rules:
 - Certificates, DNS, and domain expiry are synthetic checks too — classic
   "no symptom until total outage" causes with perfect lead time.
 
+## 8a. Test writes and production writes must not share a sink
+
+§8 tags synthetic *probe* traffic so it is excludable from SLIs. The same requirement
+holds one layer down and is met far less often: **telemetry a test run can write must be
+distinguishable from telemetry production writes, at the point of collection.**
+
+- Either a **separate sink** — a distinct directory, table, index, bucket prefix or
+  dataset chosen by config — or a **stamped marker on every record** (`env: test`, the
+  provider identity, the run id). Prefer the separate sink; a marker only helps a reader
+  who already knows to filter on it.
+- **Never a naming convention.** One filename pattern for both, told apart by "test runs
+  happen to have a round row count", is not a filter — it is post-hoc archaeology,
+  available only to someone who already suspects the problem. The same goes for filtering
+  on a *value*: excluding rows by duration or size infers the population from the data
+  instead of recording it.
+- The stamp goes on at **write** time, in the emitting code. A field the reader adds can
+  only classify what the reader already understands, which is the case that was never in
+  doubt.
+- **Check the ordering, not just the presence, of the stamp.** In this library's own eval
+  harness the runner recorded its denominator *before* branching into `--selftest`, so a
+  self-test row and a measurement row were byte-identical apart from the elapsed time —
+  the marker existed and was written on the wrong side of the branch (2026-09-02).
+- Git-ignoring or gitignoring a local sink is not isolation: it keeps the file out of the
+  repo, not the test rows out of the aggregate.
+- The reader-side obligation — every aggregate over a shared sink states its exclusion
+  filter, and an unexplained jump in n is contamination rather than power — is
+  `sota-code-security` rules/11 §2.7.
+
 ## Audit checklist
 
 - [ ] Liveness, readiness, startup probes distinct; liveness contains NO
@@ -247,6 +324,9 @@ Rules:
       imported.
 - [ ] Continuous profiling running with version tags; on-demand capture
       path documented; off-CPU/lock profiling available where supported.
+- [ ] No sink receives both test-suite and production telemetry without a write-time
+      marker or a separate destination; any analysis over a shared sink states its
+      exclusion filter (§8a).
 - [ ] Error tracker captures all runtimes incl. frontend with sourcemaps;
       release+environment on every event; trace_id linked; PII scrubbed.
 - [ ] Issue grouping healthy (no message-interpolation shatter); triage
@@ -257,3 +337,8 @@ Rules:
       click-through to traces/logs.
 - [ ] Dashboards and alerts are code-reviewed and provisioned, not
       hand-edited; stale dashboards pruned.
+- [ ] Edge access logs (gateway/ingress/LB) exist for every deprecable surface,
+      with per-route/per-field usage counters and retention covering a full
+      deprecation runway — and where a usage question was answered from stored
+      data instead, the substitution and its direction of error are stated
+      beside the number, not left implied (§7a).

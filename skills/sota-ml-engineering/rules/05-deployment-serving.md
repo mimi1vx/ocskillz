@@ -34,6 +34,8 @@ progressive rollout validated on live traffic.
 - Deploy from the **model registry** (`rules/01`): a model is promoted
   staging→production only after the validation gate passes (`rules/04`). The
   deployed artifact is immutable and traceable to its lineage.
+- Admission and the serving process's load path both verify the model
+  signature against the authorised signer, and fail closed (`rules/07` §2).
 - Keep the **previous production model** available for instant rollback.
 
 ## 4. Progressive rollout & rollback
@@ -45,6 +47,16 @@ progressive rollout validated on live traffic.
     business metrics, ramp up.
 - **Rollback must be fast and tested** — one action to revert to the prior
   model. A deployment with no rollback path is HIGH (ML Test Score requires it).
+- **Roll back the whole serving state, not the weights.** A release bundle pins
+  the weights together with the tokenizer, preprocessing and serving config,
+  feature definitions, prompts and the retrieval index version, and rollback
+  restores the bundle; old weights behind a new tokenizer or index is a third,
+  untested model. OWASP: AISVS 3.3.2.
+- **Versions running side by side share no model runtime state.** During shadow,
+  canary or A/B, each version gets its own KV/prefix caches, adapter pool and
+  any cached embeddings or results, keyed by model version, so one version
+  never serves from state the other produced (tenant-scoped caches:
+  `sota-code-security` rules/08 §4). OWASP: AISVS 3.3.3.
 
 ## 5. Operational concerns
 
@@ -57,26 +69,40 @@ progressive rollout validated on live traffic.
 - Health checks, autoscaling, and resource limits like any service; use
   `sota-observability` for telemetry and operational readiness.
 
+## 6. Decommissioning a model
+
+- Retiring a model is a planned step, not neglect: revoke its serving endpoints
+  and credentials first, then delete the weights, checkpoints, caches and
+  derived embeddings, and the training data held only for it (subject to the
+  retention schedule, `sota-privacy-compliance`). Record what was erased,
+  where, when and by whom; the registry entry stays as a tombstone with that
+  record (e.g. MLflow `MlflowClient.delete_model_version` removes the version, so
+  write the record first). Storage-level erasure of the underlying buckets and
+  volumes: infrastructure guidance. OWASP: LLMSVS 2.18.
+
 ## Audit checklist
 
-```bash
-# Serving/training parity — CRITICAL if features reimplemented in the server
-grep -rniE 'predict|inference|serve' --include='*.py' . | head
-#   Confirm the server calls the SAME feature transform code/store as training (rules/02)
-
-# Safe model format & reproducible env — HIGH
-grep -rniE 'pickle|joblib|torch.load|cloudpickle' --include='*.py' . | head    # unsafe load? (rules/07)
-grep -rniE 'safetensors|onnx|torchscript' --include='*.py' . | head
-grep -rniE 'torchserve|torch-model-archiver' . | head    # EOL runtime (archived Aug 2025, no security patches) — HIGH
-ls Dockerfile* requirements*.txt poetry.lock uv.lock conda*.yml 2>/dev/null     # serving env pinned?
-
-# Registry-gated deploy + rollback — HIGH
-grep -rniE 'registry|stage|promote|production|rollback|previous.*model|champion|challenger' . | head \
-  || echo "no registry/rollback path found"
-
-# Progressive rollout — MEDIUM/HIGH
-grep -rniE 'shadow|canary|a/?b|traffic.*split|gradual|ramp' . | head || echo "no progressive rollout"
-
-# Serving input validation — MEDIUM
-grep -rniE 'validate|schema|pydantic|unseen|unknown.*categor|fillna|missing' --include='*.py' . | head
-```
+- [ ] **Serving/training parity — CRITICAL if features reimplemented in the server** —
+      `grep -rniE 'predict|inference|serve' --include='*.py' . | head` (confirm the server calls
+      the SAME feature transform code/store as training, rules/02)
+- [ ] **Safe model format & reproducible env — HIGH** —
+      `grep -rniE 'pickle|joblib|torch.load|cloudpickle' --include='*.py' . | head` (unsafe
+      load? (rules/07)); `grep -rniE 'safetensors|onnx|torchscript' --include='*.py' . | head` ;
+      `grep -rniE 'torchserve|torch-model-archiver' . | head` (EOL runtime (archived Aug 2025,
+      no security patches) — HIGH);
+      `find . -maxdepth 3 -not -path '*/node_modules/*' \( -name 'Dockerfile*' -o -name 'requirements*.txt' -o -name poetry.lock -o -name uv.lock -o -name 'conda*.yml' \)` (serving env
+      pinned?)
+- [ ] **Registry-gated deploy + rollback — HIGH** —
+      `out=$(grep -rniE 'registry|stage|promote|production|rollback|previous.*model|champion|challenger' . 2>&1); rc=$?` ;
+      `case $rc in 0) printf '%s\n' "$out" | head ;; 1) echo "no registry/rollback path found" ;; *) echo "SWEEP FAILED, not a finding about their code: $out" ;; esac`
+- [ ] **Progressive rollout — MEDIUM/HIGH** —
+      `out=$(grep -rniE 'shadow|canary|a/?b|traffic.*split|gradual|ramp' . 2>&1); rc=$?` ;
+      `case $rc in 0) printf '%s\n' "$out" | head ;; 1) echo "no progressive rollout" ;; *) echo "SWEEP FAILED, not a finding about their code: $out" ;; esac`
+- [ ] **Serving input validation — MEDIUM** —
+      `grep -rniE 'validate|schema|pydantic|unseen|unknown.*categor|fillna|missing' --include='*.py' . | head`
+- [ ] **Full-state rollback and isolated caches (§4) — MEDIUM/HIGH** — cache keys with no
+      model version: `grep -rniE 'cache_?key' --include='*.py' . | grep -viE 'model_?(version|id)'`
+      ; manual: does the rollback bundle pin tokenizer, config, features, prompts and index?
+- [ ] **Model decommissioning (§6) — MEDIUM** —
+      `grep -rniE 'decommission|retire|delete_model_version|delete_registered_model' . || echo "no model retirement path"`
+      ; manual: endpoints revoked before artifacts erased, and the erasure recorded

@@ -191,6 +191,26 @@ distributions, scale). But:
   to learn the distributions and edge cases, encode them as builder cases or
   property-based generators (`rules/06`).
 
+## 3.7a Fixtures must cross the thresholds the code branches on
+
+Test data is usually small because small is fast to write and read. That makes
+every **size-gated** code path — chunking, sharding, pagination, streaming,
+multi-part upload, a batching or budget cap — effectively untested: the branch
+exists, the suite is green, and the branch only ever runs in production.
+
+- Find the literals the code compares sizes against, and make **one fixture cross
+  each** (`CHUNK_SIZE + 1` rows, one byte over the streaming threshold). One case
+  per threshold is enough; the point is that the branch has executed at least once.
+- Where a builder makes volume cheap (§3.5), generating 10k rows is a few lines —
+  the reason this gets skipped is habit, not cost.
+- If crossing the threshold is genuinely too expensive for the default suite, tag
+  the case and run it on a schedule, but **record that the branch is untested in
+  CI** rather than leaving it implied.
+
+The failure class this belongs to — correct on small inputs, broken or
+pathological on large, with nothing in the output saying so — is
+`sota-code-security` rules/13 §1.
+
 ## 3.8 Doubles hygiene
 
 - **Strict by default**: unmatched calls on a mock should fail the test, not
@@ -210,7 +230,7 @@ distributions, scale). But:
       each replaces I/O/time/external service? In-process owned collaborators
       mocked → High.
 - [ ] Mocked types you don't own? Grep for doubles of vendor types:
-      `mock.*(Stripe|S3|Twilio|redis|Session|HttpClient)|jest\.mock\(['"](?!\.)/` (mocking non-relative module paths) → High; fix = wrap + adapter test.
+      `grep -rniE "mock.*(stripe|s3|twilio|redis|session|httpclient)|jest\.mock\(['\"][^.]" .` (case-insensitive, so `mock.patch('stripe.Charge')` counts; mocking non-relative module paths; the first path character is not `.`. This was a `(?!\.)` lookahead until 2026-09-24, which exits 2 under `grep -E`, ugrep and `rg` alike, so it could never report anything) → High; fix = wrap + adapter test.
 - [ ] Interaction-asserting queries? Grep `verify\(|assert_called` on
       read/query methods (`get|find|fetch|load`) → Medium (convert to stub +
       state assertion).

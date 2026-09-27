@@ -56,6 +56,14 @@ async def create_user(payload: UserIn, svc: UserService = Depends(get_user_servi
   SQLAlchemy async session / httpx.AsyncClient). Mixed stack? Make the endpoint `def` and
   stay sync, or fix the stack. An `async def` endpoint with zero `await` inside is a bug
   marker — it gains nothing and risks someone adding blocking calls later.
+- **Exception: the liveness probe.** A liveness endpoint is *supposed* to await nothing —
+  its job is "is the event loop responsive", so `sota-observability` rules/05 §1 specifies
+  process-internal-only, "usually just return 200". Written as `def` it runs in the anyio
+  threadpool, where saturation by slow sync handlers delays the probe and the orchestrator
+  restarts a process whose event loop was fine — the restart storm rules/05 exists to
+  prevent. So a no-`await` `async def` is **correct** here and the marker does not apply.
+  Say so in the docstring, or the next reader "fixes" it. Readiness (`/readyz`), which does
+  check dependencies, follows the normal rule.
 - Background work: `BackgroundTasks` for small post-response work; real job queue
   (arq/celery/temporal) for anything that must survive a process restart.
 
@@ -78,8 +86,12 @@ orders = (
 
 - `select_related` for forward FK/OneToOne; `prefetch_related` for M2M and reverse relations;
   `Prefetch(queryset=...)` to filter/order the prefetched set.
-- Make N+1 a test failure: `django-assert-num-queries` /
-  `self.assertNumQueries(2)`, or `nplusone`/`django-zen-queries` in dev.
+- Make N+1 a test failure: pytest-django's `django_assert_num_queries` /
+  `django_assert_max_num_queries` fixtures, or Django's own `self.assertNumQueries(2)` in a
+  `TestCase`; `django-zen-queries` (`queries_disabled()`, its own `render`) to make a query inside a
+  template or serializer raise. These are fixture and
+  method names, not packages — there is no PyPI project `django-assert-num-queries` (404,
+  checked 2026-09-25), so a `pip install` of it is an unclaimed name a squatter can take.
 - Other ORM rules: `.only()/.defer()` for wide tables on hot paths; `exists()` not
   `count() > 0` not `len(qs)`; `bulk_create/bulk_update` for batch writes; `update()`
   for field bumps instead of load-modify-save races — or `F()` expressions for atomic
@@ -113,6 +125,31 @@ orders = (
   secrets store — run `manage.py check --deploy` in CI.
 - Keep `.raw()`, `.extra()`, `RawSQL` out of the codebase or parameterized + reviewed
   (rules/05 §3).
+
+### Cookies the application sets (Flask, Starlette/FastAPI, Django)
+
+The framework's session cookie is configured by settings and owned by `sota-code-security`
+rules/17. Every *other* cookie — a preference, a device id, a "remember this" token — goes
+through `response.set_cookie(...)`, and the defaults there are the insecure ones. Measured
+this session (Werkzeug 3.1 / Starlette 1.7 / Django 6.1), a bare `set_cookie("pref", "v")`
+emitted:
+
+| Framework | Header | Secure | HttpOnly | SameSite |
+|---|---|---|---|---|
+| Flask (Werkzeug) | `pref=v; Path=/` | off | off | not sent |
+| Starlette / FastAPI | `pref=v; Path=/; SameSite=lax` | off | off | `lax` |
+| Django `HttpResponse` | `pref=v; Path=/` | off | off | not sent |
+
+- Pass `secure=True, httponly=True, samesite="Lax"` (or `"Strict"`) explicitly on every
+  call, through one helper so no call site forgets. `httponly=False` only for a value
+  JavaScript must read, with a comment saying so. All three default `path="/"` and no
+  `domain` — keep `domain` unset unless a sibling subdomain genuinely needs the cookie.
+- Prefer the `__Host-` name prefix for anything security-relevant: browsers accept it only
+  with `Secure`, `Path=/` and no `Domain` (MDN, Set-Cookie). The frameworks do **not**
+  enforce it — Werkzeug's `dump_cookie("__Host-x", "v")` emitted `__Host-x=v; Path=/` with
+  no `Secure` — so the prefix is only as good as the flags you pass alongside it.
+- Django's `set_signed_cookie` signs, it does not encrypt: the value is readable in the
+  header. OWASP: Session Management cheat sheet; Cookie Theft Mitigation cheat sheet; ASVS.
 
 ## 3. pytest mastery
 
@@ -226,38 +263,47 @@ testpaths = ["tests"]
 - Mock at the boundary you own (`mocker.patch.object(svc, "client")`), not deep internals;
   patch where the name is *looked up*, not where it's defined. Over-mocked tests that
   assert call sequences test the mock, not the code — prefer fakes (in-memory repo).
-- Async tests: `asyncio_mode = "auto"` (rules/04 §9). Time: `freezegun`/`time-machine`,
+- Async tests: `asyncio_mode = "auto"` (rules/04 §10). Time: `freezegun`/`time-machine`,
   never `sleep`.
 - Coverage gate (`--cov --cov-fail-under=N`) measures *executed*, not *asserted* — treat as
   floor, not target; mutation testing (`mutmut`) where correctness is critical.
 
 ## Audit checklist
 
-```bash
-# FastAPI
-grep -rn "async def" $(grep -rln "APIRouter\|FastAPI" --include="*.py" src/) | head   # then check for blocking calls inside
-grep -rn "requests\.\|time.sleep\|session.query\|Session(" --include="*.py" src/ | grep -i route  # sync-in-async [HIGH]
-grep -rn "@\(app\|router\)\.\(get\|post\|put\|delete\)" --include="*.py" src/ -A3 | grep -L response_model | head  # ORM leak risk
-grep -rn "AsyncClient()" --include="*.py" src/ | grep -v lifespan              # per-request clients [MEDIUM]
-grep -rn "^[A-Z_]* = .*Session\|^engine = " --include="*.py" src/              # module-global state vs Depends
-
-# Django ORM
-grep -rn "\.objects\.all()\|\.objects\.filter" --include="*.py" src/ | wc -l
-grep -rln "select_related\|prefetch_related" --include="*.py" src/ | wc -l     # ratio sanity check
-grep -rn "for .* in .*\.objects\." --include="*.py" src/ -A2 | grep "\.\(name\|user\|customer\)" | head  # N+1 candidates
-grep -rn "count() > 0\|len(.*objects" --include="*.py" src/                    # exists() instead
-grep -rn "\.raw(\|\.extra(\|RawSQL" --include="*.py" src/                      # [HIGH if interpolated]
-git log --oneline -- '**/migrations/*.py' | head                               # edited-after-merge migrations?
-grep -rn "makemigrations --check" .github/ .gitlab-ci.yml 2>/dev/null          # drift gate present?
-
-# pytest
-grep -rn "def setUp\|TestCase" --include="*.py" tests/                         # legacy style [LOW]
-grep -rn "pytest.raises(Exception)" --include="*.py" tests/                    # too-broad [MEDIUM]
-grep -rn "time.sleep" --include="*.py" tests/                                  # flaky timing [MEDIUM]
-grep -rn "scope=\"session\"\|scope=\"module\"" --include="*.py" tests/ conftest.py 2>/dev/null  # mutable shared state?
-grep -rn "os.environ\[" --include="*.py" tests/ | grep -v monkeypatch          # env pollution
-grep -rln "parametrize" --include="*.py" tests/ | wc -l
-grep -rln "hypothesis" --include="*.py" tests/ || echo "no property tests"
-pytest -q -n auto 2>&1 | tail -3                                               # parallel-safe = independent
-pytest -q -p randomly 2>&1 | tail -3                                           # order-independent?
-```
+- [ ] **FastAPI** —
+      `grep -rn "async def" $(grep -rln "APIRouter\|FastAPI" --include="*.py" src/) | head`
+      (then check for blocking calls inside);
+      `grep -rn "requests\.\|time.sleep\|session.query\|Session(" --include="*.py" src/ | grep -i route`
+      (sync-in-async [HIGH]);
+      `grep -rn "@\(app\|router\)\.\(get\|post\|put\|delete\)" --include="*.py" src/ -A3 | grep -L response_model | head`
+      (ORM leak risk); `grep -rn "AsyncClient()" --include="*.py" src/ | grep -v lifespan`
+      (per-request clients [MEDIUM]);
+      `grep -rn -B2 "livez\|/health\|healthz" --include="*.py" src/ | grep "^.*def "` (liveness:
+      `async def` , no deps (§1 exception));
+      `grep -rn "^[A-Z_]* = .*Session\|^engine = " --include="*.py" src/` (module-global state
+      vs Depends)
+- [ ] **Django ORM** —
+      `grep -rn "\.objects\.all()\|\.objects\.filter" --include="*.py" src/ | wc -l` ;
+      `grep -rln "select_related\|prefetch_related" --include="*.py" src/ | wc -l` (ratio sanity
+      check);
+      `grep -rn "for .* in .*\.objects\." --include="*.py" src/ -A2 | grep "\.\(name\|user\|customer\)" | head`
+      (N+1 candidates); `grep -rn "count() > 0\|len(.*objects" --include="*.py" src/` (exists()
+      instead); `grep -rn "\.raw(\|\.extra(\|RawSQL" --include="*.py" src/` ([HIGH if
+      interpolated]); `git log --oneline -- '**/migrations/*.py' | head` (edited-after-merge
+      migrations?); `grep -rn "makemigrations --check" .github/ .gitlab-ci.yml 2>/dev/null`
+      (drift gate present?)
+- [ ] **--- App-set cookies: Secure / HttpOnly / SameSite flags (§2 cookies) --- [HIGH for an
+      auth or identity token; MEDIUM for a preference]** —
+      `grep -rnE '\.set_(signed_)?cookie\(' --include='*.py' src/ | grep -vE 'secure[[:space:]]*=[[:space:]]*True.*httponly[[:space:]]*=[[:space:]]*True|httponly[[:space:]]*=[[:space:]]*True.*secure[[:space:]]*=[[:space:]]*True'`
+      (every hit relies on a framework default that is off; a multi-line call is listed too —
+      read it; `samesite` is checked by hand)
+- [ ] **pytest** — `grep -rn "def setUp\|TestCase" --include="*.py" tests/` (legacy style
+      [LOW]); `grep -rn "pytest.raises(Exception)" --include="*.py" tests/` (too-broad
+      [MEDIUM]); `grep -rn "time.sleep" --include="*.py" tests/` (flaky timing [MEDIUM]);
+      `grep -rn "scope=\"session\"\|scope=\"module\"" --include="*.py" tests/ conftest.py 2>/dev/null`
+      (mutable shared state?);
+      `grep -rn "os.environ\[" --include="*.py" tests/ | grep -v monkeypatch` (env pollution);
+      `grep -rln "parametrize" --include="*.py" tests/ | wc -l` ;
+      `grep -rln "hypothesis" --include="*.py" tests/ || echo "no property tests"` ;
+      `pytest -q -n auto 2>&1 | tail -3` (parallel-safe = independent);
+      `pytest -q -p randomly 2>&1 | tail -3` (order-independent?)

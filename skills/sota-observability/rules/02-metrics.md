@@ -149,15 +149,52 @@ histogram_quantile(0.99,
   bucketing, better accuracy, cheaper series. Note: Prometheus native
   histograms are **stable since v3.8.0 (Nov 2025)** — enable ingestion via the
   `scrape_native_histograms: true` config (the old
-  `--enable-feature=native-histograms` flag is now a no-op). Still verify your
-  whole pipeline (remote write 2.0 — itself still experimental — and dashboards)
-  handles them before switching SLI queries.
+  `--enable-feature=native-histograms` flag is a no-op since v3.9.0). Still
+  verify your whole pipeline (remote write 2.0 — itself still experimental —
+  and dashboards) handles them before switching SLI queries.
 - SLO arithmetic trick: a bucket boundary exactly at the SLO threshold lets
   you compute "fraction of requests under 300ms" exactly:
   `sum(rate(..._bucket{le="0.3"}[5m])) / sum(rate(..._count[5m]))` — this is
   your latency SLI, more robust than thresholding a quantile estimate.
 - Report p50/p95/p99, not the average; keep max/p99.9 visible for tail
   debugging. Track tail latency per dependency, not just at the edge.
+
+### 4a. `now` vs `offset X` is two samples, not a trend
+
+And it convinces *more* than a single sample, which is exactly what makes it
+dangerous: a before/after pair looks like a measurement. Neither point carries an
+error bar, and a bursty series will hand you whatever ratio the two landing spots
+imply.
+
+Measured (2026-08-18). After a fix that bounded a set of unbounded aggregate
+queries, a write-latency p99 read **0.40 s now** against **8.83 s at `offset
+24h`** — a tidy 22x improvement, ready to report. Sampling the same metric at
+hourly offsets across the same day:
+
+```
+-0h 0.40 | -2h 11.59 | -4h 10.49 | -6h 9.54 | -9h 0.11 | -12h 13.40 | -18h 4.38 | -24h 8.97
+```
+
+The series swings **0.11–13.40 s**. "Now" had landed in a trough and "24 h ago" on
+a peak. Across that spread the same pair of reads could have shown anything from a
+**122x improvement** to a **122x regression** (13.40 / 0.11), depending only on
+where the two points landed. The load-invariant signal over the same windows — the **absolute
+rate** of queries slower than the threshold, which a change in total query volume
+cannot move — was flat, i.e. nothing had changed. The fix was real and useful; the
+22x was an artefact of two points.
+
+Rules:
+- Before quoting any before/after from production telemetry, **sample the
+  intervening window**. Two points cannot distinguish a step change from a
+  diurnal swing, and the diurnal swing is the common case.
+- When the question is "is this still happening", prefer a **load-invariant
+  absolute count** to a percentile. A percentile is a **ratio**: a traffic-mix
+  shift, a retry storm, or a batch job ending moves it without anything
+  improving, because the denominator moved.
+- This is not the "many samples, report variance" of a benchmark
+  (`deep-performance-audit`). A production series **cannot be re-run**, so
+  sampling more *offsets* of the same series is the only equivalent available —
+  and a deploy marker on the chart is worth more than either number.
 
 ## 5. Exemplars: metrics → traces in one click
 
@@ -168,7 +205,7 @@ from "metric anomaly" to "specific request" is manual time-window
 spelunking.
 
 ```yaml
-# OTel SDK: exemplars on by default when a span is active (trace-based filter).
+# OTel SDK: exemplars on by default only inside a SAMPLED span (TraceBased filter).
 # Prometheus server: enable storage
 #   --enable-feature=exemplar-storage
 # Scrape with OpenMetrics so exemplars survive:
@@ -201,9 +238,9 @@ meter := otel.Meter("checkout")
 reqDur, _ := meter.Float64Histogram("http.server.request.duration",
     metric.WithUnit("s"),
     metric.WithExplicitBucketBoundaries(.005,.01,.025,.05,.1,.25,.3,.5,1,2.5))
-poolInUse, _ := meter.Int64ObservableGauge("db.client.connections.usage",
+poolInUse, _ := meter.Int64ObservableUpDownCounter("db.client.connection.count",
     metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
-        o.Observe(int64(pool.InUse()), metric.WithAttributes(attribute.String("state","used")))
+        o.Observe(int64(pool.InUse()), metric.WithAttributes(attribute.String("db.client.connection.state","used")))
         return nil
     }))
 reqDur.Record(ctx, elapsed.Seconds(),
@@ -214,10 +251,12 @@ reqDur.Record(ctx, elapsed.Seconds(),
 Rules:
 - Use semantic-convention instrument names (`http.server.request.duration`
   in seconds) — backends and dashboards key on them; don't reinvent
-  `my_request_time_ms`. Prometheus 3.x ingests OTLP natively and accepts
-  UTF-8 metric/label names, so dotted semconv names no longer have to be
-  mangled to underscores — pick one naming scheme end-to-end and stop
-  maintaining translation rules.
+  `my_request_time_ms`. Prometheus 3.x can ingest OTLP natively (off by
+  default: `--web.enable-otlp-receiver`) and accepts UTF-8 metric/label
+  names, but its OTLP `translation_strategy` still defaults to
+  `UnderscoreEscapingWithSuffixes`; set `NoUTF8EscapingWithSuffixes` (or
+  `NoTranslation`) to keep dotted semconv names — pick one naming scheme
+  end-to-end and stop maintaining translation rules.
 - **Aggregation temporality**: Prometheus needs cumulative; some vendors
   want delta. Set it in the exporter, never assume — delta counters scraped
   as cumulative silently report garbage rates.
@@ -240,13 +279,27 @@ Rules:
   delete metrics nothing queries (they cost memory and attention), and grep
   dashboards/alerts before renaming a metric — renames are breaking changes.
 - Standard resource attributes on every series: `service.name`,
-  `service.version`, `deployment.environment` — version is what turns "p99
+  `service.version`, `deployment.environment.name` — version is what turns "p99
   rose at 14:02" into "the 14:00 deploy did it".
 - Instrument the telemetry itself: scrape failures, exporter queue drops,
   remote-write errors. Silent telemetry loss looks identical to "all good".
+- **Accept a new scrape target on the series arriving, never on discovery.** A target
+  list showing `1 target` means a selector matched; read the per-target `health` and
+  `lastError` beside it, then confirm the series exists
+  (`sota-code-security` rules/14 §4b). **A port declaration does not state the protocol
+  spoken on it**: a container advertising `metrics:9090` says nothing about TLS, and
+  scraping HTTP where HTTPS is served returns `400 Client sent an HTTP request to an
+  HTTPS server` — an error easily read as a broken exporter. `curl` the endpoint both
+  ways before writing the scrape config. Where the certificate is self-signed by the
+  component's own issuer, no CA bundle can verify it and mounting one is theatre; skip
+  verification explicitly and **write the reason next to the flag**, so a later reader
+  can tell a considered exception from a copied one.
 
 ## Audit checklist
 
+- [ ] New scrape targets accepted on **series arriving**, not on discovery: per-target
+      `health`/`lastError` read, endpoint probed for scheme (HTTP vs TLS) before the config
+      was written, and any skipped certificate verification carries its reason inline (§7).
 - [ ] RED metrics exist per service and per route (rate, errors with a
       defined error definition, duration as histogram).
 - [ ] USE metrics exist for every owned bounded resource: DB/HTTP connection
@@ -265,5 +318,9 @@ Rules:
       spanmetrics provides the metric↔trace bridge.
 - [ ] `service.version` and environment present on all series; deploys are
       correlatable with metric shifts.
+- [ ] Does any before/after claim from production telemetry rest on exactly two
+      points (`now` vs `offset X`)? The intervening window must be sampled, and
+      "is it still happening" answered with a load-invariant absolute count
+      rather than a percentile, whose denominator moves on its own (§4a).
 - [ ] Metrics pipeline self-monitored (scrape/export failures alerted);
       unused metrics pruned.

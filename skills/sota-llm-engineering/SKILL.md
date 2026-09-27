@@ -1,10 +1,10 @@
 ---
 name: sota-llm-engineering
 description: >-
-  State-of-the-art LLM application engineering rules (mid-2026 baseline) for BUILDING and AUDITING LLM-powered features. Use whenever building, modifying, or reviewing anything that calls a language model — chat features, RAG pipelines, agents and tool use, structured extraction, classification, summarization, embeddings/vector search, evals and regression gates, prompt or context engineering, model selection/routing, fine-tuning decisions, or LLM cost/latency/observability work. Trigger keywords: LLM, AI feature, prompt, system prompt, context window, RAG, retrieval, embeddings, vector DB, rerank, chunking, agent, tool use, MCP, multi-agent, evals, golden set, LLM-as-judge, fine-tuning, model selection, routing, structured output, JSON schema, prompt caching, token budget, hallucination, grounding. Covers build-quality only — for prompt-injection/agent-security use sota-code-security rules/08 and sota-sandboxing rules/05.
+  State-of-the-art LLM application engineering rules for BUILDING and AUDITING LLM-powered features. Use whenever building, modifying, or reviewing anything that calls a language model — chat features, RAG pipelines, agents and tool use, structured extraction, classification, summarization, embeddings/vector search, evals and regression gates, prompt or context engineering, model selection/routing, fine-tuning decisions, or LLM cost/latency/observability work. Trigger keywords: LLM, AI feature, prompt, system prompt, context window, RAG, retrieval, embeddings, vector DB, rerank, chunking, agent, tool use, MCP, multi-agent, evals, golden set, LLM-as-judge, fine-tuning, model selection, routing, structured output, JSON schema, prompt caching, token budget, counting tokens, instruction file size, tokenizer, hallucination, grounding. Covers build-quality only — for prompt-injection/agent-security use sota-code-security rules/08 and sota-sandboxing rules/05.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@efeb1dee4d959b51d61dbe4783f22e4110c93ed5
+  source: martinholovsky/SOTA-skills@a02c19971ad39254846890f87300a46b19e3e82e
   adapted-for: opencode
 ---
 
@@ -20,7 +20,7 @@ policy, and `sota-observability` owns generic telemetry foundations.
 
 ## Purpose
 
-One skill, two modes. The `rules/` files define the mid-2026 baseline for
+One skill, two modes. The `rules/` files define the baseline for
 engineering LLM-powered software that is **measured, grounded, bounded, and
 observable**. In **BUILD** mode you write LLM features that conform to the
 rules by default. In **AUDIT** mode you hunt for violations and report them as
@@ -73,7 +73,8 @@ version-agnostically: model IDs and parameters in config, never inline.
 Process:
 
 1. **Map the LLM surface**: every call site (grep `messages.create`,
-   `chat.completions`, `generateContent`, `invoke`, raw `https://api.`),
+   `responses.create`, `chat.completions`, `interactions.create`,
+   `generateContent`/`generate_content`, `invoke`, raw `https://api.`),
    prompt templates, retrieval pipelines, agent loops, eval suites (or their
    absence), and the config/env that selects models.
 2. **Sweep by rules file, prioritized**: 01 (evals — absence is the #1
@@ -122,12 +123,12 @@ systemic themes — "no evals anywhere" is one systemic finding, not twenty).
 
 | File | Topics | Read this when... |
 |---|---|---|
-| [rules/01-evals.md](rules/01-evals.md) | Eval-first development, golden sets, assertion/rubric/pairwise evals, LLM-as-judge + judge validation, offline vs online, CI regression gates, production sampling into eval sets, error analysis, metric pitfalls (judge bias, contamination) | ...building ANY LLM feature (start here), changing a prompt/model, reviewing whether quality claims are real, setting up CI for an LLM repo |
-| [rules/02-prompt-context-engineering.md](rules/02-prompt-context-engineering.md) | System prompt structure, instruction placement, few-shot selection, context budget management, caching-aware prefix design, prompt versioning/testing, injection-safe template interpolation, structured output (schema/tool-based) + validation/repair, prompt rot | ...writing or editing prompts/templates, extraction or classification features, diagnosing cost spikes or cache misses, anything that parses model output |
-| [rules/03-rag-retrieval.md](rules/03-rag-retrieval.md) | RAG vs long context vs fine-tuning, chunking strategies, embedding selection & versioning, hybrid retrieval (dense+lexical+rerank), query transformation, retrieval evals (recall@k, golden retrieval sets), grounding & citation, freshness/invalidation, agentic retrieval | ...building search/Q&A over documents, choosing a vector DB/embedding model, "the answers are wrong/stale", evaluating an existing RAG pipeline |
+| [rules/01-evals.md](rules/01-evals.md) | Eval-first development, golden sets, assertion/rubric/pairwise evals, LLM-as-judge + judge validation, offline vs online, CI regression gates, production sampling into eval sets, error analysis, metric pitfalls (judge bias, contamination, **an arm blind to the treatment — its `+0.00` is structural, not a result**, and **a saturated measure — both arms at the ceiling is a fact about the instrument, never about the system**) | ...building ANY LLM feature (start here), changing a prompt/model, reviewing whether quality claims are real, setting up CI for an LLM repo |
+| [rules/02-prompt-context-engineering.md](rules/02-prompt-context-engineering.md) | System prompt structure, instruction placement, self-contained prompts (inline schemas vs. out-of-context references that degrade to fabrication), few-shot selection, context budget management, caching-aware prefix design, prompt versioning/testing, injection-safe template interpolation, structured output (schema/tool-based) + validation/repair, **whole-document rejection as a recall control (salvage the valid remainder and record the drop) and the constant column that means the reader names a key the model never emits**, prompt rot | ...writing or editing prompts/templates, extraction or classification features, diagnosing cost spikes or cache misses, anything that parses model output |
+| [rules/03-rag-retrieval.md](rules/03-rag-retrieval.md) | RAG vs long context vs fine-tuning, chunking strategies, embedding selection & versioning, hybrid retrieval (dense+lexical+rerank), query transformation, retrieval evals (recall@k, golden retrieval sets), grounding & citation, freshness/invalidation, index integrity (write-once security metadata, outlier quarantine, expiry filters), poisoning-resistant result shaping, agentic retrieval | ...building search/Q&A over documents, choosing a vector DB/embedding model, "the answers are wrong/stale", evaluating an existing RAG pipeline |
 | [rules/04-agents-tools.md](rules/04-agents-tools.md) | Workflow vs agent decision, tool design (descriptions, scope, idempotency, model-actionable errors), context management across turns (compaction, memory), MCP integration & spec status, multi-agent costs, human-in-the-loop gates, stopping conditions & budgets | ...anything with tool calls or loops, designing tool schemas, MCP servers/clients, multi-agent proposals, runaway-cost or stuck-agent debugging |
-| [rules/05-production-engineering.md](rules/05-production-engineering.md) | Model selection & routing, capability tiers, fallbacks, provider abstraction caution, latency (streaming, parallel calls, caching), cost engineering (budgets, batch APIs, right-sizing), 429/529 + jittered backoff, LLM observability (trace every call), graceful degradation, versioning & rollout (shadow, A/B, pinning vs auto-upgrade) | ...shipping to production, picking models, cost/latency complaints, retry/fallback design, rollout of a new model or prompt, building dashboards |
-| [rules/06-data-lifecycle.md](rules/06-data-lifecycle.md) | Fine-tune vs prompt vs RAG decision, dataset curation hygiene, feedback loops (thumbs → eval sets), embedding/index migration, PII in prompts/logs, provider data-retention settings | ...someone proposes fine-tuning, designing feedback capture, migrating embedding models, setting up logging/retention for an LLM app |
+| [rules/05-production-engineering.md](rules/05-production-engineering.md) | Model selection & routing, capability tiers, fallbacks, provider abstraction caution, latency (streaming, parallel calls, caching), cost engineering (budgets, batch APIs, right-sizing), 429/529 + jittered backoff, LLM observability (trace every call), graceful degradation and an inference kill switch, versioning & rollout (shadow, A/B, pinning vs auto-upgrade), generated-media provenance (C2PA) and likeness consent | ...shipping to production, picking models, cost/latency complaints, retry/fallback design, rollout of a new model or prompt, building dashboards |
+| [rules/06-data-lifecycle.md](rules/06-data-lifecycle.md) | Fine-tune vs prompt vs RAG decision, dataset curation hygiene, training-side safety (content filtering, reward hacking, feedback poisoning, label logs), feedback loops (thumbs → eval sets), embedding/index migration, PII in prompts/logs, provider data-retention settings | ...someone proposes fine-tuning, designing feedback capture, migrating embedding models, setting up logging/retention for an LLM app |
 
 ## Top-10 non-negotiables
 

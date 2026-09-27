@@ -188,7 +188,69 @@ queued-for is an anti-pattern. Modern default:
   "needs staging" tests are really "needs a real DB/broker", which
   containers give you per-CI-job.
 
+## 4.8 A harness that could not start looks exactly like one that found nothing
+
+Whenever the subject under test runs somewhere else — a container, a VM, a subprocess, a
+remote worker — there are two ways to get an empty result, and the assertion cannot tell
+them apart. *"No vulnerability reproduced"* and *"the runtime refused to start a container"*
+produce the same red or green, and **the first is a scientific conclusion about the target**
+while the second is a broken bench.
+
+Field-reported: after a `prune`/`fstrim` corrupted a container runtime
+(CI and supply-chain controls), an exploit-validation file went from 3 passed to 1 passed
+/ 2 failed with a missing-envelope error. Nothing in the failure said *the container never
+ran*; it read as the target not being exploitable.
+
+- **Assert liveness before the assertion, and fail on it separately and loudly.** "The
+  runtime produced a result at all" is a different question from "the result is X", and it
+  must have its own failure message. A fixture that starts one throwaway container and
+  asserts it emitted a known marker is enough, and it runs once per session.
+- **A green run that ran FEWER TESTS is the same failure wearing the safest possible
+  colour.** §4.8's other bullets describe a bench that produces nothing; this one produces
+  a pass. Where tests skip themselves when a dependency is absent — the standard
+  `skipif(not docker_available)` shape — a stopped container runtime does not fail them, it
+  **removes** them: field-reported 2026-09-10, a stopped machine turned exactly 30 tests
+  into skips while the suite reported **0 failed**. The only moving number was the skip
+  count (30 → 60). So **assert the count, not just the colour**: pin an expected number of
+  collected/executed tests for any lane with environment-gated skips, or fail the lane when
+  skips exceed a recorded baseline. (`rules/07` §7.6 treats a *drifting* skip count as slow
+  rot; this is the acute version, and it is invisible in one run.)
+- **Read a skip condition from the environment, never from the subject's opinion of it.**
+  Field-reported: four tests skipped when the code under test returned `Unsupported` with a
+  reason mentioning `lsm=`. That reason was a **fixed string the codebase wrote**, emitted
+  identically when the kernel lacked the feature and when one of the project's own programs
+  was rejected, so a broken feature reported `12 passed`. Ask the host itself (for example
+  `/sys/kernel/security/lsm`), and on a host that *has* the capability make the
+  `Unsupported` path **fail** and print its reason. Then a skip is a fact about the host and a
+  failure is a fact about the code. It is `sota-code-security` rules/15 §2.4 (evidence the
+  subject supplies about itself), applied to *why it cannot run*.
+- **Assert the setup's effect, not its exit code.** `modprobe` exits 0 for a module that is
+  **built into** the kernel: libkmod counts a built-in as already present
+  (`module_is_inkernel`), so nothing loads, no load event fires, and a test waiting for one
+  reports "the sensor produced no event", which reads as a product defect. Check the effect: `/proc/modules` is "a text list of the modules that have been loaded by
+  the system" (`proc_modules(5)`), and a built-in was compiled in rather than loaded, so do
+  not expect it there.
+- **Empty is not a result.** An empty output file, an empty stdout, a zero-length report is
+  a **failed measurement until proven otherwise** — assert the artefact is non-empty *and*
+  contains the summary line you expect before reading anything into it. (The pipe version of
+  this — a filter destroying the evidence — is shell-scripting guidance)
+- **Name the subject in the message.** *"exploit not reproduced"* is a claim about the
+  target; *"no envelope returned — harness did not start"* is a claim about the bench. The
+  general form is `sota/rules/03` §2: when a check reports, say what it is reporting about.
+- Distinguish this from a *flaky* dependency. Flakiness is intermittent and the retry is the
+  usual answer; this is a bench that is uniformly broken while still looking healthy from
+  outside, and retrying it produces the same confident wrong answer every time.
+
 ## Audit checklist
+
+- [ ] **Does any lane skip tests when a dependency is missing, and does anything notice?**
+      (§4.8) A stopped container runtime converts tests to skips, not failures — the run is
+      green and 30 tests never ran. Pin an expected collected count, or baseline the skip
+      count and fail on an increase.
+- [ ] **Where does each skip condition come from?** (§4.8) A skip keyed on the subject's own
+      error text or `Unsupported` reason turns every defect on that path into a pass. It must
+      read the host, and on a host with the capability the `Unsupported` path must *fail*.
+      Setup steps assert their effect, not their exit code (a built-in `modprobe` exits 0).
 
 - [ ] Do integration tests run the real engine? Grep test config for
       lookalikes: `:memory:|sqlite|H2|fakeredis|embedded` standing in for a
@@ -222,3 +284,8 @@ queued-for is an anti-pattern. Modern default:
       sleeps? Grep `sleep` in queue/e2e test paths → High.
 - [ ] Shared staging as the only integration venue, hand-maintained data →
       Medium, recommend ephemeral envs or containerized deps.
+- [ ] **Does every out-of-process test assert liveness separately from its result?** (§4.8) A
+      harness that could not start and one that ran and found nothing produce the same output,
+      and only the second is a conclusion about the target. Empty artefacts are failed
+      measurements until proven otherwise.
+

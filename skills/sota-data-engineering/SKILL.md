@@ -16,16 +16,17 @@ description: >-
   Spark, DuckDB, data contract, medallion, dimensional model.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@efeb1dee4d959b51d61dbe4783f22e4110c93ed5
+  source: martinholovsky/SOTA-skills@a02c19971ad39254846890f87300a46b19e3e82e
   adapted-for: opencode
 ---
 
 # SOTA Data Engineering
 
 Expert rules for analytical data systems: pipelines, streaming, warehousing,
-lakehouse storage, data quality, and operations. This skill does not own OLTP
-schema craft, service architecture, or generic concurrency mechanics; optional
-upstream skills cover those areas. PII handling lives in
+lakehouse storage, data quality, and operations. OLTP schema craft lives with the
+database engine — reference it, do not duplicate it. Outbox and event-driven
+service patterns live in `sota-architecture`; backpressure mechanics in
+`sota-async-concurrency`. PII handling lives in
 `sota-privacy-compliance` and security controls in `sota-code-security`.
 
 Read repository instructions and preserve its established data stack unless a

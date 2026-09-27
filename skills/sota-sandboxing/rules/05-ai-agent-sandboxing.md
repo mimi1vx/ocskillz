@@ -93,6 +93,15 @@ scope (path traversal, URL substitution, SQL in "filters").
 read-only by default. A "repo triage" agent gets read on one repo, not an org PAT.
 Audit question: "if this agent's session were fully hijacked, what exactly can the
 token do, for how long, and where is that logged?"
+**Identity is per running instance, not per agent type.** Twenty replicas sharing
+one "triage-agent" credential are one principal: a single hijacked instance cannot
+be told apart in downstream logs or revoked without stopping all twenty. Issue
+each instance its own short-lived cryptographic identity at start — a SPIFFE ID
+whose path names the instance, carried as an X.509-SVID (or JWT-SVID where a proxy
+sits in between), or an equivalent attested workload credential
+(identity and access-management guidance) — and have it authenticate to tools, brokers and
+APIs *as that principal*, so every action names the instance and one instance's
+credential can be revoked alone. OWASP: AISVS 9.4.1.
 
 **R3.3 — Human-in-the-loop on irreversible/expansive actions:** deletes, payments,
 sending external email, pushing to default branches, modifying permissions, spending
@@ -116,7 +125,46 @@ OAuth authorization on any remote server — unauthenticated internet-exposed MC
 servers are a recurring 2026 incident class (NSA published a dedicated CSI on
 MCP security, May 2026). Pin the tool *definitions* too (hash + re-approve on
 any change) — tool poisoning, rug pulls, shadowing, and line jumping all ride
-on unreviewed tool metadata (named taxonomy: sota-code-security rules/08 §5).
+on unreviewed tool metadata (named taxonomy: sota-code-security rules/23 §1).
+**Sandbox the local ones, too.** Under the MCP stdio transport the client launches
+the server as a subprocess, so a `"command": "npx"` / `"uvx"` entry runs third-party
+code as *you*, on the host, with your home directory, SSH agent and credential
+store in reach — the agent's code sandbox (§2) does not wrap it. Run each local
+server in its own least-privilege box (a container with `--network none` unless
+it declares a need, or an OS-level sandbox — Landlock/bubblewrap per `02`,
+Seatbelt per `04` §6): mount only the directories it serves, keep the keychain/credential helpers and dotfiles out, and give it no
+wildcard host or filesystem permissions. OWASP: AISVS 10.1.3; MCP Security and
+Secure Coding with AI cheat sheets.
+
+**R3.5 — On developer machines, a managed permission baseline that the repo
+cannot loosen.** A coding agent on a laptop holds the developer's SSH keys, cloud
+sessions and push rights, so its approval settings are a security control:
+- **Never start a bypass mode in a repository you have not reviewed.** Flags such
+  as Claude Code `--dangerously-skip-permissions` (`defaultMode:
+  "bypassPermissions"`), Codex `--dangerously-bypass-approvals-and-sandbox` (alias
+  `--yolo`) or `--sandbox danger-full-access`, and Gemini CLI `--yolo` (`-y`) /
+  `--approval-mode=yolo` switch off the
+  per-action gate; they belong only inside an external sandbox (§2) — never in a
+  shell alias used for every checkout.
+- **Push the baseline from above the project.** Use the tool's admin-managed tier
+  (Claude Code: `managed-settings.json`/MDM, which project and user files cannot
+  override) to disable bypass mode (`permissions.disableBypassPermissionsMode`),
+  and where supported restrict permission rules and hooks to the managed source
+  (`allowManagedPermissionRulesOnly`, `allowManagedHooksOnly`).
+- **Turn on the harness's own OS sandbox, and make it fail closed.** Claude Code:
+  `sandbox.enabled: true`, `sandbox.failIfUnavailable: true` (otherwise a missing
+  dependency warns and runs unsandboxed) and `sandbox.allowUnsandboxedCommands: false`
+  (drops the per-command escape hatch), pushed from the managed tier. Codex:
+  `--sandbox read-only|workspace-write` (config `sandbox_mode`), with admin requirements
+  limiting `allowed_sandbox_modes`. It confines shell commands the agent runs, not MCP
+  servers (R3.4). Docs: code.claude.com/docs/en/sandboxing, developers.openai.com/codex/config-reference.
+- **Policy hooks live where the agent cannot write** — outside the workspace and
+  not in a file the agent may edit (R3.4, R2.2).
+- **Gate agent pushes at the VCS boundary**: branch protection plus required
+  review on anything the agent pushes, so a hijacked session cannot land code alone.
+- **Re-audit accumulated allow-rules** on a cadence; "always allow" answers pile up
+  into a broad standing grant nobody decided on.
+OWASP: DSOMM; Secure Coding with AI cheat sheet.
 
 ## 4. Egress allowlists and resource limits
 
@@ -165,33 +213,100 @@ or do proxy-side resolution with the sandbox having no DNS at all.
   per-session monetary spend; an injected agent's first move is often "do this in a
   loop". Kill-switch that revokes the agent's token mid-session must exist.
 
+**Stopping is a fleet operation, and it travels out of band.** Revoking one
+session's token is the minimum; the halt you will actually need is "stop every
+running instance of agent X now" — one command that reaches all replicas,
+queued jobs and scheduled runs, and that stops new ones from starting. Deliver it
+over a channel the agent runtime cannot read, drop or spoof: the control plane
+(scale to zero, revoke the shared credential, flip a flag the *broker* checks
+before every tool call), never a message inside the agent's own context or a
+file in its workspace — a hijacked agent can ignore, delete or forge those. Test
+the halt on a schedule and time how long the last instance takes to stop.
+Separately, give the human driving a session a **stop control** that works
+mid-action, plus a way to **undo what the run did so far**: keep a checkpoint or
+append-only change log of every side effect (files written, commits, records
+changed, messages sent) outside the sandbox, so rollback replays it in reverse
+rather than relying on the model to remember. Actions with no undo path fall
+under R3.3. OWASP: AISVS 9.1.3, 9.6.3; AI Agent Security cheat sheet.
+
 **R4.4 — Log every action attribution-grade:** tool name, full arguments, decision
 (allowed/denied/approved-by), sandbox ID, session/user, result hash — to an
 append-only store *outside* the sandbox. Prompt-injection incidents are debugged
-from these logs; without them you can't even tell what leaked. Alert on: denied
-egress spikes, metadata-endpoint attempts, reads of credential-shaped paths,
-approval-bypass attempts.
+from these logs; without them you can't even tell what leaked. For a high-risk
+action (anything under R3.3) the record also carries the **action class or risk
+score** the policy assigned, the **approval ID** that authorised it (or the
+auto-approve rule that stood in for one), and the **version of the policy** in
+force — so afterwards you can answer *why* it was allowed, not only that it was.
+Alert on: denied egress spikes, metadata-endpoint attempts, reads of
+credential-shaped paths, approval-bypass attempts. Give each agent detection a
+name, a baseline and a written threshold, set per agent from its own history:
+- a tool, or a target system, this agent (or instance) has never used before;
+- admin-level queries or calls (permission changes, user listing, schema/DDL,
+  bulk export) from an agent whose task needs none;
+- tool calls per minute, and failed or denied calls in a burst, above baseline;
+- prompt-injection detections per session past a count (one is noise, a run of
+  them is a campaign);
+- a jump in the share of high-risk (R3.3) actions in a session or fleet-wide;
+- **drift in how humans approve**: approval latency collapsing toward zero,
+  approve rate near 100% over large batches (rubber-stamping — the fatigue R3.3
+  warns about, now measured), or the same user repeatedly retrying a denied
+  action or probing bypass paths.
+Each one names its response step in R4.5; detection content over these logs is
+security-monitoring guidance. OWASP: AI Agent Security and MCP Security
+cheat sheets.
+
+**R4.5 — Wire detections to automatic, graduated, reversible containment.** An
+alert that waits for a human while the agent keeps acting is a log entry. For each
+agent detection class, write down the containment step that fires on its own and
+scale it by confidence and severity: pause the session and hold pending tool calls
+→ end the agent's sessions → revoke or down-scope its credentials → pull
+privileged tools or cut egress entirely. Each step must be undoable and recorded
+(who or what triggered it, and why), because false positives will happen and a
+step that cannot be reversed will get switched off. Rehearse it: a scheduled drill
+that fires a benign canary detection and checks the right step ran, within the
+expected time. Bringing an agent back is a deliberate step, not a timeout — review
+what it did while flagged, rotate what it could reach, then restore scope. The
+auto-containment guardrails (high confidence, blast-radius allowlist,
+human-in-the-loop above a threshold) are security-monitoring guidance
+OWASP: AISVS 9.3.8; DSOMM.
 
 ## 5. Verification probe for agent sandboxes
 
 **R5.0 — Run this (or equivalent) *as the agent would*, in CI and after any
-infra change** (per `01` §5). Every line must fail:
+infra change** (per `01` §5). Exit 0 only when every check is denied:
 
-```bash
-#!/bin/sh -e  # each command must NOT succeed; invert and assert
-cat /run/secrets/* ~/.aws/credentials ~/.ssh/id_* 2>/dev/null && exit 1
-env | grep -Ei 'key|token|secret|password' | grep -v '^SANDBOX_' && exit 1
-curl -m3 -sf http://169.254.169.254/latest/meta-data/ && exit 1
-curl -m3 -sf https://attacker-canary.example.com/ && exit 1
-curl -m3 -sf https://93.184.216.34/ && exit 1          # raw IP egress
-nslookup exfil-$(head -c8 /dev/urandom|xxd -p).canary.example.com \
-  8.8.8.8 2>/dev/null && exit 1                         # rogue-resolver DNS
-touch /etc/probe /probe "$AGENT_CONFIG_DIR/probe" 2>/dev/null && exit 1
-unshare -rn true 2>/dev/null && exit 1                  # namespace creation
-echo "all denials held"
+```sh
+#!/bin/sh
+# Every check must be DENIED; each success is a hole. Output never echoes a secret.
+rc=0; inc=0; hole() { echo "HOLE: $*"; rc=1; }
+need() { command -v "$1" >/dev/null 2>&1 || { echo "INCONCLUSIVE: no $1"; inc=1; return 1; }; }
+denied() { case $1 in 6|7|28) return 0;; *) return 1;; esac; }  # curl: DNS/connect/timeout
+curl -m5 -s -o /dev/null "${ALLOWED_URL:?set an allowlisted URL}" || { echo "INCONCLUSIVE: allowed URL failed"; exit 2; }
+for f in /run/secrets/* ~/.aws/credentials ~/.ssh/id_*; do
+  case $f in *.pub) continue;; esac; [ -e "$f" ] || continue; cat -- "$f" >/dev/null 2>&1 && hole "readable $f"
+done
+env | grep -Ei '^[^=]*(key|token|secret|password)[^=]*=' | grep -vq '^SANDBOX_' && hole "secret-named env var"
+for u in http://169.254.169.254/latest/meta-data/ http://example.com/ http://1.1.1.1/; do
+  curl -m3 -s -o /dev/null "$u"; denied $? || hole "egress $u"   # resolvable name + live IP
+done
+need nslookup && nslookup example.com 8.8.8.8 >/dev/null 2>&1 && hole "rogue-resolver DNS"
+for d in /etc / "${AGENT_CONFIG_DIR:-}"; do
+  [ -n "$d" ] || continue; p="$d/.sbx-probe.$$"
+  touch -- "$p" 2>/dev/null && { rm -f -- "$p"; hole "writable $d"; }
+done
+need unshare && unshare -rn true 2>/dev/null && hole "namespace creation"
+[ "$rc" -eq 0 ] && [ "$inc" -eq 1 ] && exit 2
+[ "$rc" -eq 0 ] && echo "all denials held"; exit "$rc"
 ```
-Pair with a *positive* probe (allowed mirror reachable, workspace writable) so a
-broken-but-fail-closed sandbox is distinguishable from a working one.
+Test **one path per command**: `cat a b c && exit 1` fires only if *every* file reads,
+so one readable secret beside two missing paths passed the old form. Egress targets
+must *resolve and answer* — an NXDOMAIN canary or a dead IP "fails" on an open
+network — and only curl's DNS/connect/timeout exits (6/7/28) count as denied. The
+`ALLOWED_URL` positive control, run with the same method, separates a working sandbox
+from a broken-but-fail-closed one (exit 2); so does a missing `nslookup` or `unshare`, which
+would otherwise read as "denied". Verified 2026-09-26 under busybox sh in podman: exit 0 in a
+no-network, read-only, non-root box whose seccomp profile denies `unshare`; 1 with egress open
+or a writable root; 2 with `unshare` absent from PATH.
 
 ## 6. Multi-agent and computer-use specifics
 
@@ -211,6 +326,70 @@ untrusted input (`04` §1).
 broker holding tokens and approval logic lives outside the boundary; only the
 model-driven execution goes inside. If they share a process or filesystem, the
 sandbox is decorative.
+
+## 7. When your tool ingests other people's repositories
+
+Scanners, SAST wrappers, dependency and call-graph analysers, code-review bots
+and AI security tools share one shape: **the input is a repository somebody else
+wrote, and the tool runs on a maintainer's machine, or in CI, with that
+identity's credentials.** The target is the attacker. Nothing above changes; what
+changes is that the legs are easy to miss, because the tool *is* a security tool
+and its own documentation is usually the thing asserting it is safe (that
+assertion is `sota-code-security` rules/14 §7 — count it, don't read it).
+
+Four legs. A compromise needs two or three of them, and they are typically owned
+by different people in different files, which is why no single reviewer sees the
+chain.
+
+**R7.1 — Staging follows links out of the target.** Copying a hostile tree with a
+recursive copy that *dereferences* symlinks (Python `shutil.copytree(...,
+symlinks=False)` — the default — and equivalents elsewhere) stages the link's
+**target**, not the link. A repository containing `docs/notes.md ->
+/home/you/.ssh/id_ed25519` puts that key inside the directory you are about to
+bind-mount, index, or feed to a model. Resolve every entry and drop the ones
+whose `realpath` escapes the source root, and **report the drops** rather than
+skipping quietly — an unexplained missing file is a support ticket, a silent one
+is a finding nobody files. This is the same predicate as archive extraction
+(`sota-code-security` rules/09 §2); the copy path is where it gets forgotten,
+because a copy does not look like parsing.
+
+**R7.2 — "Static" analysis that runs the target's build system.** Ask, of the
+exact command and flags you invoke: *does this evaluate build metadata the target
+controls?* Many do by design — Rust `build.rs` and proc macros (so `cargo
+clippy`, `cargo metadata`-driven tooling, and call-graph modes that compile),
+Python `setup.py` and PEP 517 backends, npm `preinstall`/`install`/`postinstall`
+(CI and supply-chain controls), Gradle/Maven build scripts, anything invoking
+`make`. The answer is a property of the command, not the language, and it changes
+between flags: a build-mode-`none` extraction and a build-mode-`autobuild`
+extraction of the same repository differ by arbitrary code execution. **Verify it
+for your invocation** — read the tool's docs for that flag, or run it against a
+canary target that writes a marker file — and treat "it only compiles" as
+execution until proven otherwise, because compilation *is* the execution step for
+several of the ecosystems above.
+
+**R7.3 — The sub-agent inherits your shell.** An LLM step that reads target
+source is R1.1's untrusted content, and it must be spawned with tools **off** —
+which means off by *default*, not off at the call sites someone remembered
+(`sota-code-security` rules/14 §6a). Two details are dropped constantly: the
+child's **working directory**, which defaults to the parent's — usually your own
+repository, holding its `.env` — so set it explicitly to the staged copy; and the
+child's **environment**, which inherits every API key the parent holds (R2.2).
+Per R6.1 the analysis sub-agent gets *less* scope than the orchestrator, never
+the same.
+
+**R7.4 — Egress is on unless something turned it off.** A container run with no
+`--network` flag has full outbound access. That is often a deliberate choice —
+dependency resolution needs the registry — but it is the leg that converts
+"executed some of the target's code" into "exfiltrated the operator's
+credentials". Where the analysis genuinely needs the network, R4.1's FQDN
+allowlist is the form it should take; where it does not, `--network=none` is one
+flag and the whole chain stops.
+
+**The audit move is the intersection, not the list.** Each leg alone is a
+hardening note. Grep for all four across every ingest path — including the ones
+outside the change you are reviewing, which is where the complete chain usually
+sits (`sota/rules/03` §4, sweep before you drop) — and the finding is the module
+where they coexist. Rate it with the chain named leg by leg (`sota/rules/03` §1).
 
 ---
 
@@ -242,3 +421,41 @@ sandbox is decorative.
       profiles in their own sandbox.
 - [ ] Append-only action log outside the sandbox with denied-action alerting;
       MCP/third-party tool servers inventoried, pinned, and scope-reviewed.
+- [ ] **High** — Locally launched MCP servers run in their own sandbox, not bare on
+      the host (R3.4). JSON (`*mcp*.json`, Gemini `settings.json`, Claude Desktop) and
+      Codex TOML entries; run at the repo root, then over `~/.gemini ~/.codex` in place
+      of `.` (raw `ugrep` needs `--hidden` to enter `.cursor/`, `.gemini/`, `.codex/`):
+      `grep -rnE --include='*mcp*.json' --include='settings.json' --include='claude_desktop_config.json' --include='config.toml' '"command"[[:space:]]*:[[:space:]]*"(npx|uvx|node|python3?|bunx|deno)"|^[[:space:]]*command[[:space:]]*=[[:space:]]*"(npx|uvx|node|python3?|bunx|deno)"' .`
+      — each hit is a server started directly as the developer; want a container or
+      OS-sandbox wrapper with scoped mounts and no default network.
+- [ ] **High** — No agent bypass mode in shared scripts, aliases or settings (R3.5):
+      `grep -rnE -- '--dangerously-skip-permissions|--dangerously-bypass-approvals-and-sandbox|--yolo|--approval-mode[= ]yolo|"defaultMode"[[:space:]]*:[[:space:]]*"bypassPermissions"|danger-full-access|gemini[^|;&]*[[:space:]]-y([^[:alnum:]-]|$)' .`
+      (raw `ugrep` needs `--hidden`) — acceptable only inside an external sandbox; a managed
+      baseline disables bypass and turns the harness OS sandbox on fail-closed
+      (R3.5), hooks sit outside the agent's write reach, agent
+      pushes need review, and standing allow-rules were re-audited this quarter.
+- [ ] **High** — Fleet-wide halt exists, travels out of band (control plane or
+      broker, never the agent's context or workspace), and has a measured
+      time-to-last-instance-stopped from a recent drill; users can stop a run
+      mid-action and roll it back from a side-effect log kept outside the sandbox
+      (R4.3).
+- [ ] **Medium** — Every agent detection class maps to an automatic, graduated,
+      reversible containment step, drilled with a canary, with a reviewed
+      reintegration step (R4.5).
+- [ ] For any tool that **ingests repositories or archives it did not author**:
+      staging drops entries whose `realpath` escapes the source root (and reports
+      the drops); every analysis command checked for whether it evaluates
+      target-controlled build metadata; LLM steps over target source spawned
+      tools-off, with an explicit `cwd` and a scrubbed environment; egress
+      `none` or FQDN-allowlisted. Flag the module where all four coexist (§7).
+- [ ] **High** — Each running agent instance holds its own short-lived
+      cryptographic identity (SPIFFE-style SVID or equivalent) and authenticates
+      downstream as itself; one instance can be revoked without stopping the fleet
+      (R3.2). Manual: a credential shared by every replica is the finding.
+- [ ] **Medium** — High-risk action records carry the action class or risk score,
+      the approval ID (or auto-approve rule) and the policy version (R4.4).
+      Manual: pick one past high-risk action and reconstruct why it was allowed.
+- [ ] **Medium** — Named agent detections with written thresholds exist: new tool
+      or target, admin-level calls, call rate, failed-call bursts, injection
+      detections per session, high-risk-action share, and human approval drift
+      (rubber-stamping, repeated bypass attempts), each mapped to an R4.5 step (R4.4).

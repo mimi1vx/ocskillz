@@ -31,6 +31,14 @@ slow-but-obviously-correct reference.
 1. **Roundtrip / inverse**: `decode(encode(x)) == x`. The single
    highest-value property; applies to every serializer, parser/printer,
    encrypt/decrypt, to/from-DB mapping.
+   **For an encryption wrapper, also run the round trip concurrently**: many
+   threads or tasks encrypting different messages through one shared
+   instance, then assert every nonce is distinct and every ciphertext decrypts
+   to its own plaintext. A nonce counter or a cipher object shared without a
+   lock fails only under contention, and a nonce reused under one key breaks
+   AES-GCM and ChaCha20-Poly1305 (`sota-code-security` rules/04 §2). The race
+   window is narrow, so run many iterations, and add the race detector where
+   the language has one (`go test -race`). OWASP: Code Review Guide v2.
 2. **Invariants**: outputs always satisfy a predicate — sorted output is
    ordered and a permutation of input; balance never negative; output JSON
    always schema-valid.
@@ -78,6 +86,24 @@ def test_sort_invariants(xs):
 - **Failures must be reproducible**: keep the framework's failure database /
   printed seed; add each shrunk counterexample as a permanent example test
   (regression pin) — don't rely on the generator refinding it.
+- **A pass is per-seed.** The bullet above pins a seed so a *failure* stays
+  reproducible; this one is the other direction, and the two are easy to
+  conflate: **pin the seed to reproduce a failure, vary the seed to earn a
+  pass.** One seed is a sample of size one — a generator is a distribution, not
+  a suite — so before acting on a green (promoting a check to blocking, closing
+  a defect, removing an `xfail`) run several seeds. This is a rule about
+  *decision points*, not the inner loop: it does not raise the ~100-case budget
+  below, it says which greens you are allowed to believe.
+- **Expect a cleared oracle to surface a different class, not nothing.** While a
+  loud defect is firing it generates noise that quieter ones are
+  indistinguishable from, so fixing it does not empty the queue — it changes
+  what the queue contains. Field-reported: after both known halves of an
+  ordering defect were fixed, a differential fuzzer's strict mode passed 2,000
+  cases on the first seed to hand; three more seeds put two failures back, and
+  the survivors were a class the old noise had hidden, in the **opposite
+  direction** from every defect the tool was built to find. That is the
+  instrument working. File it as new work — folding it into "the original defect
+  is closed" loses both the finding and the reason the tool earned its place.
 - **Budget runtime**: default ~100 cases per property in the PR suite; crank
   iterations in a nightly job, not in everyone's inner loop.
 - Shrinking is why you use a framework instead of a `for` loop over
@@ -155,6 +181,70 @@ hours):
   diff-scoped job catches weak tests while they're fresh.
 - **As an audit probe**: one run on a "well-covered" module tells you in an
   afternoon whether 90% line coverage means anything.
+- **As an observability probe — mutate, then read the *output*, not the suite.**
+  Every use above ends in "run the tests", which answers *is this constrained by a
+  test*. A different and equally silent question is *does what this thing reports tell
+  the truth*, and the suite cannot answer it: change what a function returns, run the
+  real workload, and read the emitted line. A summary that is unchanged by the mutation
+  is the finding. This is the only probe available where a job runs unattended and its
+  log is the sole witness (`sota-code-security` rules/14 §1).
+- **As a control probe** (no tooling needed): hand-mutate one security control's
+  body to the permissive no-op (`return True`, `return []`) and run the suite.
+  Nothing fails ⇒ that control is untested however many tests name it. Two traps
+  make this lie — the path may be skipped for an unrelated reason (a disabled
+  optional dependency), and the mutation may not have taken (editable installs,
+  stale bytecode, cached images — and, in any repo with `ruff format`/`black`/
+  `prettier`, a **formatter reflow**: a multi-line patch that no longer matches
+  because the code was folded onto one line, which is the most common cause of all
+  and the one that looks least like an environment problem). Force the path live and
+  assert the mutation's runtime effect before trusting a green run.
+  `sota-code-security` rules/10.
+- **Apply and revert with FILE EDITS, not a shell command pair — the revert is part
+  of the technique, not cleanup.** This probe deliberately puts a real defect into
+  production source, so an `inject && run && revert` one-liner has an unguarded
+  failure mode: anything that kills the shell **between the second and third step**
+  leaves a permissive no-op on disk in a security control — precisely the defect the
+  probe exists to detect. Field-reported 2026-09-10: the shell died mid-sequence with
+  `fork failed: resource temporarily unavailable` (an exhausted process table,
+  shell-scripting guidance), and the mutated file stayed mutated. **The
+  repair path was blocked too** — `git checkout --` was denied by policy and `cp` from
+  a backup also needed a fork — so the edit had to be undone with a file-edit tool,
+  which needs no process. Assume the cheap repair may be unavailable.
+- **A wrapper reporting on that shell will call it a pass.** The failure surfaced as a
+  bare `Exit code 1`, with the real cause only in the error text; piped, it reads as
+  "mutation applied, suite run, mutation reverted" (shell-scripting guidance — `cmd; echo` makes the shell's status the `echo`'s). So **verify the revert
+  against the source of truth**, never against the exit status: `git status --short
+  <file>` empty, or grep the marker to 0. Give every mutation a greppable marker
+  (`# MUTATION-<id>`) so that check is one command and cannot be fooled by a
+  formatter reflow.
+- **As an assertion probe — mutate the EXPECTATION, not the code.** The cheapest
+  probe of the four, and it catches a defect none of the others can: leave the SUT
+  and the fixture alone, and point one assertion at a **wrong-but-plausible expected
+  value**. If it still passes, the assertion is keyed to something that is true but
+  is not evidence. Field-reported 2026-09-05 — three controls asserted an engine
+  found the dangerous call planted in a fixture, and the fixture calls `system`; the
+  expected value was changed to `popen`, which the fixture never calls:
+
+  ```text
+  control A (dependency analysis) -> FAILED, naming what it did find    ok
+  control B (permission analysis) -> FAILED, naming what it did find    ok
+  control C (spec-gap analysis)   -> PASSED                             <-- defect
+  ```
+
+  Root cause, and the **corollary worth internalising**: the engine groups sinks
+  (`["system", "exec", "popen"]`), matches a function calling *any* of them, then
+  emits one record for *every name in the group*. The sink name in that output is
+  therefore not evidence about the code, and any assertion keyed on it is satisfied
+  by two names the target never mentions. **An assertion keyed on a value the
+  producer fans out — emits for a whole category rather than the matched member —
+  can never discriminate.** When a probe like this passes, look for fan-out in the
+  producer before weakening the test; the fix is to re-key onto the field that does
+  discriminate (here, the exact function the record is attributed to).
+
+  Distinct from a tautological test (`rules/02` §2.7), where the expected value is
+  *computed* by the same logic: here it is a literal, and the **key** is what fails.
+  Run it for every assertion that claims to check *what* was found, not merely
+  *that* something was found. One edit, one run, no production change.
 
 ```text
 # What a survivor means (PIT/Stryker-style report line)
@@ -174,6 +264,19 @@ calculate_interest.py:41  mutated `<` -> `<=`   SURVIVED
   `calculate_interest` is a finding; ten in a logging shim are noise. Triage
   like bug reports: kill (add the missing assertion), suppress-with-reason
   (equivalent/dont-care), or accept (documented untested zone).
+- **Baseline the survivors so runs are diffable.** An absolute score is a bad
+  gate for the same reason a global coverage target is (rules/07 §7.2). Persist
+  the current survivor set as a checked-in baseline and fail CI only on *new*
+  survivors — the mutation analogue of a coverage ratchet, and what makes a
+  minutes-long scoped run gate-worthy. Two conditions keep the diff honest:
+  **pin the mutation engine version** next to the baseline (engines change their
+  operator sets between releases; a baseline compared across versions attributes
+  tool churn to your code, and re-baselining is then a deliberate step in the
+  upgrade), **assert the baseline is non-empty and loaded** before reading a green
+  run as a pass (`sota-code-security` rules/11 §2.2a — an empty baseline makes the
+  "new survivors" set empty for every input), and **let only the tool write it** — a hand-edited baseline is a live
+  survivor marked dead, the same manufactured safety as an assertion-free test
+  (rules/02 §2.7).
 - Trend per-module mutation score on risk-critical code; a *drop* is the
   signal (new code arriving with weaker tests), the absolute number less so.
 
@@ -212,16 +315,31 @@ into the CI test suite.
 
 ## Audit checklist
 
+- [ ] **Mutation probes: is the revert verified, not assumed?** (§6.3) Any hand-mutation
+      of production source must be applied and undone by **file edit**, not by an
+      `inject && run && revert` shell chain that strands the defect if the shell dies
+      mid-sequence. Check the working tree (`git status --short`) or grep a
+      `# MUTATION-<id>` marker to 0 — never the exit status, which a wrapper reports as
+      a clean pass.
+
 - [ ] Do parser/serializer/codec modules have roundtrip properties? Grep for
       both a PBT import (`hypothesis|fast-check|proptest|quickcheck|jqwik`)
       and `parse|decode|deserialize` modules; encode/decode pairs with only
       example tests → Medium (High if input is untrusted).
+- [ ] Encryption wrappers with a round-trip test that is **never run concurrently**
+      (§6.1)? List crypto test files with no concurrency:
+      `grep -rliE '(en|de)crypt' tests | xargs -r grep -LE 'ThreadPool|concurrent\.futures|asyncio\.gather|go func|t\.Parallel|Promise\.all|parallelStream|Executors|thread::(spawn|scope)|rayon'`
+      A listed file for a wrapper that manages its own nonces → Medium.
 - [ ] Are properties real or tautological? Read each: does the expected side
       re-derive via the SUT's own logic → Critical (verifies nothing).
 - [ ] Over-filtered generators? Grep `assume\(|\.filter\(|suchThat|prop_assume`
       density; heavy filtering → Medium (space not actually explored).
 - [ ] Are shrunk counterexamples pinned as example tests / failure DB
       committed or cached in CI? No → Low–Medium (regressions can resurface).
+- [ ] Was any **green** acted on from a single seed — a property promoted to
+      blocking, a defect closed, an `xfail` removed — with no record of a
+      multi-seed run behind it? One seed is a sample of size one → Medium
+      (the decision rests on an unmeasured distribution).
 - [ ] Anything parsing untrusted bytes WITHOUT a fuzz target? List parsers/
       deserializers reachable from user input; no fuzz target → High for
       native/unsafe code, Medium elsewhere.
@@ -233,6 +351,16 @@ into the CI test suite.
 - [ ] Mutation score gamed? Tests asserting incidental internals near
       mutation-config thresholds, blanket mutant suppressions without reasons
       → High.
+- [ ] **Assertions that check *what* was found probed by mutating the EXPECTATION**
+      to a plausible wrong value (§6.3)? One that still passes is keyed to something
+      true-but-not-evidence → High; check the producer for **fan-out** (a value emitted
+      for a whole category rather than the matched member) before weakening the test.
+- [ ] If a survivor baseline/manifest gates CI: is it asserted **non-empty and loaded**
+      (`sota-code-security` rules/11 §2.2a) → an empty baseline passes on every input.
+- [ ] If a survivor baseline/manifest gates CI: is the mutation engine version
+      pinned beside it, and is the file tool-generated? Unpinned engine → Low
+      (diff attributes tool churn to code); hand-edited entries (check
+      `git log -p` for manual edits) → High (live survivors marked dead).
 - [ ] Approval/golden suites: do they have an owner and a retirement plan, or
       are 3-year-old approvals still the only tests on refactored code →
       Medium (frozen bugs).

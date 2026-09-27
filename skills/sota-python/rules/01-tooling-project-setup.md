@@ -26,6 +26,17 @@ Rules:
 - **CI installs with `uv sync --locked`** (or `--frozen`). Never bare `pip install -r requirements.txt`
   in new projects; if a legacy `requirements.txt` must exist, generate it:
   `uv export --format requirements-txt --output-file requirements.txt`.
+- **A tool that is not uv gets `pylock.toml`, not a requirements file.** PEP 751 (Final,
+  March 2025) is the standard, tool-neutral lock: every package with its artifact URLs, sizes
+  and hashes, installable with no resolution at install time.
+  `uv export --locked --format pylock.toml --no-emit-project -o pylock.toml` writes it (uv
+  refuses any output name other than `pylock.toml` or `pylock.<name>.toml`, as the PEP
+  requires). `uv.lock` stays the source of truth. Measured (uv 0.12.0): `uv pip sync
+  pylock.toml` installed the locked set, and one altered sha256 made it exit 1. **A committed
+  export can go stale**; in CI, re-run the same command and fail on a diff
+  (`… && git diff --exit-code -- pylock.toml`). Use exactly the flags that produced the
+  committed file: the export writes its own command line into the header, so the same
+  dependencies exported with different flags differ too (measured).
 - **Never `sudo pip install`, never install into the system interpreter.** Every project gets its
   own venv; `uv` makes this automatic.
 - One-off scripts use **PEP 723 inline metadata** instead of polluting an env:
@@ -149,12 +160,17 @@ Ship `py.typed` in any annotated library, or downstream checkers see your packag
 ```yaml
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.17
+    rev: <40-hex commit SHA>  # frozen: <latest tag> — written by autoupdate --freeze
     hooks: [{id: ruff, args: [--fix]}, {id: ruff-format}]
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: <40-hex commit SHA>  # frozen: <latest tag>
     hooks: [{id: check-merge-conflict}, {id: detect-private-key}, {id: end-of-file-fixer}]
 ```
+
+Do not hand-type the revs: run `pre-commit autoupdate --freeze`, which resolves each hook repo's
+latest tag and stores its commit SHA with the tag as a comment. A hook repo is third-party code
+that runs on every commit, so it is pinned by SHA for the same reason Actions are (rules/08 §1)
+— a tag can be moved. Re-run it on a schedule so the pins do not rot.
 
 Keep hooks under ~5s; ty and pytest belong in CI, not pre-commit. CI must re-run the same
 checks (`pre-commit run --all-files`) — local hooks are convenience, not enforcement.
@@ -184,19 +200,66 @@ checks (`pre-commit run --all-files`) — local hooks are convenience, not enfor
 - **3.14 — template strings (PEP 750):** `t"..."` returns a `Template` of static parts +
   `Interpolation` objects instead of a string — for t-string-aware APIs that escape or
   parameterize values (HTML, SQL). Not a drop-in f-string; use only with a consuming library.
+  The escaping lives in that consumer, not in the literal: reviewing one is rules/05 §3a.
 - **3.14 — `compression.zstd`** (PEP 784): stdlib Zstandard, also wired into
   `tarfile`/`zipfile`/`shutil`. Drops the third-party `zstandard` dep on a 3.14+ floor.
 
-## 8. Free-threading awareness (3.13t/3.14t)
+## 7a. What 3.12 and 3.13 REMOVED — the PEP 594 cliff
+
+§7 is what you gain by raising the floor. This is what breaks, and it is the half that turns
+a routine bump into an outage. **PEP 594 (Status: Final) deprecated ~20 stdlib modules in
+3.11; CPython removed three of them in 3.12 and the rest in 3.13** — the PEP's own
+`Python-Version: 3.11` header is the *deprecation* version, not the removal one, which is the
+detail that gets misread.
+
+- **Removed in 3.12 (PEP 594):** `smtpd`, `asynchat`, `asyncore`.
+- **Removed in 3.13 (PEP 594):** `telnetlib`, `cgi`, `cgitb`, `crypt`, `nntplib`, `pipes`,
+  `imghdr`, `sndhdr`, `sunau`, `aifc`, `audioop`, `chunk`, `uu`, `xdrlib`, `mailcap`,
+  `msilib`, `nis`, `spwd`, `ossaudiodev`.
+- **Same cliff, not PEP 594:** `distutils` (PEP 632) and `imp` removed in 3.12; `lib2to3`
+  removed in 3.13. `distutils` can *appear* to survive where setuptools is installed (it ships
+  a shim), so a clean import on your machine proves nothing about a slim image.
+
+Measured 2026-09-25 against `sys.stdlib_module_names`: all 25 present on 3.11.15; the five
+3.12 names absent on 3.12.13; all 25 absent on 3.13.13.
+
+**The failure mode is an ImportError at runtime, not at install time**, and it lands in the
+paths least covered by tests — a `cgi.parse_header()` in a legacy upload handler, `crypt` in
+an old auth shim, `pipes.quote` in a deploy script, `smtpd` in a test fixture. A dependency
+you do not control can also import one; the traceback then names *their* module, not yours.
+
+```bash
+# BEFORE bumping the floor to 3.12 or 3.13 — grep first, and include your venv, not just src/
+grep -rnE '\b(import|from)\s+(telnetlib|cgi|cgitb|crypt|nntplib|smtpd|pipes|asynchat|asyncore|imghdr|sndhdr|sunau|aifc|audioop|chunk|uu|xdrlib|mailcap|msilib|nis|spwd|ossaudiodev|distutils|imp|lib2to3)\b' \
+  --include='*.py' . 
+```
+
+Two of these have security weight beyond the bump and are called out again in rules/05:
+`telnetlib` (plaintext credentials) and `crypt` (weak, platform-dependent hashing). Their
+replacements are not drop-in — `cgi.parse_header` has no stdlib successor, and `crypt` users
+want a password-hashing library, not another stdlib module.
+
+## 8. Free-threading awareness (3.14t)
 
 Free-threaded CPython (PEP 703, no GIL) is **officially supported since 3.14** (PEP 779) —
 no longer experimental, though still not the default build; single-threaded overhead is down
-to roughly 5–10%. uv installs it via the `t` suffix (`uv python install 3.14t`). Implications:
+to roughly 5–10%. Target `3.14t`, not `3.13t` (experimental). uv installs it via the `t`
+suffix (`uv python install 3.14t`). Implications:
 
 - **Stop assuming the GIL makes code thread-safe.** `dict`/`list` single ops stay atomic, but
   check-then-act sequences (`if key not in d: d[key] = ...`) were never safe and now break
   observably. Guard shared mutable state with `threading.Lock` or use queues — on every build.
-- Library authors: declare support via `Py_mod_gil` / test on `3.13t` if you ship C extensions.
+- **One C extension silently puts the GIL back.** Importing an extension module that does not
+  declare the `Py_mod_gil` slot re-enables the GIL for the whole process with only a
+  `RuntimeWarning` — the service keeps running, just not free-threaded. Make it loud: assert
+  `sys._is_gil_enabled() is False` at startup (after your imports) and in CI, and run CI with
+  `-W error::RuntimeWarning` so the import itself fails. `PYTHON_GIL=0` / `-X gil=0` force the
+  GIL off regardless — a *testing* switch for probing whether an undeclared extension really is
+  thread-safe, not a production fix. Measured 2026-09-25 on 3.14.6t with two one-line test
+  extensions: the one without the slot raised the warning and flipped `_is_gil_enabled()` to
+  `True` (both guards exit 1); the one declaring `Py_MOD_GIL_NOT_USED` kept it `False` (exit 0).
+- Library authors shipping C extensions: declare `Py_mod_gil` only after testing on `3.14t`,
+  and publish `cp314t` wheels.
 - Don't rewrite multiprocessing pools to threads "because no-GIL" until you've profiled on the
   free-threaded build; single-thread perf differs.
 - Decision table for concurrency model is in rules/06.
@@ -232,38 +295,56 @@ images by digest for reproducible rebuilds in regulated environments.
 - No committed `.venv/`, `__pycache__/`, or checker caches — `.gitignore` covers them.
 - Version in exactly one place (`pyproject.toml` or `__init__.py` via dynamic) — not both.
 - Entry points via `[project.scripts]`, not instructions to run `python src/mypkg/cli.py`.
+- Declared-but-unreached dependencies: `deptry .` reports DEP002 (unused), DEP003
+  (imported but only a transitive dep), DEP005 (stdlib shadowed). Treat its output as
+  candidates — `importlib`/entry-point/plugin loads read as unused — and prove each by
+  removing it in a scratch copy and running the real build and full suite
+  (CI and supply-chain controls).
 
 ## Audit checklist
 
 Run from repo root. Severity guidance in brackets.
 
-```bash
-# Toolchain state
-ls pyproject.toml uv.lock 2>/dev/null                      # missing uv.lock in an app [MEDIUM]
-ls setup.py setup.cfg Pipfile poetry.lock 2>/dev/null      # inventory only; not a finding by itself
-grep -rn "pip install" --include="*.yml" --include="*.yaml" --include="Dockerfile*" . \
-  | grep -v "uv pip"                                       # unlocked installs in CI/images [MEDIUM]
-grep -n "sudo pip" -r .                                    # system-interpreter installs [HIGH]
-
-# Competing lint/format config: verify actual conflict before reporting
-ls .flake8 .isort.cfg .pylintrc 2>/dev/null; grep -n "\[tool.black\]\|\[tool.isort\]" pyproject.toml
-
-# Type checking actually enforced? Use the configured checker; ty is the new-project default.
-grep -n "mypy\|pyright\|basedpyright\| ty " .github/workflows/*.yml .gitlab-ci.yml 2>/dev/null
-grep -rn "type: ignore$\|type: ignore " --include="*.py" src/ | grep -v "ignore\["   # bare ignores [LOW]
-
-# requires-python vs syntax reality
-grep -n "requires-python" pyproject.toml
-grep -rln "match \|type [A-Z].* = \|def .*\[T" --include="*.py" src/ | head  # 3.12 syntax w/ old floor?
-
-# Layout
-ls src/ 2>/dev/null || echo "flat layout"                  # flat layout in a library [LOW]
-find src -name py.typed | head -1                          # annotated lib without py.typed [MEDIUM]
-
-# Ruff coverage
-uvx ruff check --statistics .                              # what's currently violated
-grep -n "select" pyproject.toml                            # B/S/ASYNC missing from select [LOW]
-
-# Hygiene
-git ls-files | grep -E "\.venv/|__pycache__|\.pyc$"        # committed artifacts [LOW]
-```
+- [ ] **Toolchain state** — `ls pyproject.toml uv.lock 2>/dev/null` (missing uv.lock in an app
+      [MEDIUM]; a committed `pylock.toml`/`pylock.<name>.toml` is a hashed lock too (§1), not a
+      missing one: `find . -name 'pylock*.toml' -not -path '*/.venv/*'`); `ls setup.py setup.cfg Pipfile poetry.lock 2>/dev/null` (legacy/competing
+      toolchains — inventory only; not a finding by itself);
+      `grep -rn "pip install" --include="*.yml" --include="*.yaml" --include="Dockerfile*" . | grep -v "uv pip"`
+      (unlocked installs in CI/images [MEDIUM]); `grep -n "sudo pip" -r .` (system-interpreter
+      installs [HIGH])
+- [ ] **Competing lint/format config — verify actual conflict before reporting** —
+      `ls .flake8 .isort.cfg .pylintrc 2>/dev/null; grep -n "\[tool.black\]\|\[tool.isort\]" pyproject.toml`
+- [ ] **Type checking actually enforced? Use the configured checker; ty is the new-project default.** —
+      `grep -n "mypy\|pyright\|basedpyright\| ty " .github/workflows/*.yml .gitlab-ci.yml 2>/dev/null`
+      ; `grep -rn "type: ignore$\|type: ignore " --include="*.py" src/ | grep -v "ignore\["`
+      (bare ignores [LOW])
+- [ ] **requires-python vs syntax reality** — `grep -n "requires-python" pyproject.toml` ;
+      `grep -rln "match \|type [A-Z].* = \|def .*\[T" --include="*.py" src/ | head` (3.12 syntax
+      w/ old floor?)
+- [ ] **Layout** — `ls -d src/ 2>/dev/null | grep -q . || echo "flat layout"` (flat layout in a
+      library [LOW]); `find src -name py.typed | head -1` (annotated lib without py.typed
+      [MEDIUM])
+- [ ] **Ruff coverage** — `uvx ruff check --statistics .` (what's currently violated);
+      `grep -n "select" pyproject.toml` (B/S/ASYNC missing from select [LOW])
+- [ ] **Hygiene** — `git ls-files | grep -E "\.venv/|__pycache__|\.pyc$"` (committed artifacts
+      [LOW])
+- [ ] **pre-commit hooks pinned by tag, not SHA (§6) [LOW]** —
+      `grep -nE '^[[:space:]]*rev:[[:space:]]*[^[:space:]#]' .pre-commit-config.yaml | grep -vE 'rev:[[:space:]]*[0-9a-f]{40}([[:space:]]|$)'`
+      (each hit is a movable tag: `pre-commit autoupdate --freeze`)
+- [ ] **--- Stdlib removals before a 3.12/3.13 floor bump: PEP 594, `distutils`, `imp`,
+      `lib2to3` (§7a) [HIGH — ImportError at runtime] ---** —
+      `grep -rnE '\b(import|from)\s+(telnetlib|cgi|cgitb|crypt|nntplib|smtpd|pipes|asynchat|asyncore|imghdr|sndhdr|sunau|aifc|audioop|chunk|uu|xdrlib|mailcap|msilib|nis|spwd|ossaudiodev|distutils|imp|lib2to3)\b' --include='*.py' .`
+- [ ] **Shared mutable state under threads (§8) — HIGH where a free-threaded (`t`) build is
+      targeted, MEDIUM otherwise: the GIL never made check-then-act safe** —
+      `grep -rlE 'threading\.Thread\(|ThreadPoolExecutor|asyncio\.to_thread' --include='*.py' src/`
+      (the files that run code on threads; read only those) ;
+      `grep -rnE '^[[:space:]]+global [A-Za-z_]' --include='*.py' src/` (a module global rebound
+      from a function) ;
+      `grep -rnE 'if [^:]+ not in [A-Za-z_][A-Za-z0-9_.]*:' --include='*.py' src/` (check-then-act
+      on a shared dict or set: a finding only where a thread reaches it with no `threading.Lock`
+      held)
+- [ ] **GIL silently re-enabled on a free-threaded target (§8) [MEDIUM where a `t` build is
+      the deployment target]** — `grep -rn '_is_gil_enabled' --include='*.py' .` (no hit = nothing
+      notices an undeclared extension turning the GIL back on) ;
+      `grep -rnE 'PYTHON_GIL=0|-X ?gil=0' --include='*.y*ml' --include='Dockerfile*' --include='*.sh' .`
+      (the testing override shipped to production)

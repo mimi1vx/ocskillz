@@ -65,10 +65,11 @@ ALTER TABLE events WRITE ORDERED BY (user_id);
 
 Open table formats add ACID commits, snapshots, and schema evolution on
 object storage. Status (verified mid-2026): **Iceberg format v3** is ratified
-and GA across major engines (deletion vectors, row lineage; engine support
-for v3 features still varies — confirm your engines before enabling v3
-features). **Delta Lake 4.x** is current (variant type, collations; deletion
-vectors and liquid clustering mature from 3.x).
+(deletion vectors, row lineage), but engine support is uneven — e.g. Trino
+483 still calls v3 experimental, without row-level updates, deletes or
+OPTIMIZE (checked 2026-09-26; rules/01) — confirm every engine that touches
+the table before enabling v3. **Delta Lake 4.x** brings the variant type and collations (deletion
+vectors and liquid clustering matured in 3.x).
 
 - **Snapshots & time travel:** every commit is a snapshot; you can query
   `AS OF` for debugging, incident forensics (rules/04), and WAP (rules/06).

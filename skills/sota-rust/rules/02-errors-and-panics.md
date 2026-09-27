@@ -97,6 +97,13 @@ let port: u16 = env::var("PORT")
   unwraps — use `.get(i)`, `s.get(a..b)`, `try_into()` on untrusted values
   (string slicing also panics on non-char-boundary).
 - `unreachable!()` must carry the proof: `unreachable!("len checked > 0 above")`.
+- **A wall clock that steps backwards is an input, not an invariant.** The std docs say
+  `SystemTime` *"is not monotonic"*, and its `duration_since` and `elapsed` return `Err`
+  because earlier readings are not guaranteed to precede later ones (*"the system clock being
+  adjusted either forwards or backwards"*). The `UNIX_EPOCH.elapsed().expect(...)` above is
+  sound: a host clock before 1970 is broken. Timing an **interval** that way is not. A timeout,
+  a latency or a rate-limit window then panics on an NTP step. Use `Instant` (*"a monotonically
+  nondecreasing clock"*). Its `elapsed()` returns a `Duration` and cannot fail.
 
 ## 5. Panics: when, and what they cost
 
@@ -112,9 +119,14 @@ bad input, missing files, network failure, or anything an attacker controls.
   `catch_unwind`, panics kill the process. Decide deliberately for servers —
   abort+supervisor-restart is a valid stance, but then panic-freedom of
   handlers is load-bearing.
-- **FFI**: unwinding across `extern "C"` is UB. Wrap Rust callbacks invoked
-  from C in `std::panic::catch_unwind` (or use `extern "C-unwind"` only when
-  both sides genuinely support it).
+- **FFI**: a Rust panic that reaches an `extern "C"` boundary **aborts the
+  process** — since Rust 1.81; before that it was UB. Measured on 1.97.1: exit
+  134, "panic in a function that cannot unwind", and a `catch_unwind` *around
+  the call* did not catch it. So put `std::panic::catch_unwind` **inside** the
+  body of every Rust function called from C and turn a panic into an error code.
+  Use `extern "C-unwind"` only when both sides genuinely support unwinding. A
+  C++ exception unwinding into Rust through a `"C"` declaration is still UB
+  (Reference, "Unwinding across FFI boundaries").
 - **`Drop` impls must not panic.** `drop()` itself runs during unwinding from
   another panic; a panic there is a *double panic* that — per the std `Drop`
   docs — "will likely abort the program." So a panicking destructor turns one
@@ -122,6 +134,13 @@ bad input, missing files, network failure, or anything an attacker controls.
   normally; if a Drop genuinely must signal misuse, gate it on
   `std::thread::panicking()` first. This applies to RAII guards, buffer
   flushers, and `Zeroize`-on-drop types alike. (ANSSI `LANG-DROP-NO-PANIC`)
+- **`assert!` is a panic; `debug_assert!` is not a check.** `assert!`/`assert_eq!`
+  on an input-derived condition is the same DoS as `panic!`. `debug_assert!`
+  compiles out wherever `debug-assertions` is off: the release profile's default,
+  and any profile or `RUSTFLAGS` override that turns it off (rules/07 §4a).
+  Measured: a `debug_assert!` that fired under `cargo test` was silent under
+  `cargo test --release`. Never make it the only guard of a condition an attacker
+  can reach — return an error. (ANSSI `LANG-LIMIT-PANIC-SRC`)
 - Poisoned mutexes (`std::sync::Mutex`): a panic while holding the lock poisons
   it. Decide policy once: propagate (`lock().expect("not poisoned: …")`) or
   recover (`unwrap_or_else(PoisonError::into_inner)`) — document which.
@@ -143,6 +162,27 @@ bad input, missing files, network failure, or anything an attacker controls.
 - Don't `match` on a `Result` just to re-wrap (`Ok(v) => Ok(f(v)), Err(e) =>
   Err(e)`) — that's `.map(f)`. Clippy: `manual_map`, `question_mark`,
   `needless_match`.
+
+### 6a. Don't unwrap an Option back into a sentinel
+
+Rust makes the in-band sentinel (`sota-architecture` rules/02 §8a) hard to write by
+accident: `str::find` and `Iterator::position` return `Option<usize>`, not `-1`
+(verified, rustc 1.97.1). The way it gets reintroduced is at the *seam*:
+
+- `opt.unwrap_or(-1)`, `unwrap_or_default()` on a numeric `Option`, or
+  `unwrap_or(0)` — each discards the type system's absence encoding and hands a
+  domain value downstream (verified: `None::<i32>.unwrap_or(-1)` is `-1`). Push the
+  `Option` outward instead; collapse it only where the value is *consumed*, and then
+  with `match`/`ok_or`, not a magic number.
+- FFI and wire boundaries are where it enters: a C ABI returning `-1`/`errno`, a
+  protobuf `int32` with no `optional`, `serde` deserializing a field whose absence
+  the schema encodes as a value. Convert **at the boundary** into `Option`/`Result`
+  — the anti-corruption-layer rule, applied to a scalar.
+- `#[serde(default)]` on a numeric field silently substitutes `0` for absent. That
+  is an in-band sentinel chosen by an attribute; use `Option<T>` unless `0` is
+  genuinely the right value.
+- Audit: `grep -rnE 'unwrap_or\(-?[0-9]+\)|unwrap_or_default\(\)' --include='*.rs' .`
+  and `serde(default)` on numeric fields.
 
 ## 7. Retryability & error classification
 
@@ -215,11 +255,21 @@ fn main() -> ExitCode {
 
 ## Audit checklist
 
+- [ ] Sentinel re-entry (§6a): `rg 'unwrap_or\(-?[0-9]+\)|unwrap_or_default\(\)' -t rust`
+      on numeric `Option`s, and `#[serde(default)]` on numeric fields — each discards the
+      absence the type system was carrying.
+
 - [ ] `rg '\.unwrap\(\)' -t rust -g '!*test*' -g '!benches/*' -g '!examples/*'`
       — every hit in production paths is a finding; severity scales with input
       reachability (attacker-reachable unwrap = High).
 - [ ] `rg '\.expect\("' -t rust` — messages must state invariants ("valid
       static regex"), not restate the failure ("failed to parse").
+- [ ] **Intervals timed on the wall clock (§4)** —
+      `grep -rnE '\.(elapsed|duration_since)\([^)]*\)[[:space:]]*\.(unwrap|expect)\(' --include='*.rs' .`
+      — every hit is a `SystemTime`, because `Instant`'s versions return a `Duration`, which has
+      no `unwrap` (rustc: E0599). Deriving a Unix timestamp from `UNIX_EPOCH` is the legitimate
+      use. A hit timing a timeout, latency or window panics on a clock step: High on a request
+      path. Use `Instant`. A chain split across lines needs reading.
 - [ ] `rg '\.unwrap_or_default\(\)|filter_map\(Result::ok\)|\.ok\(\)[;)]' -t rust`
       — silently swallowed errors; require a comment justifying each.
 - [ ] `rg 'panic!|unreachable!|todo!|unimplemented!' -t rust -g '!*test*'` —
@@ -236,8 +286,12 @@ fn main() -> ExitCode {
 - [ ] Double-logging: error logged at propagation site AND handler.
 - [ ] `?` chains with no `.context(...)` anywhere between syscall and `main` —
       undebuggable errors.
-- [ ] FFI: `extern "C"` functions whose bodies can panic without
-      `catch_unwind` → UB, Critical.
+- [ ] FFI: `grep -rnE 'extern "C(-unwind)?" fn' --include='*.rs' .` — a body that
+      can panic without an inner `catch_unwind` aborts the process (since 1.81) =
+      High (DoS); with a declared MSRV below 1.81 it is UB = Critical.
+- [ ] `grep -rnE '(debug_)?assert(_eq|_ne)?!\(' --include='*.rs' --exclude-dir=tests --exclude-dir=benches --exclude-dir=examples .`
+      (then skip `#[cfg(test)]` modules) — `assert!` on an input-derived condition =
+      High (DoS); `debug_assert!` as the only guard of one = no check in release, High.
 - [ ] `Drop` impls that can panic: `rg -A15 'impl Drop' -t rust` then scan for
       `unwrap`/`expect`/`panic!`/indexing/`?` inside `fn drop` — double-panic
       aborts the process (DoS), High. `LANG-DROP-NO-PANIC`.

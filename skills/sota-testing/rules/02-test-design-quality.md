@@ -162,6 +162,17 @@ A test may consume only inputs it controls. The big three leaks:
 - **Network.** Unit tests touch no sockets. Integration tests touch only
   dependencies the test started itself (`rules/04`). Tests against
   third-party live endpoints belong in a separate, non-blocking suite.
+  **Prove this rather than asserting it: block egress and run the suite.**
+  Anything that fails was not the unit test it claimed to be. What this catches
+  is not a slow test — it is a test that *passes for the wrong reason*, because
+  a real call succeeded where the assertion was supposed to do the work. The
+  usual mechanism is a config object the code under test never reads: the test
+  constructs `Config(providers=[])` while the SUT resolves providers from the
+  environment (`sota-code-security` rules/11 §6.7 — a setting counts as applied
+  only when you have traced it end-to-end). While you are there, check each
+  surviving assertion against the test's own **name**: a test called
+  `test_no_providers` asserting `healthy is True` is telling you that one of the
+  two is wrong, and the real calls are why nobody noticed.
 - **Concurrency.** Never assert on timing ("done within 50ms") as a proxy for
   correctness. Synchronize on events/promises/channels; use the runtime's
   virtual-time tools for timeout logic. `sleep(100ms)` is a flake with a fuse:
@@ -194,13 +205,30 @@ Name the smell in audit findings; each has a standard fix.
 - **Tautological test** (Critical): expected value computed by the same logic
   as the SUT (`assert sut.f(x) == helper_that_reimplements_f(x)`), or
   asserting a mock returns what you stubbed it to return. Verifies nothing.
+- **Universally-named test over one item** (High): the name quantifies —
+  `test_every_tracked_phase_is_also_reported` — and the loop iterates a
+  single-element literal. `sota-code-security` rules/14 §7 falsifies this shape in
+  *prose*; here it is worse, because the test **executes and passes**, so it reads
+  as the enforcement of the claim its name makes. Third sighting of the shape in one
+  codebase (2026-09-05). Read the **loop**, not the name; then either derive the
+  collection from the source of truth or rename the test to what it actually covers.
+  A green test is not exempt from the quantifier check.
 - **Mockery / excessive mocking** (High): more lines configuring doubles than
   asserting outcomes; asserting interactions with internals. Fix via 2.1 and
   `rules/03` boundary discipline.
-- **Mystery guest** (Medium): the assertion depends on data the reader can't
-  see — a 400-line shared fixture, a magic row in `seed.sql`, file #47 in
-  `testdata/`. Fix: builders with only the relevant fields explicit
-  (`rules/03` §3.5); keep shared fixtures immutable and tiny.
+- **Mystery guest** (Medium): the assertion depends on something outside the
+  test the reader can't see — a 400-line shared fixture, a magic row in
+  `seed.sql`, file #47 in `testdata/`, or (the original sense of the name in the
+  standard catalog) an *external resource* the test reaches for: a file on disk,
+  a database, a host. Fix: builders with only the relevant fields explicit
+  (`rules/03` §3.5); keep shared fixtures immutable and tiny; replace the
+  external resource with a double or move the test to `rules/04`.
+- **Resource optimism** (High): the test assumes an external resource is
+  *present* — a path, a mount, a reachable endpoint — so its outcome is a
+  property of the machine, not of the code. It passes where the resource exists
+  and fails, or worse passes vacuously, where it does not. Mystery guest is a
+  readability defect; this one is a hermeticity defect, and §2.6's egress block
+  is how you find the network half of it.
 - **Conditional logic in tests** (Medium→High): `if/else`, `try/except`-and-
   continue, loops with branch-dependent assertions. A test with branches has
   untested branches of itself. Fix: split into one straight-line test per
@@ -252,8 +280,106 @@ rendered emails. They are a trap as a default assertion.
   can only understand by chasing four helper files has the mystery-guest
   smell with extra steps.
 
+## 2.10 Which method a durable guard is written in
+
+Auditing and authoring are different activities with different lifetimes, and the
+library states a default for the first but not the second. An **audit search** is
+discarded the day it runs — grep is often the right tool, and `sota-code-security`
+rules/10's absence rule already governs it (widen the search, use a second independent
+method, state what you ran). A **guard** is a permanent claim that a property holds,
+re-evaluated on every commit by people who will not re-derive it. It deserves a stronger
+default:
+
+| method | establishes | cannot establish |
+|---|---|---|
+| text / regex | nothing durable | code vs. a *comment about* code; per-site scope |
+| **AST** | structure — call sites, arguments, definitions | dynamic access, types, runtime values |
+| **execution / interception** | behaviour — the value actually arrives | only what the test exercises |
+| **mutation** | that the guard *can* fail | that the mutation took — assert it |
+
+- **Author structural guards in AST, not text.** Two failure modes are specific to text
+  and neither is prevented by care. A guard for `Scanner\s*\(` flagged the file that
+  documented *in a comment* that the call had been removed — text cannot tell code from
+  prose about code. And a file-scope check ("does this file mention the factory
+  anywhere?") lets **one compliant site excuse every other site in the same file**; a
+  real regression passed. Inspect the node: for a call, its own keyword arguments.
+- **A structural guard cannot carry a behavioural claim.** *"The argument is forwarded"*
+  is structure; *"the configured value arrives"* is behaviour, and needs interception or
+  execution. Reported case: AST proved a `depth` argument was forwarded and could not
+  show whether the forwarded value was the configured `16` or a stale `4`.
+- **Mutation-test the guard, then verify the mutation took** (rules/06 §6.3).
+- **Regex only where no parser exists** — a DSL, a log format, a config dialect, prose.
+  Name which, in a comment, so the exception does not spread by imitation.
+- **Name the parser, or the rule gets ignored exactly where it is least convenient.**
+  "No parser at hand" is the moment people reach for regex, so decide this at the same
+  time as the guard. Take the first rung that carries your claim (tool names verified
+  2026-08-20; confirm current entry points at each project's own docs — they move):
+
+  1. **The language's own AST.** Python `ast`, Go `go/ast`, Rust `syn`, Ruby `Prism`,
+     JS/TS the `typescript` compiler API or `ts-morph`, Java `JavaParser`, PHP
+     `nikic/PHP-Parser`, C# Roslyn syntax trees.
+  2. **A semantic index, when the claim needs *types* or cross-file resolution** — which
+     is exactly the limit stated below, so this is the rung that answers it rather than
+     working around it. **CodeQL** builds a queryable database with names and types
+     resolved (v2.26.2 ships extractors for go, python, rust, java, cpp, csharp,
+     javascript, ruby, swift — plus yaml, xml, html and GitHub Actions, so config is not
+     an exception either). **SCIP/LSIF** indexes, or the language server itself, give
+     resolved cross-references without writing queries.
+  3. **A cross-language structural matcher, when no native parser is at hand.**
+     **Opengrep** matches on a parsed representation rather than text, covers 30+
+     languages, and has a **Generic** mode for inputs with no dedicated parser (ERB,
+     Jinja and similar). It is LGPL-2.1 and consortium-governed (Aikido, Amplify, Endor
+     Labs, Kodem, Orca), forked from Semgrep CE when features moved behind a commercial
+     licence — prefer it over the upstream for anything you need to keep running.
+     **ast-grep** and **tree-sitter** are the other route: real concrete syntax trees,
+     25+ official grammars and bindings for a dozen host languages.
+  4. **The toolchain's own analysis API, when the guard should run inside the existing
+     build** rather than as a separate job — `go/analysis` (Go), Roslyn analyzers (C#),
+     clang-tidy AST matchers (C/C++), ESLint rules over ESTree (JS/TS), RuboCop cops
+     (Ruby), PHPStan/Psalm rules (PHP), detekt (Kotlin). Slower to write, but it runs
+     where developers already look and fails in the same place as a compile error.
+  5. **The artifact or the runtime, when the claim is about what *ships* or what is
+     *live*** — and here source analysis is not merely weaker, it answers a different
+     question. Reflection over the loaded class, the deprecation annotation on the method
+     you actually call, the contents of the built wheel or image, `nm`/`objdump` on the
+     binary. A measured case: a JDK's `@Deprecated(since="18")` read off `Runtime.class`
+     by reflection settled in seconds what the published docs would not confirm.
+  6. **Regex — only where the input genuinely has no grammar**: prose, an ad-hoc log
+     format, a bespoke DSL. Note *which*, in a comment, so the exception does not spread
+     by imitation.
+
+  Two things this list exists to prevent. **Shell and config are not exceptions**: shell
+  has a real AST (`mvdan.cc/sh/v3/syntax` parses POSIX sh, bash and mksh and ships a
+  `Walk`), and YAML, HCL, JSON, Dockerfiles and SQL all have parsers — "it's just a
+  config file" is how a text guard gets in. And **rung 5 can be cheaper than rung 1**:
+  where a claim is about the built or running system, do not parse source at all.
+
+**The honest limit, which the guidance must state or it manufactures the false
+confidence the rest of this library exists to prevent: AST does not resolve types.** A
+field audit still counts `.timeout_sec` on *any* object, so a name collision with an
+unrelated attribute reads as live — a **false negative**, the more dangerous direction.
+AST removes string-and-comment noise; it does not remove name ambiguity. The output of a
+structural sweep is a **candidate list to verify**, never a verdict, and "AST-based" is
+exactly the phrase that tempts a reader to treat it as one.
+
+Measured on one 38k-test Python codebase: the same audit rewritten from `grep` to
+`ast.walk` went from **74 orphan candidates to 61**. The thirteen were fields read via
+`getattr(cfg, "name")` with a string literal — which the AST pass sees and grep does not.
+More precise *and* more sensitive, not a trade.
+
 ## Audit checklist
 
+- [ ] Durable guards written in **AST** where the claim is structural, not regex over
+      source? Two tells that a text guard is in place: it can match a *comment about*
+      the code, and it checks file scope rather than the offending node, so one
+      compliant site excuses the rest of the file (§2.10).
+- [ ] Any structural guard carrying a **behavioural** claim ("the configured value
+      arrives") that only execution or interception can support (§2.10)?
+- [ ] Does any structural sweep get reported as a **verdict** rather than a candidate
+      list? AST does not resolve types, so a name collision reads as live — a false
+      negative (§2.10).
+- [ ] Any test whose **name quantifies universally** (`every`, `all`, `no_`) looping a
+      one- or two-element literal → High (§2.7): it passes, so it reads as enforcement.
 - [ ] Assertion-free tests? Mechanical sweep: list test functions lacking any
       assert/expect/require/verify token → Critical each.
 - [ ] Can flagship tests fail? Invert one assertion or `return` early in the
@@ -264,6 +390,10 @@ rendered emails. They are a trap as a default assertion.
       Grep: `spyOn\(.*(as any)|verify\(.*internal|assert_called.*_private|reflect` in tests → High.
 - [ ] Real time in tests/SUT under test? Grep:
       `datetime\.now|time\.Now\(\)|Date\.now|new Date\(\)|System\.currentTimeMillis|Instant\.now` in test paths and in modules with boundary-condition tests → High.
+- [ ] **Unit suite run with egress blocked** — any new failure is a test that
+      was passing because a real call succeeded → High each; then re-read those
+      tests' names against their assertions, and check whether the config they
+      construct is the config the SUT actually reads (§2.6).
 - [ ] Sleeps as sync? Grep: `time\.sleep|time\.Sleep|Thread\.sleep|setTimeout|waitForTimeout|page\.wait_for_timeout` in tests → High each.
 - [ ] Order/parallel safety: does CI run the suite shuffled and parallel?
       Run shuffled once during audit; any new failure → High.

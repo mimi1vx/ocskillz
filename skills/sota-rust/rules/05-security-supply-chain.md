@@ -14,9 +14,12 @@ on a schedule (new advisories land against old lockfiles).
 # deny.toml (core)
 [advisories]
 yanked = "deny"
-# RUSTSEC advisories: deny by default; ignore list requires expiry + reason
+# RUSTSEC advisories: deny by default; every ignore carries a reason. There is
+# no expiry key — cargo-deny 0.20.2 rejects `expire` (unexpected-keys) and the
+# whole config fails to load — so put the review date in the reason and let a
+# scheduled job (below) resurface it.
 ignore = [
-  # { id = "RUSTSEC-2026-0001", reason = "not reachable: feature off", expire = "2026-09-01" }
+  # { id = "RUSTSEC-2026-0001", reason = "not reachable: feature off; review by 2026-12-01, #123" }
 ]
 
 [licenses]
@@ -35,6 +38,8 @@ unknown-git = "deny"          # git deps pinned by rev only, allowlisted
 
 - `cargo deny check` (advisories, licenses, bans, sources) in PR CI;
   `cargo audit` nightly via cron so existing `Cargo.lock` gets re-checked.
+  The same scheduled job enforces ignore reviews: fail when a `review by` date
+  in an `advisories.ignore` reason has passed — the tool itself cannot expire one.
 - Commit `Cargo.lock` for binaries **and** (current guidance) for libraries —
   reproducible CI; `cargo update` is a reviewed PR, not a side effect.
 - Dependabot/Renovate for bumps; review changelogs of security-sensitive deps
@@ -55,14 +60,64 @@ unknown-git = "deny"          # git deps pinned by rev only, allowlisted
   (these run code **at build time** — highest-trust tier). Check the crate's
   Security tab on crates.io (since Jan 2026 it surfaces RustSec advisories,
   CVE aliases, and affected ranges at the point of discovery).
+- **Before adding a dependency** (yours or an AI assistant's pick — it can name crates that do
+  not exist, or that a squatter registered after the name was hallucinated): `cargo info <name>`
+  must resolve (exit 101 if unknown); read licence and repository there, then
+  `https://crates.io/api/v1/crates/<name>` (`created_at`, `recent_downloads`) and `…/owners` —
+  a days-old crate, one owner, or a repository that is not the project you meant stops it.
+  Cross-check `https://deps.dev/cargo/<name>` and the repo's OpenSSF Scorecard
+  (`https://api.securityscorecards.dev/projects/github.com/<owner>/<repo>`). A newest release
+  can be a tombstone: `bincode` 3.0.0 is one `compile_error!` line, and RUSTSEC-2025-0141
+  (2025-12-16, informational: unmaintained) records that its development has stopped for good.
+- **A crate's defaults become your code — set each security-relevant option yourself.** Read in
+  source: async `reqwest::Client` (0.13.5) has `timeout`, `read_timeout` and `connect_timeout`
+  all `None`, while the blocking client defaults to 30 s; `bincode` 2 `config::standard()` and
+  `legacy()` carry `NoLimit`, so a decoded `Vec<u8>` allocates the length the input claims —
+  decode untrusted bytes with `.with_limit::<N>()`; `minijinja` picks auto-escaping from the
+  template *name* (`.html`/`.htm`/`.xml` → HTML, `.json`/`.js`/`.yaml` → JSON with the `json`
+  feature, any other name → none), so `add_template("page", …)` renders values raw unless you
+  set `set_auto_escape_callback`.
+- **A README or example snippet is a demo config.** `tower_http::cors::CorsLayer::permissive()`
+  allows any origin, method and header; `very_permissive()` also allows credentials and mirrors
+  the caller's origin — right for an example, a finding in a service; so is a pasted
+  `danger_accept_invalid_certs(true)` (§7). (OWASP: Vulnerable Dependency Management, Software
+  Supply Chain Security, Secure Coding with AI cheat sheets; SCVS V1, V6.)
 - This is not theoretical: Feb–Mar 2026 saw a coordinated campaign of five
-  fake "time utility" crates (`time-sync`, `dnp3times`, `chrono_anchor`, … —
-  RUSTSEC-2026-0030/0031/0032/0036) that typosquatted/brandjacked real crates
+  fake "time utility" crates (`time_calibrator`, `time_calibrators`, `dnp3times`,
+  `time-sync`, `chrono_anchor` — RUSTSEC-2026-0030/0031/0032/0036/0039, same order)
+  that typosquatted/brandjacked real crates
   and exfiltrated `.env` files from developer and CI machines. Mitigations are
   exactly the above plus secret hygiene: no long-lived credentials in `.env`
   on build machines; rotate anything exposed to an unvetted build.
 - Pin GitHub Actions by SHA, not tag; CI tokens least-privilege
   (`permissions: contents: read` default).
+- **Build-time code runs before any test or review of your code does.** Each `build.rs`
+  (picked up at a package root with no `build =` key) and each `proc-macro = true` crate is
+  compiled and run on the developer machine and CI runner with that user's environment.
+  Measured on cargo 1.97.1: `cargo check` ran a path dependency's `build.rs` and a proc-macro,
+  and an env var exported for the command was readable inside that `build.rs`; `cargo
+  metadata`, `cargo fetch` and `cargo tree` ran neither. rust-analyzer also runs them on
+  opening a project (`rust-analyzer.cargo.buildScripts.enable` and
+  `rust-analyzer.procMacro.enable`, both default `true`) — set both `false` before opening an
+  untrusted checkout. `[build] rustc-wrapper` is the same trust from config (rules/07 §4a).
+  **There is no off switch**: `cargo build --help` and `cargo -Z help` (1.97.1) offer no flag
+  that skips build scripts or proc-macros, so the controls are review and isolation.
+  Review: list what runs with the audit probe below; on every bump read
+  `cargo vet diff <crate> <old> <new>` for those crates' `build.rs` and macro source first.
+  Your OWN `build.rs`, proc-macro crates, `.cargo/config.toml`, `Cargo.toml`, `Cargo.lock` and
+  `rust-toolchain.toml` get CODEOWNERS entries plus the branch rule "Require review from Code
+  Owners" — an agent-authored PR included. CI: `cargo fetch --locked` is the networked step
+  and runs no dependency code; build and test with `--frozen` in a job that holds no publish,
+  deploy or cloud credentials, and hand the artifact to a separate job that does. (OWASP: CI/CD
+  Security cheat sheet; Software Supply Chain Security cheat sheet; NPM Security cheat sheet.)
+- **Declared but not reached**: an unused crate is still install/build-time trust
+  granted (`build.rs`, proc-macros) for zero function. `cargo machete` runs on
+  stable but is deliberately imprecise — false positives for crates used only
+  from `build.rs`-generated code and for import names that differ from package
+  names (`--with-metadata` fixes the latter); `cargo +nightly udeps` needs
+  nightly and documents false *negatives*. Neither settles it alone: prove a
+  candidate by removing it in a scratch copy and running the real build, clippy,
+  and full suite — CI and supply-chain controls.
 
 ## 3. Integer overflow — release mode wraps
 
@@ -138,9 +193,13 @@ struct DbConfig { url: String, password: SecretString }
   crypto crate (e.g. `hmac`'s `verify_slice`). `==` on secret bytes is a
   timing oracle.
 - Don't hand-roll crypto: RustCrypto crates, `ring`, `aws-lc-rs`, or libsodium
-  bindings; password hashing via `argon2`; randomness via `rand::rngs::OsRng`
-  / `getrandom` only (never `SmallRng`/`thread_rng` for key material —
-  thread_rng is a CSPRNG but OsRng removes the argument).
+  bindings; password hashing via `argon2`; randomness for key material via the
+  OS RNG only — `rand::rngs::SysRng` in rand ≥ 0.10 (renamed from `OsRng`, which
+  is the name in earlier versions) — or `getrandom` directly. Never `SmallRng`, a
+  seeded `StdRng` (`seed_from_u64`), or the thread-local RNG (`rand::rng()` since
+  0.9, `thread_rng()` before) for keys: the thread RNG is a CSPRNG, but the OS
+  RNG removes the argument. (rand CHANGELOG: 0.9.0 renamed `thread_rng()` →
+  `rng()`; 0.10.0, 2026-02-08, renamed `OsRng` → `SysRng`.)
 - Env/config: secrets via files or secret managers over env vars where
   possible (`/proc/<pid>/environ` leaks); never in `Cargo.toml`, never
   compiled into the binary (`strings target/release/app | rg -i secret`).
@@ -170,8 +229,11 @@ network:
   — the deserialized type should already be the validated type
   ("parse, don't validate").
 - `Vec` preallocation from attacker-controlled length prefixes
-  (`Vec::with_capacity(hdr.count)`): cap or `try_reserve`. Binary formats
-  (`bincode` etc.): configure size limits explicitly.
+  (`Vec::with_capacity(hdr.count)`): cap or `try_reserve`. Binary formats:
+  configure size limits explicitly. For new code pick a maintained format
+  (`postcard`, `bitcode`, `rkyv`, `wincode` — the alternatives RUSTSEC-2025-0141
+  lists) and set its limit; `bincode` is unmaintained (RUSTSEC-2025-0141), so
+  existing uses keep `.with_limit::<N>()` (§2) and get a migration ticket.
 - Don't deserialize to `Box<dyn Trait>`/arbitrary types via
   `typetag`-style registries from untrusted sources without an allowlist.
 - Fuzz every parser of untrusted bytes: `cargo fuzz` target per format, in
@@ -180,6 +242,102 @@ network:
 ## 7. Service-edge defaults
 
 - TLS: `rustls` stack by default (memory-safe, modern defaults).
+- **TLS / transport verification is on and stays on.** The escape hatches are named, which
+  makes them easy to audit: reqwest's `danger_accept_invalid_certs(true)` and
+  `danger_accept_invalid_hostnames(true)`, native-tls's methods of the same names, and in
+  rustls anything built through `.dangerous()` — a custom `ServerCertVerifier` whose
+  `verify_server_cert` returns `Ok` for everything is certificate checking switched off.
+  None belongs outside test code; a pinned or private CA goes into the root store (or a
+  verifier that delegates to `WebPkiServerVerifier` first), never around it. For mTLS on the
+  server, use `WebPkiClientVerifier` and authorise on a SAN, not on the subject CN.
+  Verified against reqwest 0.13.5, native-tls 0.2.18 and rustls 0.23.45 sources.
+- **Outbound requests to a caller-influenced destination (SSRF)** — policy in
+  `sota-code-security` rules/01 §5; the reqwest idiom (read in reqwest 0.13.5, hyper-util 0.1.20):
+  - Take a host key or ID from the caller and build the `Url` from your own allowlist
+    entry; relaying a caller-supplied URL is the pattern to design out.
+  - **The check belongs on the address being dialled.** Implement `reqwest::dns::Resolve`,
+    run the real lookup inside it, drop every unsafe `SocketAddr`, fail if none remain,
+    and install it with `ClientBuilder::dns_resolver(...)`. Because the connector uses
+    whatever the resolver returns, a rebinding answer after an earlier "safe" lookup is
+    never dialled. Reject after `IpAddr::to_canonical()` (stable 1.75; without it an
+    IPv4-mapped `::ffff:127.0.0.1` is not `is_loopback()`): loopback, unspecified
+    (0.0.0.0/8 by range), `is_private()`, `is_link_local()` (covers 169.254.169.254),
+    multicast, broadcast, and IPv6 `is_unique_local()` / `is_unicast_link_local()`
+    (both stable 1.84). `is_global()` is still unstable. Also refuse your cloud
+    provider's metadata hostnames by name.
+  - **The resolver never sees an IP literal**: hyper-util's `HttpConnector` dials a host
+    that parses as an address directly. So validate `url.host()` as well, before the
+    request and on every redirect hop. Use the parsed `url::Host::Ipv4/Ipv6`, never the
+    raw string: `url` (WHATWG) turns `0177.0.0.1`, `0x7f.1` and `2130706433` into
+    `127.0.0.1`, while std's `Ipv4Addr::from_str` rejects all three. Parse bare IP
+    input with std; do not use `url` for that.
+  - Redirects: `.redirect(Policy::none())`, or `Policy::custom(|a| ...)` that re-runs the
+    host check on `a.url()` and calls `a.error(..)` on a failure. The default follows up to 10.
+  - `.https_only(true)` limits the first request and every redirect hop to https.
+  - `.no_proxy()`: the default `system-proxy` feature reads the system/env proxy. Through a
+    proxy, the proxy resolves the target, so your resolver's check never sees that address.
+  OWASP: SSRF Prevention, .NET Security and GraphQL cheat sheets.
+- **A regex used as a control** (validation, allowlist, routing, redaction) — read in
+  `regex` 1.13.1 and `fancy-regex` 0.19.2 sources, behaviour measured on rustc 1.97.1:
+  - **Escaping.** Untrusted text spliced into a pattern goes through `regex::escape(&s)`
+    (`fancy_regex::escape` for that crate); raw `Regex::new(&format!(..))` lets the caller
+    write `.*`. Propagate the build `Err`, never `unwrap()` it (rules/02 §4).
+  - **Anchoring.** Every search, `is_match` included, is unanchored (the crate prepends an
+    implicit `(?s:.)*?`), so `[a-z]+` accepts `abc;rm`. Group before anchoring:
+    `^(?:a|b)$` — measured, `^a|b$` accepts `axxx`. Without multi-line mode `$` is end of
+    haystack only (measured: `^[a-z]+$` rejects `abc\n`). `(?m)` or
+    `RegexBuilder::multi_line(true)` makes `^`/`$` line anchors, so `ok\nEVIL!` passes;
+    write `\A…\z` where that flag may be on.
+  - **Unicode classes.** `\d`/`\w` are Unicode by default: `^\d+$` accepts `١٢٣`
+    (measured). Use `[0-9]` or `(?-u:\d)` when the consumer expects ASCII.
+  - **Bounds.** Counted repetition in the pattern (`{1,64}`) plus a byte-length check on
+    the input first. For patterns you did not write: cap the pattern length and set a small
+    `RegexBuilder::size_limit` (the builder's default NFA limit is 10 MiB).
+  - **Engine.** `regex` is finite-automata: worst case O(m·n) per search, linear in the
+    haystack, and it rejects lookaround and backreferences at build time (measured). Its
+    docs note `find_iter`/`captures_iter` are O(m·n²) worst case. `fancy-regex` adds
+    those features by **backtracking**; `is_match` returns `Result<bool>` and
+    `RegexBuilder::backtrack_limit` (default 1,000,000) bounds the work — measured,
+    `^(a|aa)+\1?$` on a 29-byte input returned `Err(BacktrackLimitExceeded)`. Treat that
+    `Err` as a reject, lower the limit on request paths, and prefer staying in `regex`.
+  OWASP: Input Validation cheat sheet; Proactive Controls 2024 C3; ASVS 5.0 V1.2.9;
+  OWASP Go-SCP (validation, regular expressions).
+- **Cookies the app sets itself** (the session cookie is `sota-code-security` rules/17).
+  Measured with cookie 0.18.2, axum-extra 0.12.6, actix-web 4.15.0 and rocket 0.5.1:
+  - `Cookie::new("a", "b")` and `Cookie::build(("a", "b")).build()` serialise as a bare
+    `a=b`. There is no Secure, HttpOnly, SameSite or Path. axum-extra's `CookieJar::add` and
+    actix-web's `HttpResponseBuilder::cookie` send that unchanged (measured `x=y`), so the
+    browser picks the SameSite default, and MDN says only "some browsers" use `Lax`.
+  - Rocket's `CookieJar::add` fills in `Path=/` and `SameSite=Strict` but **not HttpOnly**.
+    It sets Secure **only when Rocket itself serves TLS** (`config.tls_enabled()`). Behind a
+    TLS-terminating proxy it sent `pub=v; SameSite=Strict; Path=/`. `add_private` also adds
+    HttpOnly and a one-week `Expires`.
+  - Set every attribute yourself:
+    `Cookie::build(("__Host-id", v)).secure(true).http_only(true).same_site(SameSite::Lax).path("/")`,
+    with no `.domain(..)`. Measured output: `__Host-id=v; HttpOnly; SameSite=Lax; Secure; Path=/`.
+    The `__Host-` prefix makes the browser require Secure and `Path=/` and reject any Domain
+    (MDN). Drop HttpOnly only for a cookie that script must read, such as a double-submit
+    CSRF token.
+  OWASP: Session Management and Cookie Theft Mitigation cheat sheets; ASVS 5.0 V3.3.
+- **Debug builds and dev tooling stay out of production.** Rust frameworks have no
+  debug page to switch off. The switches are the build profile and the tooling:
+  - `cargo run` and `cargo build` without `--release` use the dev profile. With it,
+    `debug_assertions` is on, so any `#[cfg(debug_assertions)]` dev-only route is compiled
+    in. Rocket picks its profile from `ROCKET_PROFILE`, which defaults to `debug` in a debug
+    build and `release` in a release build (rocket 0.5.1 source). With the `secrets`
+    feature and no `secret_key`, the `debug` profile quietly generates a random key, while
+    any other profile refuses to launch (`InsecureSecretKey`). `ROCKET_PROFILE=debug` on a
+    release binary therefore re-enables that fallback.
+  - Check production mode at startup. When your deployment environment says production,
+    refuse to start if `cfg!(debug_assertions)` is true, and for Rocket if
+    `rocket.config().profile != Config::RELEASE_PROFILE`. Build images with
+    `cargo build --release --locked`, never `cargo run`.
+  - tokio-console: `console_subscriber::init()` serves task internals over gRPC on
+    `127.0.0.1:6669` by default. `TOKIO_CONSOLE_BIND` can move it to another address, and
+    the 0.5.0 builder has no authentication or TLS setting. It also needs
+    `--cfg tokio_unstable`. Put it behind a cargo feature that release builds leave off,
+    and never bind it off loopback.
+  OWASP: Error Handling cheat sheet; Secure Headers Project; ASVS 5.0 V13.4.
 - Timeouts on **everything**: connect, read, write, total-request, idle
   (`TimeoutLayer`, `tower` middleware). Missing timeouts = slowloris.
 - Error responses: generic client text, full chain only into logs (rules/02
@@ -188,6 +346,14 @@ network:
   verify prefix (`path.canonicalize()?.starts_with(root)`), never just join.
 - SQL via parameterized queries (`sqlx` compile-checked, `diesel`); any
   `format!` into a query string is a finding regardless of current inputs.
+  The runtime raw-SQL sinks: sqlx `QueryBuilder::push` appends text unsanitised
+  (values go through `push_bind`; `push` takes fixed fragments, and an identifier
+  from input only via an allowlist); `sqlx::query`/`query_as` over a built string
+  (plain `&str` in 0.8; from 0.9 only `&'static str` is accepted and a runtime string
+  must be wrapped in `AssertSqlSafe(..)` — each wrap is a reviewed exception); diesel
+  `sql_query` (bind with `.bind::<T, _>(v)`) and `dsl::sql::<T>` (bind with
+  `SqlLiteral::bind`). (docs.rs: sqlx 0.9.0 `QueryBuilder`, `SqlSafeStr`, sqlx 0.8.6
+  `query`; diesel 2.3.13 `sql_query`, `dsl::sql`.)
 
 ## 8. Release provenance & logging hygiene
 
@@ -210,15 +376,62 @@ network:
   alert-fatigue vector that buries real errors; reserve `error!` for
   operator-actionable events.
 
+Running external programs (formerly section 9) moved to
+[rules/08](08-external-programs.md) §1 on 2026-09-25.
+
 ## Audit checklist
 
 - [ ] CI has `cargo deny check` (or `cargo audit`) on PRs **and** a scheduled
-      run; `deny.toml` ignore entries have reasons + expiry. Missing = High
-      for deployed services.
+      run; every `deny.toml` ignore entry has a reason naming a review date,
+      and a scheduled job fails once that date passes (no `expire` key — cargo-deny
+      rejects it and the config fails to load). Missing = High for deployed services.
 - [ ] `Cargo.lock` committed; `rg 'git = "' Cargo.toml */Cargo.toml` — git
       deps without `rev =` pin = Medium; wildcard versions = Medium.
 - [ ] `cargo vet` (or documented dep-review process) for new dependencies;
       build.rs / proc-macro deps enumerated and reviewed.
+- [ ] **Build-time code (build.rs / proc-macro) is inventoried, owned and isolated (§2) —
+      High** — `cargo metadata --format-version 1 --locked | jq -r '.packages[] | select(any(.targets[]; any(.kind[]; . == "custom-build" or . == "proc-macro"))) | "\(.name) \(.version)"'`
+      (every line is code that runs on `cargo check`: each needs a review record, e.g. a
+      `cargo vet` audit). Then `rg -n --no-messages 'build\.rs|Cargo\.(toml|lock)|\.cargo/' .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS`
+      — no line means your own build-executing files merge without an owner. A CI job that
+      runs cargo build/test with publish or deploy secrets in scope is also High.
+- [ ] **New dependency adoption and insecure defaults (§2) — High on a deployed service,
+      else Medium** — each crate a diff adds has a selection record (`cargo info` resolves;
+      owners, age, repository, deps.dev/Scorecard read). Then
+      `rg -n -t rust 'CorsLayer::(very_)?permissive\(|config::(standard|legacy)\(\)|with_no_limit\(|reqwest::Client::new\(\)' . | rg -v 'with_limit'`
+      (each hit is a library default kept: permissive CORS, unbounded bincode decode, a client
+      with no timeout); also read every `reqwest::Client::builder()` for `.timeout(`.
+- [ ] **TLS / transport verification (§7) — CRITICAL outside tests** —
+      `rg -n 'danger_accept_invalid_(certs|hostnames)\(\s*true|\.dangerous\(\)|impl\s+ServerCertVerifier\s+for' -t rust`
+      (each hit outside `#[cfg(test)]` is a finding unless the verifier delegates to
+      `WebPkiServerVerifier` before its own check)
+- [ ] **SSRF / outbound request to a caller-influenced URL (§7) — High (Critical if
+      cloud metadata endpoint 169.254.169.254 is reachable)** —
+      `rg -n -t rust 'reqwest::(blocking::)?get\(' .` (the default client cannot carry a
+      resolver or redirect policy; any hit that takes a caller-influenced URL is a finding) and
+      `rg -l0 -t rust 'Client::(new|builder)\(\)' . | xargs -0 -r rg --files-without-match 'dns_resolver\('`
+      (these files build a client with no connect-time address check). In a file that does
+      have one, confirm `.redirect(` is `none()` or re-checks the host, that `.no_proxy()` is
+      set, and that IP-literal hosts are checked via `url.host()`.
+- [ ] **Regex escaping, anchoring and engine choice (§7) — High on an auth/allowlist
+      path, else Medium** —
+      `rg -n -t rust 'Regex(Builder)?::new\(\s*&?format!\(|fancy_regex::|\(\?m\)|multi_line\(true\)' . | rg -v 'escape\('`
+      (a `format!` pattern without `regex::escape`, a backtracking engine, or line-mode
+      anchors). For each `fancy_regex` hit confirm `backtrack_limit` and that an `Err` rejects;
+      then read every validation regex for whole-input `^(?:…)$`/`\A…\z` and a length bound.
+- [ ] **App-set cookie attribute defaults (§7): a missing Secure flag, HttpOnly or SameSite.
+      High on an auth or identifier cookie, else Medium.** Run
+      `rg -n -t rust 'Cookie::(new|build)\(|(jar|cookies)\.add(_private)?\(' . | rg -v 'secure\(true\)'`.
+      Each hit builds a cookie without `secure(true)` on that line. Read multi-line builders
+      for `.secure(true)`, `.http_only(true)`, `.same_site(..)`, `.path("/")` and no `.domain(`.
+      Rocket's defaults do not add Secure behind a TLS-terminating proxy.
+- [ ] **Debug build or dev tooling in production (§7), meaning the service is not in release
+      mode. High if it is reachable off-host, else Medium.** Run
+      `rg -n --hidden -g '!target' '#\[cfg\((all\(|any\()?debug_assertions|console_subscriber::|ROCKET_PROFILE|TOKIO_CONSOLE_BIND|tokio_unstable|cargo("?,\s*"|\s+)run' .`.
+      It covers `.cargo/` config, Dockerfiles and manifests. Each hit needs a reason it
+      cannot reach production: a dev-only route, a console behind a feature that is off, no
+      `ROCKET_PROFILE=debug`, and images built with `--release`. Also confirm the startup
+      check that refuses a debug build.
 - [ ] Arithmetic on input: `rg '(len|size|count|offset|idx)\s*[+*-]' -t rust`
       near parsing code — wrapped math on untrusted values = High;
       `rg 'as u(8|16|32)|as usize' -t rust` in protocol code for truncating
@@ -229,12 +442,26 @@ network:
 - [ ] `rg '#\[derive\(.*Debug' -t rust` on structs with `password|secret|key|
       token` fields; `rg '==' -t rust` comparing MACs/tokens (want `ct_eq`);
       secrets not in `SecretString`/`Zeroizing` = Medium-High.
-- [ ] `rg 'thread_rng|SmallRng|StdRng::seed' -t rust` in key/nonce/token
-      generation paths → require OsRng/getrandom.
+- [ ] `rg 'thread_rng|rand::rng\(|SmallRng|StdRng::seed|seed_from_u64' -t rust` in
+      key/nonce/token generation paths → require the OS RNG (`SysRng` in rand
+      ≥ 0.10, `OsRng` earlier) or `getrandom`.
+- [ ] `rg 'bincode' -g 'Cargo.toml' -g 'Cargo.lock' .` — unmaintained (RUSTSEC-2025-0141):
+      new use = Low (pick a maintained format); decoding untrusted bytes without
+      `.with_limit` = High (§2, §6).
 - [ ] `rg 'untagged' -t rust` on network-facing types = review for DoS;
       `rg 'deny_unknown_fields'` absent on auth/config types = Low-Medium;
       body-size limits present at every ingest (axum `DefaultBodyLimit`,
       manual caps) — absent = High.
+- [ ] **Raw-SQL sinks fed a runtime string (§7) — High (Critical when the text is
+      caller-influenced)** —
+      `rg -n -t rust '(^|[^.A-Za-z0-9_])query(_as|_scalar)?(::<[^>]*>)?\([[:space:]]*&?(format!|[a-z_][A-Za-z0-9_.]*[[:space:]]*[,)(])|AssertSqlSafe\(|sql_query\([[:space:]]*&?(format!|[a-z_])|sql::<[^>]*>\([[:space:]]*&?format!' .`
+      (sqlx `query`/`query_as` over a built string, a variable or a call on one such as
+      `q.as_str()`, every `AssertSqlSafe`,
+      diesel `sql_query`/`sql::<T>` over a non-literal) ; then
+      `rg -l0 -t rust 'QueryBuilder' . | xargs -0 -r rg -n --with-filename '\.push\([[:space:]]*&?(format!|[a-z_][A-Za-z0-9_.:]*[[:space:]]*[()])'`
+      (`QueryBuilder::push` of a non-literal — must be `push_bind`, or an allowlisted
+      identifier; `Vec::push` in the same file is noise to read past). Macros
+      (`query!`) and `.query(` (e.g. reqwest's URL query) are excluded by design.
 - [ ] `rg 'format!\(.*(SELECT|INSERT|UPDATE|DELETE|WHERE)' -t rust -i` = High;
       `rg '\.join\(' -t rust` on user-supplied path segments without
       canonicalize+prefix check = High.
@@ -245,6 +472,9 @@ network:
 - [ ] Logs: `rg 'info!|warn!|error!|debug!' -t rust` near auth/headers — no
       `Authorization`/`Cookie`/body logging; user strings as structured
       fields, not message interpolation.
+- [ ] `rg 'output\(\)|wait_with_output' -t rust` where the child's output size is
+      not bounded by the caller = Medium (R9.6); `rg 'pre_exec' -t rust` — the
+      closure must be async-signal-safe (R9.7).
 - [ ] Severity calibration: RCE/memory corruption = Critical; authn/authz
       bypass, SQLi, traversal = Critical/High; attacker-reachable panic or
       unbounded allocation = High; missing CI audit gates = Medium-High;

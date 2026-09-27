@@ -101,7 +101,7 @@ COMMIT;
 - `updated_at` maintained by application code is unreliable (bulk fixes skip
   it, clock skew). Prefer DB-generated change tracking or CDC (rules/03)
   for correctness-critical syncs; periodically reconcile row counts against
-  the source either way.
+  the source either way — plus control totals (rules/04, expectation battery).
 - **Late data policy is explicit per table:** how late is accepted (e.g.
   reprocess partitions up to 7 days back via merge), and what happens after
   (corrections batch, or documented "closed" partitions).
@@ -131,7 +131,7 @@ Backfills are a feature you design, not an emergency you improvise.
 
 ## Orchestration discipline
 
-Applies to Airflow (3.x as of 2026), Dagster, Prefect, and kin.
+Applies to Airflow 3+, Dagster, Prefect, and kin.
 
 - **The DAG declares ALL dependencies.** Hidden coupling — task B reads a
   table task A writes, but no edge exists and B just runs "later by cron" —
@@ -173,9 +173,13 @@ mart_dag   = DAG("marts",  schedule=[orders_stg])   # consumer triggered by prod
 
 ## dbt-style transformation discipline
 
-(Applies to dbt and equivalents — SQLMesh, etc. dbt note: the Fusion engine is
-in preview (preparing for GA) and dbt Core 2.0, built on the Fusion foundation,
-is in alpha as of mid-2026; don't hard-require Fusion-only features yet.)
+(Applies to dbt and equivalents — SQLMesh, etc. dbt note: dbt v2, the
+Fusion-based engine, is GA since 2026-09-14 (a native binary; on PyPI it is
+the `dbt` package; `dbt-core` still resolved to 1.x as of 2026-09-26) and
+v1.x remains supported.
+v2 supports no deprecated functionality: resolve every deprecation warning,
+including those new in 1.10+, before upgrading — see "Upgrading to v2" at
+docs.getdbt.com.)
 
 - **Tests on every model that matters:** at minimum `unique` + `not_null` on
   the primary key of every core/mart model, relationship tests on critical

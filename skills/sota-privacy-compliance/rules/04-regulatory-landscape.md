@@ -83,7 +83,12 @@ from data sales; Rhode Island as low as 35k).
 - CCPA/CPRA specifics: "sale/share" is defined broadly enough to cover ad-tech
   data flows; "Do Not Sell or Share" link; service-provider contracts restricting
   use (the DPA analog); California also enforces data-broker registration and
-  (effective 2026) location/health-adjacent restrictions.
+  (effective 2026) location/health-adjacent restrictions. Delete Act: from
+  **1 Aug 2026** a data broker must pull the state's DROP deletion platform at least
+  every 45 days, process each request within 45 days (an unverifiable one as a
+  sale/share opt-out), repeat the deletion every 45 days after, and stop selling
+  new data about that consumer (Cal. Civ. Code 1798.99.86(c)–(d)) — a scheduled
+  job and a suppression list, not a support ticket.
 - CPPA's finalized regulations (effective 1 Jan 2026): **risk assessments**
   (DPIA analog) for high-risk processing — pre-2026 processing assessed by
   31 Dec 2027, first submissions to the CPPA by 1 Apr 2028; **ADMT**
@@ -108,8 +113,23 @@ laws ban it outright for under-18s), default-private settings mandated, age
 assurance proportional to risk. Engineering consequences: an age signal in the
 data model that gates features/processing (not a birthday collected for fun —
 rules/02 §1), separate consent flows, and treating "we don't know users' ages"
-as a risk position to document, not an exemption. UK Age Appropriate Design Code
-and similar codes apply the same defaults-private logic. This area is enforcement-
+as a risk position to document, not an exemption. The amended COPPA Rule
+(90 FR 16918, effective 23 Jun 2025; compliance required since 22 Apr 2026 except
+16 CFR 312.11(d)(1), (d)(4) and (g)) adds **separate** verifiable parental consent for
+third-party disclosure not integral to the service (e.g. ad networks), a written
+retention policy with a deletion timeframe, and a written children's-data security
+program — so consent-for-disclosure is its own flag, not a clause in the first
+consent. UK Age Appropriate Design Code
+and similar codes apply the same defaults-private logic. **The child-directed /
+age decision comes from a classification the platform controls** (a
+publisher- or app-level child-directed setting, a kids-account tag, an
+age-assurance result), never from a flag the sender declares: OpenRTB 2.6's
+`regs.coppa` (0 = no, 1 = yes) sits in an object holding what "the sender deems
+applicable", so an omitted flag reads to a `== 1` check exactly like "not
+child-directed" — it fails open. Use a sender flag only to raise the bar. When no
+platform classification exists for the traffic, fail closed: treat it as
+child-directed and refuse profiling and model calls on personal data. OWASP:
+AI-Powered Advertising Systems Security cheat sheet. This area is enforcement-
 heavy and fast-moving — counsel review is non-optional.
 
 ## 2c. One capability set serves all regimes
@@ -138,13 +158,16 @@ mandatory** (removing "addressable" flexibility), require asset inventories,
 network segmentation, and tighter BA verification. It is **not final as of June
 2026** — but build to it anyway: it codifies what competent engineering already
 does, and the compliance window after finalization is short (~180–240 days).
-Breach notification: HHS + individuals within **60 days** of discovery (media for
-500+ records); BAs notify the covered entity. BAAs (business associate
+Breach notification: individuals within **60 days** of discovery; media when more
+than 500 residents of one State or jurisdiction are affected (45 CFR 164.406); HHS
+contemporaneously for 500+ individuals, else an annual log within 60 days of year
+end (164.408); BAs notify the covered entity. BAAs (business associate
 agreements) are the DPA analog — required before PHI flows to any vendor.
 
 ## 4. PCI DSS 4.x — scope is the whole game
 
-**Status (verified June 2026):** PCI DSS **v4.0.1** is the only active version
+**Status (as of 2026-09-26):** PCI DSS **v4.0.1** is the revision the PCI SSC
+document library features — confirm the active revision there before relying on it
 (v4.0 retired 31 Dec 2024). All future-dated v4 requirements became **mandatory
 31 March 2025** — including authenticated internal vulnerability scans, expanded
 MFA, automated log review, payment-page script integrity and tamper-detection
@@ -170,16 +193,20 @@ MFA, automated log review, payment-page script integrity and tamper-detection
 - In force 1 Aug 2024. Prohibited practices + AI literacy: applicable since
   **2 Feb 2025**. GPAI (general-purpose model) obligations: since **2 Aug 2025**.
 - General applicability: **2 Aug 2026**.
-- **Digital Omnibus on AI (adopted: Parliament 16 Jun 2026, Council 29 Jun 2026;
-  OJ publication pending as of early Jul 2026):** postpones high-risk
+- **Digital Omnibus on AI — Regulation (EU) 2026/1744 of 8 July 2026 (OJ L,
+  2026/1744, 24.7.2026; in force 27 Jul 2026):** postpones high-risk
   obligations — Annex III (use-case high-risk: employment, credit, education,
   essential services...) from Aug 2026 to **2 Dec 2027**; Annex I (AI in
   regulated products) to **2 Aug 2028**. These are now the operative dates; do
   not treat the delay as a reason to defer architecture — the obligations are
   data/logging/docs-shaped and cheap at design time, brutal at retrofit time.
-  The omnibus also adds a prohibited practice (AI generation of CSAM /
-  non-consensual intimate content) and postpones Art. 50 synthetic-content
-  marking to **2 Dec 2026** for systems on the market before 2 Aug 2026.
+  The omnibus also adds prohibited practices — Art. 5(1)(ba) non-consensual
+  intimate imagery of an identifiable person, (bb) CSAM — applying from
+  **2 Dec 2026**; gives Art. 50(2) synthetic-content marking until **2 Dec 2026**
+  for systems on the market before 2 Aug 2026; recasts Art. 4 AI literacy as
+  "take measures to support" (no guaranteed level); and adds Art. 4a, a legal
+  basis to process special-category data strictly for high-risk bias detection
+  and correction.
 
 **Engineering obligations if your system is high-risk (provider side):** risk
 management system across lifecycle; data governance (training-data relevance,
@@ -192,7 +219,16 @@ GPAI providers: training-content summary, copyright policy, downstream
 documentation (systemic-risk tier adds evals and incident reporting).
 Transparency (Art. 50): disclose AI interaction (chatbots), machine-readable
 marking of synthetic content / deepfakes — applicability aligned with the 2026–27
-dates above.
+dates above. One way to meet the Art. 50(2) machine-readable marking duty is a
+C2PA manifest whose hard binding (a cryptographic hash over the asset bytes —
+C2PA 2.2 requires at least one in a standard manifest) is created when the
+output leaves the generator. Every resize, bitrate-ladder step or stitched
+rendition is a new byte stream, so it needs its own signed manifest that names
+the previous one as an ingredient. A soft binding (watermark or fingerprint
+lookup) only helps find a lost manifest; C2PA says it must not stand in for a
+hard binding, so it is not the marking on its own. Build detail:
+sota-llm-engineering rules/05 §8. OWASP: AI-Powered Advertising Systems
+Security cheat sheet.
 
 ## 6. DORA & NIS2 — sector awareness
 
@@ -238,8 +274,11 @@ contractual residency):
 ```rego
 # GOOD: residency enforced as policy-as-code in CI (rules/05 §4) —
 # an EU-pinned dataset physically cannot be declared outside allowed regions
-deny[msg] {
-  r := input.resource_changes[_]
+# (Rego v1 syntax, the OPA 1.x default: `package` + `contains ... if`)
+package privacy.residency
+
+deny contains msg if {
+  some r in input.resource_changes
   r.type == "aws_s3_bucket"
   r.change.after.tags.data_residency == "eu"
   not startswith(r.change.after.region, "eu-")
@@ -259,9 +298,11 @@ deny[msg] {
 - [ ] Breach capability meets 72h GDPR clock today (rules/06); pending Digital Omnibus changes tracked, not assumed
 - [ ] US: single rights pipeline covers strictest state requirements; GPC honored; sensitive-data opt-in implemented; state-tracker re-checked this quarter; California risk-assessment/ADMT/cyber-audit deadlines (2026–2030 phase-in) tracked
 - [ ] Minors: age signal modeled and gating where service could reach under-18s; no targeted ads to known minors; parental-consent flow where required
+- [ ] Child-directed decision comes from a platform-controlled classification and fails closed when absent; a sender flag such as `regs.coppa` only raises the bar (§2b). HIGH where an omitted flag lets profiling run. Probe for the sender flag used as the boundary: `grep -rnE "coppa[\"']?\]?\)?[[:space:]]*(==|===|!=|!==)[[:space:]]*[01]|[\"']coppa[\"'][[:space:]]*,[[:space:]]*0\)" .`
 - [ ] HIPAA (if applicable): §164.312 safeguards mapped to controls; encryption + MFA universal (NPRM-proof); BAAs precede every PHI vendor flow
 - [ ] PCI: scope minimized (hosted fields/tokenization); no CVV at rest anywhere (grep + scanner); CDE segmented; payment-page script integrity controls live
 - [ ] AI Act: systems classified (prohibited/high-risk/transparency/GPAI); for high-risk candidates, logging + data-governance + documentation designed now against the post-omnibus dates
+- [ ] AI Act Art. 50 marking: generated media leaves the generator with a hard-bound, signed C2PA manifest; each rendition or transcode is re-signed with the prior manifest as ingredient; soft binding is used only for recovery (§5) — MEDIUM; judgment, no generic probe (see sota-llm-engineering rules/05 for the generation-call probe)
 - [ ] DORA/NIS2 (if in sector/supply chain): incident-reporting clocks wired into IR runbooks; third-party register current
 - [ ] Residency requirements per tenant/market recorded; region pinning enforced by policy-as-code; key residency where required
 - [ ] All dates/statuses in this file re-verified within the last 6 months against primary sources

@@ -13,7 +13,7 @@ stable corpora often no longer need a vector pipeline.)
 
 | Situation | Choice |
 |---|---|
-| Corpus fits comfortably in context (≲ a few hundred K tokens), is stable across requests | **Long context + prompt caching.** Whole corpus in the cached prefix (rules/02 §5); reads at ~0.1× price. Simpler, no retrieval-miss class of bugs. Eval still required. |
+| Corpus fits comfortably in context (≲ a few hundred K tokens), is stable across requests | **Long context + prompt caching.** Whole corpus in the cached prefix (rules/02 §5); reads at 0.1× input price or less, per model. Simpler, no retrieval-miss class of bugs. Eval still required. |
 | Corpus is large, changing, per-tenant, or ACL-filtered | **RAG.** Retrieval is the only way to scale, stay fresh, and enforce per-user access. |
 | Need is *behavior/format/style*, not knowledge | **Prompting, then fine-tuning** (rules/06 §1). Fine-tuning is for form, not facts — it does not reliably inject or update knowledge. |
 | Need citations / auditability of sources | **RAG** (or long context with inline source markers). Weights can't cite. |
@@ -96,6 +96,22 @@ Each stage exists to fix the previous stage's failure mode; each costs
 latency. Add stages bottom-up only when the retrieval eval shows the failure
 they fix. A reranker on top of broken chunking is lipstick.
 
+**Shape the result set so one poisoned passage cannot own it.** Top-k alone
+always returns k chunks, however weak the match, and a planted passage written
+to match many queries takes a slot on every one. Three controls, each
+calibrated on the golden retrieval set (§6) because score scales differ per
+embedding model: a **minimum relevance score** beside the top-k cap — below the
+floor you get fewer chunks or none, and the grounded-or-refused path (§7)
+handles the empty set; **diversity-aware selection** (maximal marginal
+relevance — in LangChain, `as_retriever(search_type="mmr")` with `fetch_k` and
+`lambda_mult`, or `search_type="similarity_score_threshold"` with a
+`score_threshold` for the floor) so near-duplicates cannot fill every slot; and
+for restricted policy categories (eligibility, pricing, refunds), **anchor
+chunks** — pin the canonical passages, require k of n of them in the result,
+and otherwise answer from a deterministic rules path, not the model. OWASP:
+OWASP RAG Security cheat sheet; OWASP AI-Powered Advertising Systems Security
+cheat sheet.
+
 ## 5. Query transformation
 
 User queries are not good search queries. In rough order of payoff:
@@ -145,6 +161,23 @@ tell you which stage failed (rules/01 §6).
   context; if the context doesn't contain the answer, say so. "Not in the
   corpus" is a first-class outcome with its own eval cases — a RAG system
   that never refuses is hallucinating on the gaps.
+- **Score every answer at runtime, not only a sample offline.** Sampled
+  online judging (rules/01 §4) tells you the hallucination *rate*; it does
+  nothing for the answer in front of the user now. Attach a confidence signal
+  to each response before it ships — a groundedness score from a check you
+  have calibrated against labelled cases, agreement across several sampled
+  generations, or token log-probabilities where the API returns them (the
+  OpenAI Chat Completions SDK takes `logprobs`, and its Responses API returns
+  them when `include` lists `message.output_text.logprobs`; the Anthropic
+  Messages SDK has no such parameter — check yours). Below a threshold set on the eval,
+  withhold the answer and take the degradation path (rules/05 §6) or queue
+  it for a human; never ship it with a disclaimer bolted on. Answer classes
+  your policy rates high-risk (medical, legal, financial, anything that
+  drives an action) get an extra verification pass regardless of score.
+  **Resolve every URL, API endpoint, package name and record ID** the model
+  emits against a source of truth (the supplied context, an allowlist, a
+  lookup) before rendering it — an invented identifier reads exactly like a
+  real one. OWASP: AISVS 7.2.1–7.2.3, 12.3.2; OWASP DSOMM.
 - **Citations are structural:** assign stable IDs to context blocks, require
   the model to attach source IDs per claim (structured output, rules/02 §6),
   and **resolve them in code** — every cited ID must exist in the supplied
@@ -157,6 +190,17 @@ tell you which stage failed (rules/01 §6).
   Track and alert on index lag (source `updated_at` vs index `indexed_at`);
   surface document dates to the model so it can prefer current sources and
   caveat stale ones.
+- **Caches and derived copies follow the source's lifecycle.** A response
+  cache or semantic cache (rules/05 §3 item 7) holds answers built from
+  documents; when a document is edited, deleted or has its permissions
+  changed, evict every cached answer and embedding derived from it — key
+  cache entries by the source IDs they drew on so the eviction is a lookup,
+  not a flush. Cap cache TTL by the sensitivity of the most sensitive source
+  behind the entry, and never let an embedding or cached answer outlive the
+  retention period of its source. Keep a deletion log (source ID, time,
+  stores purged) and sweep the vector store periodically for chunks whose
+  source no longer exists — an orphan is retrievable data nobody owns.
+  OWASP: OWASP RAG Security cheat sheet.
 - **Corpus integrity (OWASP RAG Security):** the vector store is attacker-
   reachable if anyone can write to it. Restrict writes to the ingestion
   identity, store a content hash (SHA-256) per chunk and verify it before
@@ -165,6 +209,28 @@ tell you which stage failed (rules/01 §6).
   they let an attacker probe and reconstruct corpus contents. Rate-limit
   retrieval per identity. Vector-DB auth/network hardening is in
   sota-code-security rules/08 §4.
+
+### 7a. Index integrity beyond the chunk hash
+
+- **Security metadata is write-once.** ACL, tenant, source and ingest-time
+  tags are set by the ingestion identity at ingest and never updated in place;
+  a change is a re-ingest (new chunk, old one deleted, both logged). A payload
+  API that can rewrite them (e.g. Qdrant `set_payload`/`overwrite_payload`) is
+  an authorization bypass for anyone holding write access — restrict it to
+  non-security keys.
+- **Quarantine outliers before they serve.** New vectors land in a staging
+  collection; one far outside the corpus distribution (distance to its nearest
+  neighbours or cluster centroid well beyond the norm) waits for review before
+  promotion. It is a heuristic tuned on your corpus, not proof of poisoning.
+- **Expiry is a query filter.** A chunk with an `expires_at` is excluded by an
+  in-engine filter at retrieval time (§4 item 5); a cleanup job alone leaves
+  the gap between expiry and its next run.
+- **Re-embedding is a tamper check.** Record the model version per document
+  (§3). Re-embedding unchanged text under the same model should reproduce its
+  vector within numeric tolerance, so a document that moves had its stored
+  text or the pipeline changed; across a model change, compare each document's
+  nearest-neighbour set in the old and new index and review the largest
+  shifts. OWASP: AISVS 8.1.2, 8.2.2, 8.3.1; OWASP RAG Security cheat sheet.
 
 ## 8. Agentic retrieval vs one-shot
 
@@ -212,5 +278,27 @@ queries needing tool choice (search vs SQL vs API).
 - [ ] Citations structurally validated in code against supplied context IDs.
 - [ ] Freshness: event-driven (or scheduled) reindex with reconciliation;
       deletes/ACL revocations propagate to the index; index lag monitored.
+- [ ] Each answer carries a runtime confidence score (calibrated groundedness,
+      multi-sample agreement, or logprobs) with a withhold/fallback/human
+      threshold; high-risk classes verified again; emitted URLs, endpoints
+      and IDs resolved before rendering (§7). **High** on consequential routes.
+      Probe — model text returned straight to the caller, read each hit for a
+      gate: `grep -rnE 'return [A-Za-z_]*\.(content\[0\]\.text|choices\[0\]\.message\.content|output_text|outputText)' .`
+- [ ] Source edit, delete or permission change evicts dependent cached
+      answers and embeddings; cache TTL capped by source sensitivity and
+      retention; deletion log kept; orphan-chunk sweep scheduled (§7).
+      **High** (Critical if a revoked document's answer is still served).
+      Probe — cache writes with no expiry:
+      `grep -rnE '(semantic_cache|answer_cache|response_cache)\.(set|put|add)\(' . | grep -vE 'ttl|ex=|expire'`
 - [ ] Agentic retrieval only where one-shot demonstrably fails; bounded per
       rules/04.
+- [ ] Retrieval has a calibrated relevance floor beside top-k, diversity-aware
+      selection, and anchor chunks (k of n, else a rules path) for restricted
+      policy categories (§4). **Medium** (High where retrieved text drives an
+      action). Probe — retrievers with neither a floor nor MMR:
+      `grep -rnE 'similarity_search\(|as_retriever\(' . | grep -vE 'score_threshold|mmr'`
+- [ ] ACL/tenant/source tags write-once; outliers quarantined before
+      promotion; `expires_at` filtered in-engine; re-embedding drift reviewed
+      (§7a). **High** for mutable ACL/tenant tags. Probe — payload updates
+      touching security metadata:
+      `grep -rnE '(set_payload|overwrite_payload|update_metadata)\(' . | grep -iE 'acl|tenant|owner|source'`

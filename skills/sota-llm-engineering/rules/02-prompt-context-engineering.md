@@ -37,6 +37,18 @@ Rules that follow from how models attend and how caches key (§5):
 - **One source of truth per rule.** Contradictions between system prompt,
   few-shots, and templates produce nondeterministic obedience. When editing,
   search for the old rule everywhere — including the examples.
+- **Self-contained prompt: inline what the model must obey; never point it at
+  a file it may not have.** A prompt that says *"use the schema in `config.py`"*
+  or *"follow the MISP format from the other doc"* works only when that file
+  happens to be in context. When it is not — a different entrypoint, a trimmed
+  context, a fresh session — the model does not error; it **fabricates** a
+  plausible substitute (invented field names, wrong enum arms, a hallucinated
+  format) and the output looks right. A cross-reference to out-of-context
+  material silently degrades to hallucination. Inline every schema, format,
+  enum, and hard rule the prompt depends on (or assemble it in code before the
+  call). This is the *opposite* of the on-demand file loading a coding agent
+  does from a router — the model executing a prompt has no loader and cannot
+  fetch what you name. (Adopted 2026-07-24.)
 - **Don't prompt what you can enforce in code.** Format → schema (§6).
   Authorization → code (sota-code-security rules/08). Budgets → harness
   (rules/04). Prompts are steering, never the enforcement boundary.
@@ -57,18 +69,32 @@ Budget by category, enforce in code:
 | Few-shot examples | Only as many as the eval justifies (§3). |
 | Retrieved context | Top-k *after* reranking, token-capped; never "all matches". |
 | Conversation history | Sliding window + summarization/compaction past a threshold (rules/04 §5); never unbounded append. |
-| Live input | Validated for length at the boundary; oversized input → explicit chunking/summarization strategy, never silent truncation. |
+| Live input | Validated for length at the boundary; oversized input is **rejected with an error** by default. Chunking or summarization only where the design chose it for that route — never silent truncation. |
 
 - **Measure with the provider's token counter** (e.g. a `count_tokens`
-  endpoint). Never use another provider's tokenizer (tiktoken counts are
-  wrong for non-OpenAI models by 15–20%+).
+  endpoint). Never use another provider's tokenizer, and never a chars/4 rule of
+  thumb. The error is **not a rounding error**: on prose it runs 15–20%+, and on
+  **markdown- and code-dense text it is far worse** — one 42.8 KB instruction file
+  measured **16,934** tokens via Anthropic's `count_tokens` against **10,995** from
+  `o200k_base` — the foreign tokenizer sits **35% below** the real count, which is the same
+  gap seen from the other end as the real count being **54% above** it. A chars/4 estimate
+  in that project's own docs was **38% below** a 16,442-token file (2026-08-26). *State
+  which direction you mean*: "54% under-count" reads as the first number and is the second,
+  and a budget sized on the wrong one is wrong in the direction that makes you think you
+  have room.
 - **Exclude by default.** Every block in the prompt must answer "what eval
   case gets worse if I remove this?" If nothing — remove it. Prompt rot (§7)
   is mostly accretion of unfalsifiable additions.
-- **Truncation must be explicit and lossy-aware**: truncate at document/
-  section boundaries with a `[...N sections omitted...]` marker, prefer
-  summarize-then-include for long tails, and surface to the user when input
-  was reduced.
+- **Over-budget user input is refused, not cut.** A slice like `text[:N]` or a
+  Hugging Face tokenizer's `truncation=True` (it cuts from the
+  `truncation_side`, `"right"` by default) on the assembled prompt can drop
+  the system instructions or the safety block, and the model never knows. Return an error naming the limit; accepting long input via
+  chunking or summarization is a per-route design decision recorded next to
+  the budget. OWASP: AISVS 2.1.4.
+- **Truncation of retrieved or historical context must be explicit and
+  lossy-aware**: truncate at document/section boundaries with a
+  `[...N sections omitted...]` marker, prefer summarize-then-include for long
+  tails, and surface to the user when context was reduced.
 
 ## 3. Few-shot selection
 
@@ -120,15 +146,38 @@ prompt = f"Answer this: {user_input}. Use document: {doc}. Reply as JSON."
 - Where the provider supports distinct roles/channels for operator vs user
   content (system role, mid-conversation system messages), use them instead
   of smuggling operator instructions into user-turn text.
+- **Reserved tokens in untrusted text stay text.** When you tokenize or
+  template for a self-hosted model, a string such as `<|im_start|>` or
+  `<|endoftext|>` inside user or retrieved content must encode as ordinary
+  characters, not as the control token — otherwise the input can close its
+  own turn and open a forged system one. Defaults differ, verified
+  2026-09-25: tiktoken's `encode()` raises on special-token text unless told
+  otherwise (`encode_ordinary()` or `disallowed_special=()` encode it as
+  plain text; `allowed_special="all"` turns it into the control token);
+  Hugging Face fast tokenizers map it to the special token by default
+  (`split_special_tokens=False`) — pass `split_special_tokens=True` for
+  untrusted segments, or escape the strings before templating.
+- **State the instruction hierarchy and test it.** System/developer
+  instructions outrank user turns, which outrank retrieved or tool content;
+  say so in the system prompt and keep eval cases where lower-tier content
+  tries to countermand a higher tier. After a long retrieved block, restate
+  the few instructions that must hold (§1 placement) and confirm the
+  placement per model on the eval — it does not transfer between models.
+  None of this is a control: security wording in a system prompt steers,
+  assume the prompt will be disclosed, and enforce in code
+  (sota-code-security rules/08). OWASP: AISVS 2.1.6, 2.1.7; OWASP LLM
+  Prompt Injection Prevention cheat sheet; OWASP RAG Security cheat sheet.
 
 ## 5. Caching-aware prompt structure
 
 Prompt caching is a **prefix match**: providers cache the rendered prompt up
 to a breakpoint, and any byte change anywhere in the prefix invalidates
-everything after it. Economics (Anthropic, verified July 2026; other
-providers similar in shape): cache reads ~0.1× input price, writes ~1.25×
-(5-min TTL) or 2× (1-h TTL); render order is tools → system → messages;
-minimum cacheable prefix ~0.5–4K tokens depending on model. Providers now
+everything after it. Economics (Anthropic; other providers similar in
+shape): cache reads 0.1× input price on most models and lower on some newer
+ones (0.05×, 0.025× — the multiplier is per model), writes 1.25× (5-min TTL)
+or 2× (1-h TTL) — both verified 2026-09-26 on its pricing page; render order
+is tools → system → messages; minimum cacheable prefix ~0.5–4K tokens
+depending on model (verified July 2026). Providers now
 also offer an automatic mode (e.g. a single top-level `cache_control` field)
 that advances the breakpoint as the conversation grows — the right default
 for multi-turn chat; explicit breakpoints (up to 4) remain the tool for
@@ -153,7 +202,10 @@ prompt structure can triple spend and add seconds of latency — silently.
 If code consumes the output, the output is an API response and gets a schema.
 All major providers ship native structured output as of mid-2026 (verified:
 Anthropic `output_config.format` json_schema + `strict: true` tool schemas +
-SDK `parse()` helpers; OpenAI structured outputs; Gemini `responseSchema`).
+SDK `parse()` helpers; OpenAI structured outputs; Gemini `response_format`
+with a JSON schema on its Interactions API, which Google recommends for new
+projects — the older `generateContent` surface is legacy but still supported,
+as of 2026-09-26).
 There is no remaining excuse for regex-harvesting JSON out of prose.
 
 ```python
@@ -181,13 +233,38 @@ category = data.get("category", "other")                    # silently launders 
   truncations bypass the schema.
 - **Repair loop, bounded:** on validation failure, one retry feeding back
   the validator errors ("your output failed: <errors>; emit corrected JSON
-  only"). On second failure: reject into an explicit error path / fallback /
-  human queue. Unbounded repair loops are a cost bug; silent `except: pass`
-  defaults are a correctness bug (High).
-- **Check `stop_reason` before parsing.** `max_tokens` → truncated JSON
-  (raise the cap, don't repair-loop it); `refusal` → no schema guarantee
-  (handle explicitly). Code that indexes `content[0]` unconditionally
-  breaks on refusal-shaped responses.
+  only"). On second failure: an explicit error path / fallback / human queue.
+  Unbounded repair loops are a cost bug; silent `except: pass` defaults are a
+  correctness bug (High).
+- **Whole-document rejection is a recall control — rate it as one.** When a
+  document fails on one field (a synonym for an enum arm, `id` where the schema
+  said `name`), rejecting it does not yield a better document; it yields an
+  absent one, and each repair attempt bills. Where the producer is a model *you*
+  invoked and the extraction is the only copy, prefer salvaging the valid
+  remainder and **recording what was dropped** — a per-field reject counter and
+  the offending value, not a discarded document. This does not extend to an
+  untrusted caller: at a trust boundary, unknown or unparseable fields are still
+  reject (`sota-code-security` rules/09 §4). The distinction is who authored the
+  document, not how the parse failed.
+- **When a field goes constant, the seam is here, not in the reader.** An empty
+  or zero column across a large row count usually means the consumer reads a key
+  the model never emits — `sota-code-security` rules/13 §4a, whose runtime
+  detector (log the returned keys nothing consumed) is what closes it.
+  Constrained decoding above is the structural fix; instructing the format in
+  the prompt demonstrably is not, and §1's inline-the-schema rule does not help
+  here — it was already satisfied in every reported case.
+- **Check `stop_reason` before parsing.** `max_tokens` or
+  `model_context_window_exceeded` → truncated JSON (raise the cap or shrink
+  the input, don't repair-loop it); `refusal` → no schema guarantee (handle
+  explicitly); `pause_turn` → not finished, send the content back to
+  continue (Anthropic's stop-reason values, verified 2026-09-26). Code that
+  indexes `content[0]` unconditionally breaks on refusal-shaped responses.
+- **Set `max_tokens` explicitly at every structured-output call site.** An unset
+  cap inherits a client/config default sized for chat, so a long JSON document
+  hits it silently — the call returns a fragment, not an error. Where the
+  provider reports usage, also assert `output_tokens < max_tokens`: a wrapper
+  that drops `stop_reason` leaves that arithmetic as your only tell
+  (`sota-code-security/rules/16` §2.7, `rules/11` §2.2).
 - **Schema design for models:** flat-ish, every field `description`-annotated,
   enums for closed sets, `additionalProperties: false`, no clever recursion.
   Include an escape hatch field (`"unsure": true` / `"other"` enum arm) so
@@ -221,6 +298,9 @@ category = data.get("category", "other")                    # silently launders 
       interpolated into the prefix; per-request content injected late.
 - [ ] Critical instructions placed at the edges of long contexts; no
       contradictions across system prompt / few-shots / templates.
+- [ ] Prompt is self-contained: every schema/format/enum/rule it depends on is
+      inlined or code-assembled, not referenced by pointing at a file that may
+      not be in context (which degrades silently to fabrication).
 - [ ] Context assembled under explicit per-category token budgets; provider
       token counter used; truncation explicit, boundary-aware, surfaced.
 - [ ] Few-shots consistent with current instructions, demonstrate boundary
@@ -228,6 +308,12 @@ category = data.get("category", "other")                    # silently launders 
 - [ ] Untrusted content enters via typed, delimited, trust-labeled slots
       with delimiter escaping — no f-string concatenation into instructions
       (cross-check sota-code-security rules/08).
+- [ ] Untrusted text never tokenizes into control tokens; instruction
+      hierarchy stated and eval-tested; key instructions restated after
+      retrieved content; no prompt wording treated as the control (§4).
+      **High** where a self-hosted model tokenizes user input. Probe:
+      `grep -rnE 'allowed_special[[:space:]]*=[[:space:]]*.all|split_special_tokens[[:space:]]*=[[:space:]]*False' .`
+      (also read calls that omit `split_special_tokens` — False is the default).
 - [ ] Prompts are named constants/files in the repo, versioned, diffable;
       traces carry prompt version.
 - [ ] Cache-aware ordering verified: frozen prefix, deterministic
@@ -235,9 +321,21 @@ category = data.get("category", "other")                    # silently launders 
 - [ ] All machine-consumed output schema-constrained (structured output API
       or strict tool schema), client-validated, bounded repair then explicit
       reject; no regex/substring JSON harvesting.
+- [ ] Whole-document rejection over one bad field is treated as a **recall**
+      decision — valid remainder salvaged and the drop recorded — for
+      model-authored documents, and never relaxed at a trust boundary (§6);
+      no field read out of a model response with a default that is
+      indistinguishable from absence (`sota-code-security` rules/13 §4a).
 - [ ] `stop_reason`/refusal/truncation handled before parsing; no
-      unconditional `content[0]` access.
+      unconditional `content[0]` access; `max_tokens` set explicitly at every
+      structured-output call site, and `output_tokens < max_tokens` asserted.
 - [ ] Schemas: descriptions on fields, enums for closed sets, escape-hatch
       field present, provider-unsupported constraints validated client-side.
 - [ ] No prompt rot: every rule traceable to an eval case; legacy
       model-specific scaffolding removed on model migration.
+- [ ] User input over the token budget rejected with an error by default;
+      chunking/summarization only where chosen per route; no slice or
+      tokenizer truncation of user text or the assembled prompt (§2).
+      **Medium** (High when the cut can drop system or safety content).
+      Probe — slicing or tokenizer truncation of input:
+      `grep -rnE '(input|prompt|query|message|user_text|text)\[:[A-Za-z0-9_]+\]|truncation[[:space:]]*=[[:space:]]*True' .`

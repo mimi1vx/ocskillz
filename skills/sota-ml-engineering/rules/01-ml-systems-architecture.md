@@ -50,6 +50,13 @@ the model.
 - Store the model with everything needed to reproduce and explain it: training
   data reference + hash, feature versions, hyperparameters, code commit,
   environment, and eval report.
+- Every change to a model (registration, alias move, promotion, rollback,
+  deletion) writes an append-only audit record: who, what, when, the approval
+  reference. A registry whose history can be edited in place cannot answer
+  "what served on the 3rd". Fine-tuning checkpoints that may ever be evaluated
+  or served are registered as their own artifacts, with their own lineage, not
+  kept as loose files beside the final model (dataset lineage: `rules/02` §5).
+  OWASP: AISVS 3.5.4, 12.5.3.
 
 ## 5. Reproducibility is architectural
 
@@ -58,7 +65,31 @@ the model.
   "We can't reproduce the prod model" is a HIGH finding — you can't debug,
   audit, or safely retrain it.
 
-## 6. The Hidden-Technical-Debt anti-patterns
+## 6. Trust domains: training, evaluation, serving
+
+- Training, evaluation and production inference are **separate trust domains**:
+  separate credentials, separate network reach, and no path by which a training
+  job can write to what serving reads except through the gated registry
+  promotion (`rules/04`, `rules/05`).
+- Training logs, checkpoints, intermediate outputs and the experiment tracker
+  hold data and near-final weights; restrict them like production data. An
+  experiment tracker started with no authentication (for example `mlflow
+  server` without `--app-name basic-auth`, which runs the unauthenticated
+  default app) exposes every run's artifacts to anyone who can reach it.
+- Compute control planes are remote code execution by design: a Ray dashboard /
+  job-submission API, a notebook server or a pipeline UI (e.g. Kubeflow) that
+  accepts a job runs it. None is ever reachable unauthenticated or from outside
+  its trust domain. Ray's jobs API is the worked case (CVE-2023-48022: remote
+  code execution; the vendor's position is "keep Ray on a controlled network");
+  token auth exists only since Ray 2.52.0 and is off by default — set
+  `RAY_AUTH_MODE=token` *and* keep network isolation. HIGH on sight when exposed.
+- Scope feature-store namespaces by purpose, so one model's pipeline cannot read
+  or overwrite another's features, and rotate the credentials that write
+  materialised features on the same cadence as other production credentials
+  (key-management guidance). OWASP: AI-Powered Advertising Systems Security
+  cheat sheet; Secure AI Model Ops cheat sheet.
+
+## 7. The Hidden-Technical-Debt anti-patterns
 
 Audit for these (Sculley et al.) — each is real ML debt:
 
@@ -81,22 +112,24 @@ Audit for these (Sculley et al.) — each is real ML debt:
 
 ## Audit checklist
 
-```bash
-# Reproducibility — HIGH if a prod model can't be rebuilt
-#   Is there a versioned link model → (data hash, code commit, config, env)?
-grep -rniE 'mlflow|wandb|model.?registry|model.?card|lineage' . | head
-ls -R | grep -iE 'requirements|environment.ya?ml|poetry.lock|uv.lock|Dockerfile|conda'   # env pinned?
-
-# Train/serve consistency — CRITICAL if features computed two ways
-grep -rniE 'feature.?store|feast|transform' --include='*.py' . | head
-#   Compare training feature code vs serving feature code — same source?
-
-# Glue code / pipeline jungle / config sprawl — MEDIUM
-grep -rniE 'TODO|FIXME|HACK|temp|quick' --include='*.py' . | grep -iE 'pipeline|feature|etl' | head
-find . -name '*.ipynb' | head        # notebook-only training/serving == debt
-
-# Undeclared consumers / feedback loops — MEDIUM/HIGH (manual)
-#   Who reads the model's outputs? Does the model's action affect its future training data?
-
-# Unused features kept in infra — LOW (Rules of ML: drop them)
-```
+- [ ] **Reproducibility — HIGH if a prod model can't be rebuilt Is there a versioned link model
+      → (data hash, code commit, config, env)?** —
+      `grep -rniE 'mlflow|wandb|model.?registry|model.?card|lineage' . | head` ;
+      `ls -R | grep -iE 'requirements|environment.ya?ml|poetry.lock|uv.lock|Dockerfile|conda'`
+      (env pinned?)
+- [ ] **Train/serve consistency — CRITICAL if features computed two ways** —
+      `grep -rniE 'feature.?store|feast|transform' --include='*.py' . | head` (compare training
+      feature code vs serving feature code — same source?)
+- [ ] **Glue code / pipeline jungle / config sprawl — MEDIUM** —
+      `grep -rniE 'TODO|FIXME|HACK|temp|quick' --include='*.py' . | grep -iE 'pipeline|feature|etl' | head`
+      ; `find . -name '*.ipynb' | head` (notebook-only training/serving == debt)
+- [ ] **Undeclared consumers / feedback loops — MEDIUM/HIGH (manual) Who reads the model's
+      outputs? Does the model's action affect its future training data?**
+- [ ] **Unused features kept in infra — LOW (Rules of ML: drop them)**
+- [ ] **Trust-domain separation (§6) — HIGH** — trackers started without auth:
+      `grep -rnE 'mlflow (server|ui)' . | grep -v 'app-name'`
+      (each hit is a tracker with no authentication); manual: do training jobs hold
+      credentials that can write serving or feature-store namespaces they don't own?
+- [ ] **Append-only model audit trail and registered checkpoints (§4) — MEDIUM (manual)** —
+      can the registry's history be edited or deleted by the same role that promotes? Are
+      evaluated checkpoints registered with lineage, or loose files?

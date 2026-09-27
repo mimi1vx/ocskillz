@@ -41,7 +41,7 @@ Adapt to language/stack; these locate the load-bearing code fast.
 
 ```bash
 # Logging reality: structured vs printf
-grep -rEn 'print\(|console\.log|System\.out|fmt\.Print' --include='*.{py,js,ts,go,java}' src/ | head
+grep -rEn 'print\(|console\.log|System\.out|fmt\.Print' --include='*.py' --include='*.js' --include='*.ts' --include='*.go' --include='*.java' src/ | head
 grep -rEn 'logger\.|log\.|slog\.|zap\.|structlog|pino|winston' src/ | head
 
 # Level abuse: expected events at error level
@@ -66,7 +66,7 @@ grep -rEn '\.labels\(|With\(prometheus\.Labels|attributes=' src/ | grep -vE '"(G
 grep -rEn '(livez|healthz|readyz|/health|/ready|liveness|readiness)' src/ k8s/ deploy/ charts/
 
 # Debug surface exposure
-grep -rEn 'pprof|actuator|debug|heapdump|/metrics' src/ k8s/ ingress* charts/ | grep -ivE 'test|_test'
+grep -rEn --exclude-dir=node_modules --exclude-dir=.git 'pprof|actuator|debug|heapdump|/metrics' . | grep -ivE 'test|_test'
 
 # Alerting/dashboards as code present at all?
 find . -path ./node_modules -prune -o -name '*.y*ml' -print | xargs grep -lE 'alert:|groups:|burn|slo' 2>/dev/null
@@ -93,6 +93,13 @@ fix. Severity per SKILL.md conventions.
 - G5. No wide event; debugging = joining 15 breadcrumbs by timestamp. [HIGH]
 - G6. Per-item loop logging, health checks logged, no sampling/retention
   policy; cost unowned. [MEDIUM]
+- G29. No logging inventory: nobody can say, per stack layer, which events are
+  logged, in what format, to which sink, read by whom, under what access
+  control and for how long; or it exists but is not shipped with release
+  documentation to the system owner, and code review and security testing
+  never check that the specified events fire with consistent names and
+  severities. [MEDIUM, HIGH where an audit trail is a compliance claim]
+  OWASP: ASVS 5.0 V16.1.1, Logging cheat sheet.
 
 **Metrics (rules/02):**
 - G7. No RED per route; or "error" undefined (4xx counted, timeouts not). [HIGH]
@@ -242,3 +249,7 @@ Rules for findings:
       collector SPOF, dead-man's-switch).
 - [ ] Findings carry file:line evidence, severity, concrete fix, effort;
       "shortest path to YES" list delivered.
+- [ ] Logging inventory requested and compared with the code (G29): pick
+      three events it lists (e.g. a failed login, an authorization denial, an
+      admin change), trigger each in a test or sandbox, and confirm the record
+      arrives in the named sink with the documented name, fields and severity.

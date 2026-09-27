@@ -12,7 +12,7 @@ description: >-
   instrumentation, health check, runbook, Sentry, crash reporting, profiling.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@efeb1dee4d959b51d61dbe4783f22e4110c93ed5
+  source: martinholovsky/SOTA-skills@a02c19971ad39254846890f87300a46b19e3e82e
   adapted-for: opencode
 ---
 
@@ -98,11 +98,11 @@ with the shortest path to YES.
 
 | File | Read this when... |
 |------|-------------------|
-| `rules/01-structured-logging.md` | Writing or reviewing log statements, choosing levels, designing wide events/canonical log lines, configuring redaction, sampling, or controlling log spend |
+| `rules/01-structured-logging.md` | Writing or reviewing log statements, choosing levels, designing wide events/canonical log lines, configuring redaction, sampling, controlling log spend, clock sync and event-vs-receive time, log-level governance, protecting the log store (read auditing, file placement, authenticated transport), or hardening the logging path against flooding and sink failure |
 | `rules/02-metrics.md` | Adding Prometheus/OTel metrics, choosing counter vs gauge vs histogram, designing labels, computing percentiles, applying RED/USE, linking metrics to traces via exemplars |
 | `rules/03-tracing.md` | Instrumenting with OpenTelemetry, deciding what gets a span, propagating context across HTTP/queues/jobs, choosing head vs tail sampling, using (or avoiding) baggage |
 | `rules/04-slos-alerting.md` | Defining SLIs/SLOs, error budgets, writing burn-rate alerts, reviewing alert quality, fighting alert fatigue, deciding page vs ticket |
-| `rules/05-operational-readiness.md` | Implementing health endpoints, exposing graceful degradation, securing debug endpoints, continuous profiling, Sentry-style error tracking, building dashboards |
+| `rules/05-operational-readiness.md` | Implementing health endpoints, exposing graceful degradation, securing debug endpoints, continuous profiling, Sentry-style error tracking, building dashboards, **edge access logs as a decision-grade signal**, keeping test-written telemetry out of the sink production writes — and the question with no instrument, where a proxy measurement silently answers a different one |
 | `rules/06-audit-playbook.md` | Auditing a codebase's observability posture end-to-end; common gaps catalog; scoring and reporting |
 
 ## Top 10 non-negotiables

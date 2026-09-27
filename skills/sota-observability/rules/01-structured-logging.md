@@ -28,11 +28,35 @@ Rules:
 - Consistent field names across the codebase: `duration_ms` everywhere, never
   a mix of `elapsed`, `time_taken`, `latency`. Maintain a field dictionary;
   prefer OTel semantic convention names (`http.response.status_code`,
-  `db.system`) where they exist.
+  `db.system.name`) where they exist.
 - Typed values: `duration_ms: 142` (number), not `"142ms"` (string). Units in
   the field name, not the value.
 - Timestamps in UTC ISO-8601 or epoch nanos, emitted by the logger, never
   hand-formatted.
+- A timestamp is only as good as the clock behind it. Every host that emits
+  logs, and every collector, syncs time (chrony, systemd-timesyncd, or the
+  cloud provider's time service), and drift is **alerted on**, not assumed —
+  with node_exporter the `timex` collector exports `node_timex_sync_status`
+  (1 = synchronised) and `node_timex_offset_seconds`. Without it, a timeline
+  rebuilt across hosts during an incident puts cause after effect. Where sync
+  cannot be guaranteed (browsers, mobile and edge devices, customer
+  appliances), keep the source's claimed time *and* the time the pipeline
+  received it — the OTel log data model has `Timestamp` and `ObservedTimestamp`
+  for exactly this — or record the measured offset, and never order security
+  events on the untrusted clock alone. OWASP: ASVS 5.0 V16.2.2, Logging cheat
+  sheet, Proactive Controls 2024 C9.
+- **When it happened is not when it was written.** Anything that emits later
+  than it acts — a queue consumer, a batch uploader, an offline client syncing,
+  a replay or backfill — stamps the event with the time the action occurred,
+  carried from the source, and lets the logger or pipeline add its own emit or
+  receive time beside it. Stamping "now" at emission puts a 3am login at the
+  9am sync in the timeline. In the OTel log data model `Timestamp` is the
+  origin's time (optional, may be absent) and `ObservedTimestamp` is when the
+  collection system saw it; exporters to one-timestamp formats use `Timestamp`
+  if present, else `ObservedTimestamp`. So a Collector transform that runs
+  `set(log.time, log.observed_time)` unconditionally erases the event time;
+  guard it (`where log.time_unix_nano == 0`) so it only fills a gap. OWASP:
+  Logging cheat sheet.
 - Multi-line payloads (stack traces) belong in a single JSON field
   (`exception.stacktrace`), never as raw multi-line output that shreds into
   N orphan lines in the aggregator.
@@ -68,6 +92,18 @@ Never log-and-rethrow at every layer — one exception must produce one ERROR
 line (at the boundary that handles it), not five duplicates that quintuple
 your error rate.
 
+**Level governance.** The production default level must already record what
+the business and compliance need — nobody should have to raise it after an
+incident to find out what happened. The security/audit stream is not governed
+by the operational level at all: route it through its own logger or handler
+that a level change (global, root or per-package) cannot silence. Changing the
+level at runtime goes through an approved path — a change record, or an
+automatic rule that raises verbosity for a bounded window and reverts on a
+timer — and the toggle itself is an authenticated, audited admin action
+(rules/05 §3). A scheduled check compares the level each running instance
+actually reports with the intended one, because a "temporary" DEBUG or OFF
+outlives the incident that caused it. OWASP: Logging cheat sheet.
+
 ## 3. Correlation: trace_id in every line
 
 A log line that cannot be joined to a request is gossip. Inject IDs from
@@ -96,7 +132,7 @@ Rules:
 - Propagate into async work: thread pools, queue consumers, cron-spawned
   tasks must restore context before logging (see rules/03 §4).
 - Also bind stable dimensions once per request: `user_id` (if policy allows),
-  `tenant_id`, `service.version`, `deployment.environment` — via logger
+  `tenant_id`, `service.version`, `deployment.environment.name` — via logger
   context, not repeated at every call site.
 - Audit test: pick any prod log line; you must be able to retrieve the full
   request trace and all sibling logs from it. If not, correlation is broken.
@@ -109,21 +145,33 @@ Enforce centrally, fail closed.
 **Bad:**
 
 ```js
-logger.info('login attempt', { headers: req.headers });   // Authorization, cookies
-logger.debug('user object', user);                        // email, address, hash
-catch (e) { logger.error('payment failed', { request: e.config }); } // card data in axios config
+logger.info({ headers: req.headers }, 'login attempt');   // Authorization, cookies
+logger.debug(user, 'user object');                        // email, address, hash
+catch (e) { logger.error({ request: e.config }, 'payment failed'); } // card data in axios config
 ```
 
-**Good** (pino):
+**Good** (pino) — a key scrub at any depth and case, because `redact.paths`
+are exact-depth and case-sensitive (`*.authorization` misses
+`req.headers.authorization`, `*.password` misses a top-level `password`
+and `req.body.password`, and neither sees axios's `Authorization`):
 
 ```js
-const logger = pino({
-  redact: {
-    paths: ['*.password', '*.token', '*.authorization', '*.cookie',
-            '*.ssn', '*.card_number', 'req.headers["x-api-key"]'],
-    censor: '[REDACTED]',
-  },
-});
+const SENSITIVE = /pass|secret|token|authorization|cookie|api.?key|ssn|card|email|address|hash|salt|^(data|body)$/i;
+const scrub = (v, seen = new WeakSet()) => {         // any depth, any case
+  if (v === null || typeof v !== 'object') return v;
+  if (v instanceof Date) return v.toISOString();     // Object.entries(Date) is empty
+  if (v instanceof Error)                             // allowlist: drops config,
+    return { type: v.name, message: v.message, code: v.code, stack: v.stack }; // request._header
+  if (seen.has(v)) return '[Circular]';
+  seen.add(v);
+  if (Array.isArray(v)) return v.map((x) => scrub(x, seen));
+  const out = {};
+  for (const [k, x] of Object.entries(v))
+    out[k] = SENSITIVE.test(k) ? '[REDACTED]' : scrub(x, seen);
+  return out;
+};
+// formatters.log does not see child() bindings: logger.child(scrub({...}))
+const logger = pino({ formatters: { log: (obj) => scrub(obj) } });
 ```
 
 Rules:
@@ -137,7 +185,11 @@ Rules:
   (email, name, address, IP where regulated), card/bank data (PCI scope
   contamination), encryption keys, signed URLs.
 - Exceptions are caught objects too: exception messages and locals can embed
-  connection strings and tokens. Scrub exception serializers as well.
+  connection strings and tokens. Scrub exception serializers as well — an
+  axios error's `request._header` is the raw header block as one string, so
+  no key match reaches it; serialize errors from an allowlist.
+- Test the redaction, not the config: log every known-bad shape above through
+  the real logger and assert no secret value appears in the output.
 - A secret found in logs is an incident: rotate the secret AND purge the log
   history; retention means the leak persists for the retention window.
 
@@ -145,7 +197,19 @@ Rules:
 
 The single highest-leverage logging practice. Instead of 15 scattered
 breadcrumb lines per request, emit ONE rich event at completion carrying
-everything needed to characterize that request. Scattered lines force
+everything needed to characterize that request.
+
+**"At completion" is doing real work in that sentence.** A line emitted mid-function
+attests only that *that line ran* — not that its result survived the filter, early
+return, exception path or reassignment that follows it. A count computed from a
+collection the function later discards is still a computed count, and still false: one
+real case logged `1 adjudicated` for weeks after the `return` beneath it stopped
+including that collection. So **site a claim where the value is consumed**, derived from
+what was actually returned or written: a producer may log its *intent*, only the
+consumer can report the *effect*. Verify it by changing what the function returns and
+reading the emitted line — for anything running unattended (cron, pipeline stage, agent
+loop) the log is the **only witness**, so a log unchanged by that mutation is the
+finding. Full class: `sota-code-security` rules/14 §1. Scattered lines force
 join-by-timestamp archaeology; the wide event makes "show me slow checkouts
 for enterprise tenants on v2.14" a single query.
 
@@ -226,7 +290,42 @@ logger.info("batch_completed", batch_id=b, ok=ok, failed=failed, duration_ms=ms)
   stream deliberately, not platform-default.
 - Review the top-10 log producers (by volume and by cost) monthly; the top
   emitter is usually a forgotten DEBUG line or a health check being logged.
-  Don't log load-balancer health-check requests at INFO at all.
+  Don't log load-balancer health-check requests at INFO at all — in the
+  **operational** stream. The security/audit stream is different: see §7.
+
+### 6a. The logging path under attack and under failure
+
+The logger is an input-driven resource like any other: if a request can cause
+a log line, an attacker can cause a million.
+
+- **Bound attacker-triggerable volume.** Rate-limit per source and per event
+  key (failed logins per client, validation errors per route) — emit a
+  summary (`suppressed=N` over the window) instead of every repeat. Give the
+  buffer, queue and local disk hard caps, and shed in priority order: DEBUG
+  first, operational INFO next, security/audit events last. Shedding is
+  itself a signal: count dropped records per level as a metric and alert on
+  any drop in the security stream.
+- **Unbounded queues move the outage, they do not remove it.** Python's
+  `queue.Queue()` with the default `maxsize=0` is infinite, so a flood grows
+  memory until the process dies; a bounded queue behind `QueueHandler` raises
+  `queue.Full` on `put_nowait`, which the handler routes to `handleError` —
+  the record is lost with a traceback on stderr and the app carries on
+  (measured, CPython 3.14). Choose that trade deliberately, and count it.
+- **No interleaved records.** Many threads or processes writing one sink must
+  go through a single writer (one queue plus one listener thread, or the
+  collector reading per-process stdout), not N handles on one file. POSIX
+  only promises that pipe writes of at most `PIPE_BUF` bytes are not
+  interleaved — a stack trace is larger than that, and a regular file shared
+  between processes has no such promise.
+- **Test the failure modes, and write down the answer.** Cover: sink
+  unreachable, disk full, write permission removed, and the logger itself
+  throwing (a serializer raising on an odd object). For each, the test
+  asserts that the request still succeeds (logging never crashes the app) and
+  that a security event is either delivered, buffered, or its loss is counted
+  and alerted — never silently gone. Where a security event cannot be
+  recorded at all, decide explicitly whether that operation fails closed.
+
+OWASP: Logging cheat sheet, Proactive Controls 2024 C9.
 
 ## 7. What NOT to log
 
@@ -235,10 +334,48 @@ logger.info("batch_completed", batch_id=b, ok=ok, failed=failed, duration_ms=ms)
   what spans and profilers are for.
 - Full request/response bodies by default. If a payload is needed for
   debugging, log it size-capped, sampled, redacted, behind a flag.
-- Health-check and readiness probe traffic at INFO.
+- Health-check and readiness probe traffic at INFO — operational stream only.
+- **The exception: do not filter known actors out of the security stream.**
+  Internal systems, uptime monitors, crawlers, scanners and pen testers are
+  exactly who an attacker pretends to be, and a filter keyed on a User-Agent
+  (`kube-probe/…`, which the kubelet sets unless the probe defines its own
+  header) or a source IP is a free pass for anyone who copies it. Keep their
+  security and audit events and tag them instead (`actor.class=monitor`,
+  `actor.class=pentest` with the engagement ID), so dashboards can exclude
+  them and investigations can still see them. OWASP: Logging cheat sheet.
 - Duplicate error reports up the call stack (§2).
 - Anything you wouldn't show a contractor with log access: logs are your
   widest-read datastore with your weakest access control.
+
+## 8. Protect the log store: access, placement, transport
+
+Logs hold the evidence an intruder most wants to read or erase, so the store
+gets the controls of a sensitive database. Integrity and tamper evidence are
+`sota-code-security` rules/18; this section is who reads, where files live,
+and how records travel.
+
+- **Reads are events too.** Record every query or export against the log
+  store (who, what scope, when) in a stream the reader cannot edit, and alert
+  on unusual readers or bulk exports. Read privilege is granted per role, may
+  need prior approval, and is re-reviewed on a schedule — stale access to logs
+  is stale access to everything the logs leaked.
+- **File logs, when unavoidable,** go on a partition or volume of their own,
+  apart from the OS, the application code and user-uploaded content, so a log
+  flood cannot fill the system disk and an upload path cannot reach the logs.
+  The directory is owned by the writing service account and closed to other
+  users (e.g. `0750`), files are not world-readable (e.g. `0640`), and the
+  web server never serves that path.
+- **Encrypt and authenticate the hop.** Any shipment across a network you do
+  not fully control uses TLS with certificate verification. Where a forged
+  event could drive a decision or hide an attack, verify the sender too: mTLS
+  or signed events from each source. In the OTel Collector, a receiver's
+  `tls.client_ca_file` makes it require and verify client certificates; on an
+  exporter, `insecure: true` turns TLS off and `insecure_skip_verify: true`
+  keeps TLS but skips server-certificate checks (both default to false).
+  Events from clients and other trust zones stay untrusted input
+  (`sota-code-security` rules/07 §2).
+
+OWASP: Logging cheat sheet, ASVS 5.0 V16.4.2 and V16.4.3.
 
 ## Audit checklist
 
@@ -263,3 +400,44 @@ logger.info("batch_completed", batch_id=b, ok=ok, failed=failed, duration_ms=ms)
       stream; health-check traffic not logged.
 - [ ] Exception serialization scrubbed (no connection strings/tokens in
       messages or stack locals).
+- [ ] (**Medium**) Every log-emitting host and collector syncs time and drift
+      is alerted (`node_timex_sync_status == 0` or an offset threshold);
+      clients and edge devices carry a received/observed timestamp beside
+      their own (§1). Probe for sync being switched off:
+      `grep -rnE 'systemctl[[:space:]]+(disable|mask|stop)[[:space:]]+(--now[[:space:]]+)?(chronyd?|systemd-timesyncd|ntpd?)([^[:alnum:]_-]|$)|timedatectl[[:space:]]+set-ntp[[:space:]]+(false|no|0|off)' .`
+      — every hit is a finding unless the host takes time another way.
+- [ ] (**High**) Attacker-triggerable log volume is rate-limited per
+      source/key, queues and disk are capped, shedding drops DEBUG before
+      security events and is counted; sink-down, disk-full, no-permission and
+      logger-throws cases are tested (§6a). Probe for unbounded log queues
+      (review which ones feed a `QueueHandler`):
+      `grep -rnE 'Queue\([[:space:]]*((maxsize[[:space:]]*=[[:space:]]*)?(-[0-9]+|0))?[[:space:]]*\)' --include='*.py' .`
+- [ ] (**High**) No filter drops security/audit events by User-Agent, source
+      IP or "known scanner/monitor" identity; such actors are tagged instead
+      (§7). Probe in pipeline configs and logging code — a hit on the
+      operational stream is fine, a hit on the security stream is the finding:
+      `grep -rniE '(exclude|drop|filter|skip|ignore).*(user.?agent|kube-probe|healthchecker|pingdom|uptimerobot|scanner|pentest)|(user.?agent|kube-probe|healthchecker|pingdom|uptimerobot|scanner|pentest).*(exclude|drop|skip|ignore)' .`
+      That probe misses the Collector `filter` processor's condition-list
+      form, where the drop is a bare list item; run this too (hits under a
+      `filter` processor are the finding):
+      `grep -rniE '^[[:space:]]*-[[:space:]]*.?(IsMatch|not |[a-z_.]*attributes\[)[^#]*(user.?agent|kube-probe|healthchecker|pingdom|uptimerobot|scanner|pentest)' --include='*.y*ml' .`
+- [ ] (**Medium**) Events that are emitted late (queue consumers, offline
+      clients, uploads, replays) carry the time the action happened, with the
+      emit/receive time as a separate field; no pipeline overwrites event time
+      with receive time (§1). Probe Collector configs — a hit without a
+      `where` guard is the finding:
+      `grep -rnE 'set\([[:space:]]*(log\.)?time(_unix_nano)?[[:space:]]*,[[:space:]]*(log\.)?observed_time(_unix_nano)?[[:space:]]*\)[^w]*$' --include='*.y*ml' .`
+- [ ] (**High**) The security/audit logger cannot be silenced by a level
+      change; runtime level changes go through an approved or auto-reverting
+      path and the running level is checked on a schedule (§2). Probe for
+      audit/security loggers (or root) set to OFF/ERROR/FATAL in Spring or
+      Log4j2 properties (YAML config needs a separate read):
+      `grep -rniE '(logging\.level\.(root|[[:alnum:]_.-]*(audit|security)[[:alnum:]_.-]*)|logger\.[[:alnum:]_.-]*(audit|security)[[:alnum:]_.-]*)[[:space:]]*[=:][[:space:]]*"?(off|error|fatal)' .`
+- [ ] (**High**) Reads of the log store are themselves logged and read
+      access is reviewed on a schedule; file logs sit on their own volume, not
+      world-readable; shipment across untrusted networks is TLS with
+      verification, and sources are authenticated where events drive
+      decisions (§8). Probes — exporter TLS disabled or unverified, then log
+      paths made world-readable:
+      `grep -rnE '^[[:space:]]*insecure(_skip_verify)?:[[:space:]]*true' --include='*.y*ml' .`
+      `grep -rnE 'chmod[[:space:]]+(-R[[:space:]]+)?[0-7]?[0-7][0-7][4-7][[:space:]]+[^[:space:]]*log' .`

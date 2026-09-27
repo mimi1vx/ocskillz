@@ -28,6 +28,8 @@ dbg_macro = "deny"
 todo = "deny"
 undocumented_unsafe_blocks = "deny"
 await_holding_lock = "deny"
+# nursery opt-ins (the group is not enabled above):
+redundant_clone = "warn"           # rules/01, rules/06
 
 # member crates: [lints] workspace = true
 ```
@@ -46,6 +48,84 @@ await_holding_lock = "deny"
   over module-level allows; an allow without a reason is a finding.
 - Run clippy on the same pinned toolchain as the build (lint sets drift across
   versions).
+
+### 1a. On a constrained target, a style lint's *premise* may be false
+
+Clippy's advice is near-universally correct because it is written against the
+assumptions of a hosted target: an 8 MB stack, an allocator, a real `std`. In an
+**eBPF program, an embedded or `no_std` crate, a WASM module, a kernel module or an
+interrupt handler**, one of those assumptions is gone, and a lint that encodes it
+silently spends a resource the compiler will not warn you about.
+
+Worked case. `clippy::needless_borrows_for_generic_args` (style, warn-by-default —
+*"taking a reference that is going to be automatically dereferenced"*, verified in
+clippy 0.1.97) fired on a map `insert(&key, &now, 0)` inside a BPF program and
+suggested the owned form. `insert` takes `impl Borrow<K>`, so the owned call
+monomorphises to `Borrow<K> for K` and copies the 52-byte key onto the stack. A BPF
+program gets **512 bytes for the whole call chain** — `MAX_BPF_STACK` in the kernel's
+`include/linux/filter.h` — of which a helper already held 344. The program stopped
+loading:
+
+```text
+combined stack size of 2 calls is 544. Too large
+```
+
+(that string is emitted by the kernel verifier, `kernel/bpf/verifier.c`.)
+
+Rules:
+
+- **Before taking a lint suggestion in such a crate, name the resource it spends.**
+  `Copy` means "cheap to copy" *on an 8 MB stack*; it says nothing about a 512-byte
+  one. The same applies to lints that suggest an owned value, an iterator adaptor, a
+  `format!`, or anything that inlines a larger frame.
+- **Do not let the word "mechanical" stand in for the analysis.** *"Mechanical",
+  "trivial", "just a rename", "style only"* are classifications that license skipping
+  evaluation, and they are applied **before** the evaluation that would justify them.
+  Treat them as a prompt to check, not as a conclusion — this is the linguistic tell
+  that a decision was made without being made.
+- **Prefer removing the lint's premise over silencing it.** Dropping `Copy` from an
+  oversized key type stops the lint firing *and* stops the next contributor
+  reintroducing the copy — better than `#[allow]`, which only silences this site. But
+  do not then claim the type *enforces* what it merely discourages.
+- **Set the policy at the crate, not the call site.** A constrained crate's
+  `[lints.clippy]` should `allow` the specific hosted-assumption lints with a reason
+  naming the constraint, so the rest of the group keeps working.
+- **Only a gate that loads or runs the artifact can catch this** — `fmt`, `clippy`
+  and lint passes all stop at the compiled object and were green on the broken one.
+  CI and supply-chain controls
+
+### 1b. Source shape is not a proxy for compiled behaviour
+
+§1a is a *lint's* premise being false on a constrained target. This is **your own reasoning's**
+premise being false, and it is the harder one because nothing fires.
+
+Rust makes source structure feel like it maps onto machine behaviour — ownership, scopes and
+struct layout usually do. At `opt-level=3` with LTO they need not, and on a target where the
+limit is checked at **load** time there is no compile error to correct you.
+
+Measured on rustc 1.97.1: a plain helper called once from a function disappears entirely at
+`opt-level=3` — the symbol is absent from the emitted assembly, while an `#[inline(never)]`
+neighbour in the same file still shows three call sites (the control that proves the absence
+is real, not a search artefact).
+
+```console
+$ rustc -C opt-level=0 --emit asm t.rs && grep -c fill t.s   # 2  — the boundary exists
+$ rustc -C opt-level=3 --emit asm t.rs && grep -c fill t.s   # 0  — it does not
+```
+
+Field-reported consequence: a helper was extracted from an eBPF program specifically so each
+transport would own one large stack local instead of two, and that reasoning was written into
+a commit message as fact. The verifier's own numbers before and after were **identical** —
+`stack depth 136+0+344+0` both times. The refactor was sound; the justification was fiction.
+
+- **A claim about memory layout cites a measurement from the toolchain that enforces the
+  limit** — the verifier's report, `-Zprint-type-sizes`, a linker map, `--emit asm`. Write it
+  as *"measured X on Y"* or do not write it.
+- **Extracting a function does not create a scope the optimiser must honour.** If you need
+  two lifetimes not to overlap, you need something the compiler cannot inline through — a
+  separate program, an explicit `#[inline(never)]`, or a different data flow.
+- **The numbers to compare are before and after on the same toolchain**, not one reading and
+  an argument. `sota-code-security` rules/15 §2a: a *pass* is not a number.
 
 ## 2. rustfmt — zero-config by default
 
@@ -91,6 +171,39 @@ await_holding_lock = "deny"
   (reproducible builds, same clippy everywhere). Libraries: MSRV floor +
   repository-supported stable CI matrix. For local work, use the installed
   system version when it satisfies those constraints.
+
+### 4a. The build is more than `Cargo.toml` — flags, profiles, channel, target
+
+The profile a reviewer reads in `Cargo.toml` is not the whole build. Measured on cargo
+1.97.1 unless a doc is cited:
+
+- **Flags from outside the manifest override the profile.** Cargo passes
+  `-C overflow-checks=on` from `[profile.release] overflow-checks = true` and then
+  *appends* `RUSTFLAGS`, so `RUSTFLAGS='-C overflow-checks=off'` won: an overflow test that
+  failed without it passed with it. `CARGO_BUILD_RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS` and
+  `[build] rustflags` in a `.cargo/config.toml` did the same — including a config file in a
+  **parent directory** of the crate. Cargo reads `.cargo/config.toml` from the working
+  directory and every ancestor, then `$CARGO_HOME` (cargo reference, "Hierarchical
+  structure"). Nothing in the repository changed.
+- **`rustc-wrapper` runs a program on every compile.** A `[build] rustc-wrapper` in any of
+  those files ran on `cargo check` (not on `cargo metadata`). That is build-time code
+  execution with `build.rs`'s trust (rules/05 §2), except it can come from outside the
+  repository. A legitimate wrapper (e.g. a compiler cache) is named, pinned and documented.
+- **Dev and test profiles keep their checks.** `overflow-checks` and `debug-assertions` are
+  on by default in `dev`/`test`. Turning them off there — in `Cargo.toml` or in a config
+  file's `[profile.*]` — made an overflow test and a `debug_assert!` test pass that had
+  failed. The suite then stops catching the wrapping arithmetic that release ships silently
+  (rules/05 §3). (ANSSI DENV-CARGO-OPTS, DENV-CARGO-ENVVARS)
+- **Ship from stable.** `#![feature(..)]` fails on stable (E0554) until `RUSTC_BOOTSTRAP=1`
+  is set; with it, the same crate built on the stable toolchain. Treat `RUSTC_BOOTSTRAP`
+  anywhere in a release build as a nightly build. Nightly jobs for Miri, sanitizers and
+  fuzzing (rules/03 §4) are tooling; they do not build what ships. (DENV-STABLE)
+- **A deploy target is a tier decision.** Per the rustc platform-support page, tier 1 is
+  "guaranteed to work" (built and tested on every change), tier 2 "guaranteed to build"
+  (tests not always run), and tier 3 has no official builds. Tiers move:
+  `x86_64-apple-darwin` was tier 1 at 1.85 and later dropped to tier 2, so re-check at each
+  toolchain bump. Safety-critical software uses tier-1 targets and a qualified toolchain.
+  (DENV-TIERS)
 
 ## 5. Feature flag hygiene
 
@@ -170,8 +283,20 @@ this skill:
   returned opaques suddenly borrow more.
 - `unsafe extern` blocks and unsafe attributes (`#[unsafe(no_mangle)]`) —
   FFI declarations are now explicitly trust-me-marked.
-- Temporaries in `if let`/match scrutinees drop sooner (tail-expression
-  temporary scope) — re-check `RefCell`/lock guards in conditions.
+- **`if let` scrutinee temporaries** now drop before the `else` block (were:
+  end of the whole `if let`) — a `RefCell` borrow or lock guard taken in the
+  condition is released before `else` runs. **`match` scrutinee temporaries
+  are unchanged**: a guard created in the scrutinee still lives through every
+  arm, so `match m.lock().unwrap().get() { … }` holds the lock across the arms.
+  Separately, **tail-expression temporaries** of a block now drop before the
+  block's locals. Measured on rustc 1.97.1: 2021 printed `else-body` then the
+  `if let` temporary's drop, 2024 the reverse; the `match` order was identical.
+- **Newly `unsafe` functions**: `std::env::set_var`, `std::env::remove_var`
+  and `CommandExt::before_exec` (E0133 without an `unsafe` block on 1.97.1).
+  Setting the environment races any thread that reads it, so call these only
+  before spawning threads or starting an async runtime (first lines of `main`),
+  with a `// SAFETY:` comment saying so; prefer passing an explicit config
+  struct over mutating the process environment, and `Command::env` for a child.
 - `Future`/`IntoFuture` in prelude; `gen` keyword reserved.
 - Resolver v3 (MSRV-aware) default with edition 2024 (§4).
 
@@ -188,8 +313,21 @@ this skill:
   and doc-promised behavior changes.
 - **Release automation**: `release-plz` (or `cargo-release`) — version bump
   from conventional commits, changelog generation, tag, `cargo publish` with
-  `--locked` from CI with a scoped registry token. Manual `cargo publish`
-  from laptops drifts from the audited lockfile and skips the gates.
+  `--locked` from CI. Authenticate with **crates.io Trusted Publishing**
+  (GitHub Actions since July 2025; GitLab CI/CD documented as a **public beta**,
+  GitLab.com only — self-hosted instances unsupported — with an `id_tokens:` entry of
+  `aud: crates.io` whose JWT the documented helper script POSTs to
+  `/api/v1/trusted_publishing/tokens`; crates.io/docs/trusted-publishing and
+  blog.rust-lang.org 2026-01-21, checked 2026-09-25). On GitHub
+  the job gets `permissions: id-token: write`, runs in a protected GitHub
+  `environment` (with required reviewers) and exchanges its OIDC token via
+  `rust-lang/crates-io-auth-action` (pinned by SHA) for a short-lived publish
+  token — no stored secret. Fill in the trusted-publisher config's optional
+  `environment` field: left empty, any environment in that workflow may
+  publish. A scoped, expiring registry token
+  (`publish-update` on the named crates) is the fallback for other CI.
+  Manual `cargo publish` from laptops drifts from the audited lockfile and
+  skips the gates. (blog.rust-lang.org, 2025-07-11 crates.io update.)
 - Changelog discipline: keep a human-readable CHANGELOG.md (generated or
   curated); "see git log" is not a changelog. Yanked releases
   (`cargo yank`) for published-broken versions — yank doesn't delete, it
@@ -230,12 +368,39 @@ gate (rules/06). Cache with `Swatinem/rust-cache`; pin action SHAs (rules/05).
       — blanket crate-level allows without reasons = Low each, pattern = Medium.
 - [ ] CI runs clippy with `-D warnings` on `--all-targets --all-features`;
       source does NOT hardcode `#![deny(warnings)]`.
+- [ ] **Constrained crates (eBPF, `no_std`, embedded, WASM, kernel) — is any lint
+      suggestion taken on a false premise?** (§1a) For each accepted style fix in such a
+      crate, name the resource it spends (stack frame, allocation, code size); hosted-
+      assumption lints are `allow`ed at the crate with a reason naming the constraint.
+      A change described as "mechanical" in one of these crates is unreviewed, not safe.
+- [ ] **Any claim about stack, size or layout that cites the SOURCE rather than a
+      measurement?** (§1b) At `opt-level=3` with LTO a plain helper's boundary does not exist
+      in the artefact — measured, a single-call helper vanishes entirely — so "I extracted it
+      so the locals would not overlap" is not evidence. Cite the enforcing toolchain's own
+      number, before and after.
+- [ ] **Does any gate load or run the artifact?** (§1a) `fmt`, `clippy` and lint passes
+      all stop at the compiled object; a crate whose failures appear at load or verify
+      time is ungated until one gate executes it on the real target.
 - [ ] `cargo fmt --check` green and in CI; `rustfmt.toml` deviations are
       deliberate and few.
 - [ ] Tests: nextest in CI + separate doctest step; per-test timeout
       configured; `rg '#\[ignore\]' -t rust` — ignored tests have reasons.
 - [ ] `rust-version` declared AND exercised by a CI job; binaries have
       `rust-toolchain.toml`. `cargo msrv verify` passes.
+- [ ] **Profile overrides** (§4a): `find . \( -name Cargo.toml -o -path '*/.cargo/config' -o -path '*/.cargo/config.toml' \) -type f -not -path '*/target/*' -exec grep -nE '^[[:space:]]*(overflow-checks|debug-assertions)[[:space:]]*=[[:space:]]*false' /dev/null {} +`
+      — a hit under `[profile.dev]`/`[profile.test]`, or a profile inheriting them, =
+      Medium. `find`, not `grep -r .`: it enters `.cargo/`, which `rg` and `ugrep` skip by
+      default (measured for ugrep).
+- [ ] **Flag and wrapper overrides** (§4a): `find . \( -path '*/.cargo/config' -o -path '*/.cargo/config.toml' -o -path '*/.github/*' -o -name '.gitlab-ci.yml' -o -name Makefile -o -name justfile -o -name Dockerfile \) -type f -not -path '*/target/*' -exec grep -nE 'rustflags|rustc-wrapper|rustc[[:space:]]*=|RUSTFLAGS|RUSTC_WRAPPER|RUSTC_BOOTSTRAP|CARGO_(BUILD|ENCODED)_RUSTFLAGS' /dev/null {} +`
+      — `-C overflow-checks`/`-C debug-assertions` in any hit overrides the profile =
+      Medium; an unexplained `rustc-wrapper` = High; `RUSTC_BOOTSTRAP` in a release build =
+      Medium. Then the ancestors, which no repository search sees — on the build machine:
+      `d=$PWD; c=0; n=0; while :; do for f in "$d/.cargo/config" "$d/.cargo/config.toml"; do [ -f "$f" ] || continue; c=$((c+1)); grep -nE 'rustflags|rustc-wrapper|rustc[[:space:]]*=' "$f" /dev/null && n=$((n+1)); done; [ "$d" = / ] && break; d=$(dirname "$d"); done; echo "ancestor configs read: $c, with overrides: $n" >&2; [ "$n" -gt 0 ]`
+      — like `grep`, exits 0 on a hit and 1 on none, and prints how many files it read (plus
+      `$CARGO_HOME/config.toml` when `CARGO_HOME` is set elsewhere).
+- [ ] Channel and target (§4a): `grep -rnE '#!\[feature\(' --include='*.rs' .` in a shipped
+      crate = Medium (a nightly-only build); the release build's toolchain is stable; each
+      deploy target triple is tier 1, or tier 2 by a recorded decision.
 - [ ] Features: `rg 'no[-_](std|default)' Cargo.toml` style negative features
       = Medium (non-additive); optional deps using `dep:`; feature matrix job
       (`cargo hack`) present; `--no-default-features` builds.
@@ -244,10 +409,18 @@ gate (rules/06). Cache with `Swatinem/rust-cache`; pin action SHAs (rules/05).
       `missing_safety_doc`); docs.rs metadata for feature-gated crates;
       doc job with `-D warnings`.
 - [ ] Edition: new crates on 2024; pre-2024 crates have a migration note or
-      reason; post-migration, re-audit `static mut` and RPIT capture changes.
+      reason; post-migration, re-audit `static mut` and RPIT capture changes,
+      locks/borrows in `if let` vs `match` scrutinees, and every
+      `unsafe { env::set_var | remove_var }` — `rg 'set_var|remove_var' -t rust`
+      (each must run before any thread or runtime starts, with a SAFETY comment).
 - [ ] Published libraries: `cargo semver-checks` in release CI; publishing
       automated (`release-plz`/`cargo-release`) with `--locked`, not from
-      laptops; CHANGELOG maintained.
+      laptops; publish job uses Trusted Publishing (`id-token: write`,
+      `crates-io-auth-action`, environment-gated) or else a scoped token —
+      `rg 'CARGO_REGISTRY_TOKEN' .github/` with no `crates-io-auth-action`
+      beside it = Low; on GitLab.com,
+      `rg -q 'aud:[[:space:]]*crates\.io' .gitlab-ci.yml || rg -n 'CARGO_REGISTRY_TOKEN' .gitlab-ci.yml`
+      printing anything (a stored token, no crates.io id-token) = Low; CHANGELOG maintained.
 - [ ] Reproducibility: `Cargo.lock` committed, toolchain pinned, CI action
       SHAs pinned, `rust-cache` keyed correctly (not caching stale clippy).
 - [ ] Quick greps: `rg 'dbg!|println!' -t rust -g '!*test*' -g '!*/bin/*'`

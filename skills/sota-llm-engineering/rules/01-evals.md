@@ -50,6 +50,16 @@ arrives. Mark provenance (`source: synthetic|production|incident`) so you can
 track the ratio — an eval set that is still >50% synthetic after months in
 production is a Medium finding.
 
+**A classifier that guards the model gets a language column.** An injection or
+content classifier (sota-code-security rules/08) scored only on English cases
+says nothing about the inputs used to slip past it. Its eval set carries the
+same attacks in languages the classifier does not claim to support, in
+low-resource languages, in mixed-script or transliterated text, and
+machine-translated from known English payloads. Report the catch rate per
+language; input in a language scoring below threshold goes to a stricter path
+(block or human review) instead of being waved through on the classifier's
+pass. OWASP: AISVS 2.2.2.
+
 ## 2. Eval types — pick the cheapest grader that captures the criterion
 
 Order of preference (cheapest/most reliable first):
@@ -114,7 +124,11 @@ invalidates every historical score (High finding).
 **Offline (pre-merge/pre-deploy):** golden sets + assertions + judges, run on
 demand and in CI. Deterministic harness: pinned model versions, fixed
 seeds/params where supported, retries for transient errors but never silent
-re-grading until pass.
+re-grading until pass. Sampling parameters are not a determinism switch:
+`temperature = 0` never guaranteed identical outputs, and some newer models
+reject any non-default `temperature`/`top_p`/`top_k` with a `400` (Anthropic,
+from Opus 4.7 on — verified 2026-09-26 in its migration guide) — repeat runs
+instead (§8).
 
 **Online (production):** sampled judging of live traffic, user signals
 (thumbs, edits, regenerations, abandonment, task completion), canary
@@ -159,6 +173,19 @@ Eval results are artifacts: persist run ID, git SHA, model versions, scores
 per case. "We can't reproduce last month's score" means you don't have evals,
 you have anecdotes.
 
+**A replay harness is not an eval.** Recorded-trace or cassette replay —
+re-ingesting captured requests and responses instead of calling the model — is
+worth having, but it re-executes nothing, so it tests your pipeline's
+determinism (parsing, schema drift, orchestration, tool wiring), not the
+system's behavior. Wired into the gate as if it were the suite above, it yields
+a CI job that stays green through a prompt rewrite, a model swap, or a
+retrieval change, because none of those are on the replayed path — and the
+greenness is indistinguishable from the real thing. Declare per suite what is
+**live** and what is **replayed**, and apply the falsification question
+(`sota/SKILL.md` BUILD step 4): if your quality gate would still pass with the
+model endpoint unreachable, it is measuring the harness (`sota-code-security`
+rules/10).
+
 ## 6. Error analysis discipline
 
 Scores tell you *that* something is wrong; error analysis tells you *what to
@@ -196,6 +223,18 @@ Production is the only honest distribution. Build the loop:
 
 ## 8. Metric pitfalls
 
+- **Prove the instrument can *see* the change before you run it.** An eval whose
+  treated arm never reads the thing you modified returns `+0.00` — and that null is
+  **structural, not a result**, while looking exactly like a real one. Before spending,
+  name the file the treatment lives in and show the runner reads it (`grep` the path in
+  the runner; diff the two arms' prompts). Field-reported 2026-09-03: a router change was
+  nearly measured with a runner that builds its catalogue from each skill's *frontmatter
+  description* and never loads the router body — its `+0.00` would have been indistinguishable
+  from the real `+0.000` the correct runner later produced. The runner's own docstring said
+  which of the two it measured; nobody had read it. **A null is only evidence when the arm
+  that produced it could have moved.** The inverse of the same fact is useful on purpose: an
+  arm that *cannot* see the treatment is a free negative control for the measurement itself
+  (§5) — the difference is entirely whether you chose it deliberately.
 - **Contamination:** never tune prompts against the eval set you gate on.
   Maintain a dev set for iteration and a held-out set for gating; refresh
   the held-out set periodically from production. Public benchmark numbers
@@ -209,19 +248,134 @@ Production is the only honest distribution. Build the loop:
   offset by an improvement elsewhere. Always report per-tag/per-cluster
   scores alongside the aggregate.
 - **Non-determinism denial:** run flaky-graded cases k times and report
-  pass^k or mean — a criterion that flips run-to-run at temperature 0-ish
-  settings is telling you the behavior is unstable, which is itself a
-  finding about the feature, not the eval.
+  pass^k or mean — a criterion that flips run-to-run at the lowest-variance
+  settings the model accepts is telling you the behavior is unstable, which
+  is itself a finding about the feature, not the eval.
 - **Eval-set overfit via retries:** harnesses that auto-retry until pass
   inflate scores. Retries are for transport errors only.
+- **Selection bias — building the set out of what the model got wrong.** Distinct
+  from contamination above: that one tunes the *prompt* against the set, this one
+  builds the *set* from outcomes. Run a model, keep the cases it failed, and the
+  gap you go on to report was guaranteed before either arm ran — you have measured
+  your selection. It is tempting precisely when an ageing set stops discriminating
+  and the still-failing cases are sitting right there. **Fix the selection rule
+  before any model runs, write it where the cases live, and let it reference only
+  properties of the case** — recency, domain, difficulty tier, provenance, whether
+  the fact is documented — never a score. The tell is an authoring order of
+  "run, then choose"; the fix is "choose, then run".
+
+  **Measurement sets and regression cases are different, and only one is poisoned by
+  this.** A *measurement* set answers "how big is the gap" — selecting its cases by
+  outcome guarantees the answer, so the rule above is absolute there. A *regression*
+  case answers "has this specific defect come back", and it exists **because** something
+  failed once; that is its whole purpose, the same as a known-bad in a negative-control
+  harness. Keep them in separate files or tag them, never average a regression case into
+  a reported lift, and say which kind a new case is when you add it. The failure mode is
+  the quiet merge: yesterday's regression cases silently become today's benchmark, and
+  the score rises because the set remembers what the model got wrong.
+
+### 8.1. A saturated measure is a fact about the instrument, not about the system
+
+**When both arms score at the ceiling, you have learned nothing about the treatment.** A
+result of 1.00 with the treatment and 1.00 without is routinely written up as *"no headroom
+— the capability is solved"*, and that is a different claim from what was measured, which is
+*"this instrument cannot tell these two conditions apart"*. The second claim is about your
+eval. Only the first is about your system, and the data does not support it.
+
+The failure is expensive because it **closes the question**. A team that reads 1.00/1.00 as
+*solved* stops measuring, publishes the conclusion, and writes down an instruction not to
+build another instrument — at which point the belief is self-sealing, because the only thing
+that could overturn it is the thing now forbidden.
+
+**Field-measured.** A library of engineering guidance closed its audit-accuracy axis at
++0.00 across **nine** instruments, the precision one reading **1.00 in both arms**, and
+recorded *"do not build a tenth — recall and precision are both exhausted."* A tenth was
+built on an **external, independently-annotated** benchmark. The lift replicated (a
+registered null, so the headline survived), but both arms landed **near chance** on a set
+balanced so chance was exactly 0.500. Precision had never been perfect; the in-house
+instruments had been too easy to discriminate, and "exhausted" was wrong for **29 days** —
+from the axis being declared closed on 2026-08-14 to the external benchmark on 2026-09-12.
+(An earlier draft said "four months"; no cited instrument supports that interval, and a
+dated span is checkable where a vague one is not.)
+
+What to do instead:
+
+1. **Report the absolute score before the delta.** A delta between two ceilings is not a
+   small effect, it is an unmeasured one. State the ceiling and the floor of your scale and
+   where both arms sit on it.
+2. **Treat ≥0.95 in the control arm as a void condition**, registered in advance, exactly as
+   you would register a threshold. The run does not produce a null; it produces *nothing*,
+   and it should say so itself.
+3. **Make chance a known constant.** Balance the classes by construction so a constant
+   answer scores exactly 0.5, rather than inheriting whatever base rate the source data
+   happens to have — a 70/30 set hands a lazy strategy 0.70 and flatters it.
+4. **Prefer an instrument you did not build** once your own saturate. You authored the
+   fixture, the rubric and the difficulty; an externally annotated set removes all three
+   degrees of freedom at once, and disagreement with it is a finding rather than an
+   embarrassment.
+5. **Reach for a harder dependent variable** only after checking the easy one is not simply
+   mis-scaled — time-to-find, calibration, or performance on the cases experts disagree on.
+
+**The tell to watch for in your own write-ups:** the phrase *"both arms scored perfectly,
+so…"*. Whatever follows that comma is almost always a claim the measurement cannot carry.
+
+## 8a. A completeness rubric cannot tell "correctly declined" from "omitted"
+
+§8's pitfalls are about the *metric*. This is about the **rubric's blind spot**, and it is
+the one that produces a confident wrong conclusion rather than a noisy one.
+
+A rubric that scores *"did the output contain requirement 1..N"* assigns the same score —
+zero — to an answer that **omitted** the requirements and to one that **correctly refused to
+proceed** without an answer it needed. The two are opposite behaviours and the instrument
+cannot see the difference.
+
+Measured in one instrumented harness: a guided arm scored
+**0.00 against a ten-item rubric** while an unguided control scored 0.40. Reading the
+retained artifact, the guided response was a **clarifying question about a
+security-relevant ambiguity** — exactly what its guidance prescribes — followed by a table
+committing to every other requirement. The rubric scored the pause as ten omissions. A
+published claim rested on that 0.00 for several hours.
+
+- **If the arm that should be better scores catastrophically worse, suspect the scoring
+  first.** A large negative on the treated arm is far more often an instrument blind spot
+  than a real regression; a real regression is usually small and noisy.
+- **Retain the artifact, bounded if it must be.** That run stored only `artifact_len`, so a
+  cell scoring 0.00 three times with a ~1.2k response could not be diagnosed at all and a
+  plausible-but-wrong mechanism stood until the text was kept. **An eval that records a
+  symptom and discards the evidence guarantees the explanation will be a guess.**
+- **Score the refusal explicitly** where declining is legitimate behaviour: add a rubric item
+  for *"asked rather than assumed, and said what it would do either way"*, or the instrument
+  punishes the behaviour the system was built to produce.
+- **This is not specific to LLM evals.** Any completeness checklist over an artifact that may
+  legitimately be incomplete — a partial migration, a spike, a deliberate deferral — has the
+  same hole.
 
 ## Audit checklist
+
+- [ ] **Can the rubric distinguish "correctly declined" from "omitted"?** (§8a) A
+      completeness rubric scores both at zero — measured here, a guided arm scored **0.00**
+      for asking a security-relevant clarifying question its own guidance prescribed. If the
+      arm that should be better scores catastrophically worse, suspect the scoring first;
+      retain the artifact (bounded) so the cell can be diagnosed at all; and add an explicit
+      item for declining where declining is legitimate.
+
+- [ ] **No axis closed on a saturating measure** — the absolute score is reported before the delta, a control arm at ≥0.95 is a registered **void** condition rather than a null, chance is a known constant (classes balanced by construction), and an **externally annotated** instrument is preferred once the in-house ones stop discriminating (§8.1)?
+- [ ] Before any A/B is run, the treated arm is **shown to read the thing that changed**
+      (the runner's source names the path) — a null from an arm blind to the treatment is
+      structural, not a result (§8).
 
 - [ ] Every shipped LLM feature has an eval suite in the repo, runnable by one
       documented command. (Absent → High; absent on consequential output with
       no human gate → Critical.)
 - [ ] Golden set ≥20 cases, includes hard/edge/refusal cases, provenance
       tagged, not majority-synthetic after months in production.
+- [ ] Each case set states **how its cases were chosen**, and that rule cites
+      properties of the case rather than any model's score on it. (A set whose
+      cases were kept because a model failed them reports its own selection —
+      treat a missing or outcome-referencing rule as High.)
+- [ ] **Regression cases are separated from measurement cases** — different file or an
+      explicit tag — and no reported lift averages the two. A regression case may be
+      added because something failed; a measurement case may not.
 - [ ] Cheapest-grader rule followed: assertions where assertable; judges only
       for genuinely graded qualities; rubrics decomposed into binary checks
       with quoted evidence.
@@ -235,9 +389,16 @@ Production is the only honest distribution. Build the loop:
       tags; cost/latency gated alongside quality.
 - [ ] Eval runs persisted as artifacts (run ID, SHA, model versions,
       per-case results) and reproducible.
+- [ ] Each suite declares what is **live** vs **replayed**, and the quality
+      gate fails with the model endpoint unreachable — a replay-only gate
+      measures the harness, not the model.
 - [ ] Online signal exists (sampled judging and/or user feedback) and is
       distinct from — not a substitute for — offline gates.
 - [ ] Error-analysis loop visible in history: failure taxonomy, incident
       cases promoted into the set.
 - [ ] Dev set ≠ gating set; no prompt tuning against the held-out set; no
       model selection justified by public benchmarks alone.
+- [ ] Injection and content classifiers evaluated per language, including
+      unsupported and low-resource languages and translated attacks, with a
+      stricter path for languages below threshold (§1). **High** where the
+      classifier is the only screen before a tool-holding model.

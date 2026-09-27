@@ -107,12 +107,29 @@ loop {
 }
 ```
 
-- Know your cancel-safe primitives (safe to drop and retry: `recv()` on tokio
-  mpsc/broadcast/watch, `Notified`, `accept()`, `read()`/`read_buf`) vs
-  cancel-unsafe (`write_all` — partial write, `Mutex::lock` is safe but work
-  after acquiring may not be, anything that buffers internally, multi-await
-  sequences with intermediate state). Tokio docs label each — check before
-  putting it in `select!`.
+- **Know your cancel-safe primitives — copy the list, do not reason about it.**
+  Tokio classifies each operation itself, and two of the ones people most often
+  assume are safe are *not*. Transcribed from the `select!` docs
+  ([cancellation safety](https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety),
+  read 2026-09-16; it is a per-version list, so re-read it for your pinned tokio):
+
+  | | operation |
+  |---|---|
+  | **cancel-safe** | `mpsc::Receiver::recv`, `mpsc::UnboundedReceiver::recv`, `broadcast::Receiver::recv`, **`watch::Receiver::changed`**, `TcpListener::accept`, `UnixListener::accept`, `signal::unix::Signal::recv`, `AsyncReadExt::read` / `read_buf`, `AsyncWriteExt::write` / `write_buf`, `StreamExt::next` (tokio-stream or futures) |
+  | **NOT safe — partial I/O, data is lost** | `AsyncReadExt::read_exact`, `read_to_end`, `read_to_string`, `AsyncWriteExt::write_all` |
+  | **NOT safe — you lose your place in a fairness queue** | **`Mutex::lock`**, `RwLock::read`, `RwLock::write`, `Semaphore::acquire`, **`Notify::notified`** |
+
+  **The two unsafe rows fail differently and the difference decides the fix.** The
+  first row loses *bytes*: half a frame is gone and the stream is desynchronised,
+  so the repair is to keep the future alive across iterations (`tokio::pin!`,
+  above) or to read into a buffer you own. The second row loses *progress*:
+  nothing is corrupted and no memory is unsound — the docs' wording is that these
+  *"use a queue for fairness and cancellation makes you lose your place in the
+  queue"* — so the symptom is starvation of a task that keeps getting cancelled
+  and re-queued, not a torn value. Do not report the second row as data loss.
+
+  On `watch`: the cancel-safe method is **`changed()`**, not `recv()` — a detail
+  worth stating because the sibling channels *do* use `recv()`.
 - State mutations spanning an await are torn by cancellation. Either make the
   critical section await-free, or use a **drop guard** to restore/complete
   invariants:
@@ -129,6 +146,11 @@ impl Drop for InFlightGuard<'_> { fn drop(&mut self) { self.0.dec(); } }
 - Spawned tasks are **not** cancelled when their `JoinHandle` drops — they
   leak unless tracked (see §4) or aborted. Dropping a `JoinSet` *does* abort
   its tasks.
+
+**Cancelling a `timeout` around a child process does not kill the process.** The
+future is dropped, the OS process is not — rules/08 §1 (R9.5) has the measured
+behaviour and `.kill_on_drop(true)`. A spawned process is owned state exactly like a
+spawned task, and cancellation is where that ownership is usually dropped.
 
 ## 4. Structured concurrency
 
@@ -158,6 +180,18 @@ while let Some(res) = set.join_next().await {
 - Every `tokio::spawn` must have an owner that observes its `JoinHandle` (or a
   comment justifying fire-and-forget + its own error logging). Panics in
   spawned tasks are silent until joined.
+- **Request-scoped state does not go in a `thread_local!`.** A worker thread runs
+  many tasks, so a value one request stores there is still there for the next one.
+  Measured on tokio 1.53.1 and a current-thread runtime: a task stored `tenant-A`
+  in a `thread_local!` and never reset it. The next task on that thread read
+  `Some("tenant-A")`, which is a cross-tenant leak. Use `tokio::task_local!` with
+  `KEY.scope(value, fut).await`, or `sync_scope` in sync code. The value exists only
+  while that future runs, so no reset is needed and none can be forgotten. Measured:
+  after the scope ended, `try_with` returned `Err`. A `tokio::spawn`ed child does
+  **not** inherit it (measured `None`), so pass the tenant into the child
+  explicitly. Better still, carry tenant and user as a typed argument or request
+  extension. Keep `tracing` spans for log context, not for authorisation decisions.
+  OWASP: Multi-Tenant Security and Session Management cheat sheets.
 
 ## 5. Locks across `.await`
 
@@ -206,10 +240,10 @@ while let Some(res) = set.join_next().await {
 - Don't expose tokio types in library public APIs unless the crate is
   tokio-specific by design; abstract over `AsyncRead`/`AsyncWrite`
   (tokio or futures versions) where feasible.
-- Tokio remains 1.x (1.52 as of mid-2026; no 2.0) and designates LTS minors
-  with ≥1 year of backported fixes (1.47.x until Sep 2026, 1.51.x until Mar
-  2027). Stability-critical services can pin an LTS line with tilde syntax:
-  `tokio = { version = "~1.51", features = [...] }`.
+- Tokio 1.x designates LTS minors with ≥1 year of backported fixes; the
+  current LTS lines and their end dates are listed in the LTS section of
+  tokio's README — read them there rather than from here. Stability-critical services can pin an LTS line with
+  tilde syntax, e.g. `tokio = { version = "~1.51", features = [...] }`.
 
 ## 8. Graceful shutdown
 
@@ -266,7 +300,13 @@ tokio::select! {
       observability gap.
 - [ ] `select!` loops: any branch future recreated per-iteration that buffers
       internally (reads, `write_all`, custom combinators) → cancellation data
-      loss = High. Check each `select!` arm against cancel-safety docs.
+      loss = High. Check each `select!` arm against the cancel-safety table above —
+      and **rate the two unsafe rows differently**: partial-I/O (`read_exact`,
+      `write_all`) loses bytes and desynchronises a stream = High; a fairness-queue
+      operation (`Mutex::lock`, `Semaphore::acquire`, `Notify::notified`) loses only
+      its place in the queue = starvation risk, **not** data loss, so reporting it
+      as corruption is a false finding. `Notified` and `Mutex::lock` are the two most
+      often assumed safe; both are on Tokio's unsafe list.
 - [ ] Locks: clippy `await_holding_lock`, `await_holding_refcell_ref`;
       `rg 'tokio::sync::Mutex' -t rust` — verify each actually needs
       hold-across-await, else downgrade to std/parking_lot.
@@ -275,6 +315,12 @@ tokio::select! {
 - [ ] Fan-out: `rg 'buffer_unordered|buffered\(' -t rust` — bound derived from
       config, not unbounded or request-controlled; loops spawning per item of
       untrusted-size collections.
+- [ ] **Request-scoped state in a thread-local (§4). High if it holds a tenant, user
+      or permission, else Low.** Run
+      `rg -n -t rust 'thread_local!|\b[A-Z][A-Z0-9_]*\.(set|replace|with_borrow_mut)\(' .`.
+      Each hit set inside a handler or task leaks into the next request on that worker.
+      Use `task_local!` + `.scope(..)` or an explicit argument. Check each
+      `task_local!` read inside a `tokio::spawn` child, which sees none.
 - [ ] Shutdown path exists: signal handler, drain deadline, `tracker.close()`
       before `wait()` (close-after-wait hangs forever).
 - [ ] `rg 'async fn' -t rust` + `clippy::unused_async`; public async traits:
