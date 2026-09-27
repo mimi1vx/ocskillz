@@ -5,4 +5,5 @@ bun.lock
 opencode.json
 *.mcp-bundler*
 *.profraw
+.ruff_cache/
 .DS_Store
