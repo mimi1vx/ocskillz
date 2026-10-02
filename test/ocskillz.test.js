@@ -168,11 +168,11 @@ test("skips a command name that already exists", async () => {
   assert.ok(commandEditor.items.some((c) => c.name === "bug-hunter"))
 })
 
-test("registers all five bundled commands when nothing collides", async () => {
+test("registers all six bundled commands when nothing collides", async () => {
   const { ctx, commandEditor } = makeContext()
   await ocskillz.setup(ctx)
   const names = commandEditor.items.map((c) => c.name).sort()
-  assert.deepEqual(names, ["bug-hunter", "clean-init", "code-reorganizer", "test", "walkthrough"])
+  assert.deepEqual(names, ["bug-hunter", "clean-init", "code-reorganizer", "ste", "test", "walkthrough"])
 })
 
 test("no bundled command targets a subagent-only agent", () => {

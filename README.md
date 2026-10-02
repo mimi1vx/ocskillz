@@ -46,6 +46,7 @@ Requires OpenCode V2. V1 is no longer supported — see [Installation](#installa
 | [deep-project-primer](./skills/deep-project-primer/SKILL.md) | "project primer", "initialize project" | Initialization instructions for any project. Investigates code to understand architecture and purpose. |
 | [idea-wizard](./skills/idea-wizard/SKILL.md) | "generate ideas", "improve project" | Generate, evaluate, and implement ideas to improve the project. Generates 30 ideas, filters and plans the top ones. |
 | [readme-reviser](./skills/readme-reviser/SKILL.md) | "update readme", "revise docs", "sync docs", "stale docs" | Add, correct, and remove documentation to match the current code, written in timeless voice. |
+| [ste-english](./skills/ste-english/SKILL.md) | "STE", "simplified technical english", "rewrite in STE" | Write or audit text in ASD-STE100 style: short sentences, simple verbs, a short substitution table. |
 
 ### Agents (`agents/`)
 
@@ -66,6 +67,7 @@ opencode also ships built-in `build` and `plan` agents — referenced by some co
 | [bug-hunter](./commands/bug-hunter.md) | `build` (built-in) | Randomly explore code to find and fix bugs. |
 | [code-reorganizer](./commands/code-reorganizer.md) | `planner` | Propose a reorganization plan for scattered code files. |
 | [walkthrough](./commands/walkthrough.md) | `plan` (built-in) | Walk through a PR/diff one behavioral topic at a time using `change-walkthrough`. |
+| [ste](./commands/ste.md) | current agent | Write or rewrite text in ASD-STE100 style using `ste-english`. |
 
 Launch `refactor` through the `subagent` tool rather than selecting it as the session's primary agent.
 
@@ -97,7 +99,7 @@ ok   [changelog-generator]
 ok   [agent: planner]
 ok   [command: test]
 
-registration: 25 skills, 3 agents, 5 commands
+registration: 26 skills, 3 agents, 6 commands
 
 Checked: 33  Errors: 0
 ```
@@ -143,3 +145,6 @@ pinning, and refresh details.
 
 `change-walkthrough` is an original MIT-licensed skill, inspired by the concept
 of `rekram1-node/skills`, not derived from its text.
+
+`ste-english` is original MIT text that paraphrases the ASD-STE100 rules. It does
+not include the ASD dictionary. ASD-STE100 is a trademark of ASD.

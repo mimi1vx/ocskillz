@@ -61,7 +61,7 @@ npm test
 ./scripts/validate-skills.sh
 ```
 
-The validator checks native frontmatter, explicit agent modes, command-to-agent compatibility, and the five bundled commands. When local OpenCode API inspection is available, it also verifies the hydrated registry. A clearly reported skip means live registry state was unavailable; the static checks still ran.
+The validator checks native frontmatter, explicit agent modes, command-to-agent compatibility, and the six bundled commands. When local OpenCode API inspection is available, it also verifies the hydrated registry. A clearly reported skip means live registry state was unavailable; the static checks still ran.
 
 For direct inspection, start OpenCode in a directory whose configuration contains the stubs above and run:
 
