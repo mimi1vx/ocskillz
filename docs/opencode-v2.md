@@ -27,7 +27,7 @@ An explicit override equal to an empty-agent default is indistinguishable from a
 - `code-reviewer` and `planner` are selectable primary agents.
 - `refactor` is subagent-only. Ask a primary agent to launch `refactor` through the `subagent` tool.
 - Plugin-registered commands cannot declare V2's file-based `subagent` behavior. They execute a callback and may switch only to a primary-capable agent, so no bundled command targets `refactor`.
-- The planner treats project files as read-only. When persistence is requested, it writes Markdown only under `~/.opencode/plan/`.
+- The planner treats project files as read-only. It reads and writes plan Markdown only under `~/.opencode/plan/`, and changes beads state (`.beads/`) only through `br`, which it may run without prompting.
 
 ## Migrating configuration
 

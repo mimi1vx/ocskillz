@@ -54,7 +54,7 @@ Requires OpenCode V2. V1 is no longer supported — see [Installation](#installa
 |-------|-------------|---------|
 | [code-reviewer](./agents/code-reviewer.md) | primary; read-only + git diff/log + question | Reviews recent changes; outputs Critical / Warnings / Suggestions. |
 | [refactor](./agents/refactor.md) | subagent; read + edit + question | Cautious behavior-preserving refactors. Embeds karpathy-guidelines. |
-| [planner](./agents/planner.md) | primary; read-only project access + question + extended shell/br read | Planning agent with strong clarifying-question discipline. Persists requested plans only under `~/.opencode/plan/`. |
+| [planner](./agents/planner.md) | primary; read-only project access + question + extended read-only shell + full `br` | Planning agent with strong clarifying-question discipline. Reads and writes plans under `~/.opencode/plan/` and tracks approved plans as beads issues via `br`. |
 
 opencode also ships built-in `build` and `plan` agents — referenced by some commands below.
 
