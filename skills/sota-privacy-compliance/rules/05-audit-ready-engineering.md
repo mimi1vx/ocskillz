@@ -66,7 +66,7 @@ before fieldwork, half of them showing settings changed the same week.
   year — you cannot retro-create operating evidence, which is the entire argument
   for automation. Security (Common Criteria) is mandatory; add Availability /
   Confidentiality / Processing Integrity / Privacy categories only when customers
-  demand them (the Privacy category overlaps heavily with rules/01–03 machinery).
+  demand them (the Privacy category overlaps heavily with [rules/01](01-data-inventory-classification.md)–03 machinery).
 - **ISO 27001** certifies the ISMS (management system): risk assessment →
   Statement of Applicability (justify inclusion/exclusion of all 93 Annex A
   controls) → internal audit → management review → surveillance audits annually,
@@ -74,7 +74,7 @@ before fieldwork, half of them showing settings changed the same week.
   control ownership, and the internal-audit findings loop.
 - **Scope deliberately:** a narrow, honest scope (the production platform and
   the teams operating it) beats a vague company-wide scope full of exceptions.
-  Scope follows the data flows from rules/01 — auditors trace data, so should you.
+  Scope follows the data flows from [rules/01](01-data-inventory-classification.md) — auditors trace data, so should you.
 
 ## 2b. Access reviews that are real (and cheap)
 
@@ -97,6 +97,10 @@ and replies "all good". Rubber-stamp reviews are a named audit finding (§3.4),
 and worse: they certify the orphaned admin account you'll meet again in rules/06.
 ```
 
+The diff pipeline is the between-cycle control, not the recertification: a diff never re-examines a
+grant once approved, so every grant is still recertified at the cadence the identity and access-management
+lifecycle policy sets, every account at least yearly.
+
 ## 3. Common audit findings catalog (fix before the auditor finds them)
 
 1. Offboarded users with live access (orphaned accounts, lingering API keys, VPN
@@ -110,7 +114,7 @@ and worse: they certify the orphaned admin account you'll meet again in rules/06
    spendable.
 5. Missing or stale risk assessment / vendor reviews (§5).
 6. Untested backups and unexercised incident response (a tabletop with notes
-   counts; "we have a runbook" alone does not — rules/06).
+   counts; "we have a runbook" alone does not — [rules/06](06-incident-breach-readiness.md)).
 7. No evidence of log review/alert triage — alert-to-ticket linkage solves this.
 8. Policy/practice divergence: the policy says 90-day access reviews, reality is
    ad hoc. **Never let policy promise more than automation delivers** — write
@@ -124,7 +128,7 @@ and worse: they certify the orphaned admin account you'll meet again in rules/06
 **Rule:** Encode compliance-relevant infrastructure rules as machine-enforced
 policy in CI and at the platform boundary (admission controllers, org policies,
 SCPs): encryption-at-rest required, public-bucket prohibition, region allowlists
-(residency — rules/04 §7), mandatory tags incl. data classification, no `0.0.0.0/0`
+(residency — [rules/04](04-regulatory-landscape.md) §7), mandatory tags incl. data classification, no `0.0.0.0/0`
 ingress to data stores, logging enabled on data services. Tools: OPA/Rego,
 Sentinel, cloud-native policy engines. Two products fall out: prevention (the
 control) and the CI/audit log of evaluations (the evidence). Exceptions live in a
@@ -169,7 +173,7 @@ as such.
 ## 5. Vendor & subprocessor management
 
 **Rule:** Vendor onboarding is a gated workflow, tiered by data classification
-(rules/01) the vendor will touch:
+([rules/01](01-data-inventory-classification.md)) the vendor will touch:
 
 | Tier | Vendor touches | Gate |
 |---|---|---|
@@ -178,7 +182,7 @@ as such.
 | 3 | No personal data, no prod access | Procurement basics |
 
 Engineering enforcement: a new SDK/integration PR must reference a vendor-registry
-entry (CI check on dependency/egress allowlists) — this is how the rules/01 §4
+entry (CI check on dependency/egress allowlists) — this is how the [rules/01](01-data-inventory-classification.md) §4
 processor map stays true. Your own subprocessor list (the one your customers see)
 is generated from the same registry; customer-facing change notifications
 (required by most DPAs) trigger from registry diffs.
@@ -197,7 +201,7 @@ fraud SDKs that your pages load from their servers) run as your origin in
 every visitor's browser. Their contract should additionally require evidence
 that they monitor and control changes to the code they serve, and it should
 put liability or a penalty on them for serving malicious code. Technical
-controls (SRI, change monitoring) live in sota-code-security rules/05 §8; the
+controls (SRI, change monitoring) live in [sota-code-security rules/05](../../sota-code-security/rules/05-web-security.md) §8; the
 contract is what makes their failure their cost. OWASP: OWASP SAMM (Supplier
 Security stream); Third Party Javascript Management cheat sheet.
 
@@ -231,25 +235,25 @@ security posture data).
 ## 7. Privacy-specific audit artifacts
 
 Beyond SOC 2/ISO, keep these generated and current (they're what a regulator or
-enterprise customer asks for): RoPA (from the catalog, rules/01), DPIAs
-(rules/04 §1), consent records (rules/03 §1), DSAR/deletion logs with timing
-stats (rules/03 §3–5), retention-enforcement monitoring output (rules/03 §6),
+enterprise customer asks for): RoPA (from the catalog, [rules/01](01-data-inventory-classification.md)), DPIAs
+([rules/04](04-regulatory-landscape.md) §1), consent records ([rules/03](03-consent-and-user-rights.md) §1), DSAR/deletion logs with timing
+stats ([rules/03](03-consent-and-user-rights.md) §3–5), retention-enforcement monitoring output ([rules/03](03-consent-and-user-rights.md) §6),
 processor list + DPAs (§5), breach register incl. non-reportable incidents
-(rules/06), training-data lineage where AI Act applies (rules/04 §5).
+([rules/06](06-incident-breach-readiness.md)), training-data lineage where AI Act applies ([rules/04](04-regulatory-landscape.md) §5).
 
 ## Audit checklist
 
-- [ ] Control matrix exists as code: control → mechanism → evidence source → owner; covers SOC 2 CC and/or ISO 27001:2022 Annex A as applicable
-- [ ] Certification target is ISO 27001:2022 (2013 is dead); SoA current and justified
-- [ ] Every prod change traces to a reviewed PR; emergency path logged; drift detection on infra
-- [ ] Access provisioning is IaC/IdP-driven; offboarding automated with measured latency; quarterly diff-based access reviews with recorded dispositions
-- [ ] Policy-as-code gates: encryption, public exposure, regions, classification tags; exception register with expiries
-- [ ] Backup restores tested on schedule with recorded results; IR exercised (rules/06)
-- [ ] Policies promise no more than mechanisms enforce (read policy, then find the mechanism — divergence is a finding)
-- [ ] Vendor registry tiered by data touched; Tier 1/2 vendors have DPAs + reviews; CI ties new integrations to registry entries; customer-facing subprocessor list generated from it
-- [ ] Tier-1 and served-script supplier agreements carry security terms: disclosure channel, per-severity remediation SLA, secure-development evidence, SBOM; served-script vendors also code-integrity monitoring and liability for malicious code (§5) — MEDIUM. Inventory probe for served scripts that need a registry entry and those terms: `grep -rnE "<script[^>]+src=[\"']?(https?:)?//" .`
-- [ ] Continuous-compliance tooling (if any) treated as evidence aggregator, not control owner; itself risk-assessed as Tier 1
-- [ ] Privacy artifacts (RoPA, DPIAs, consent/DSAR/deletion logs, breach register) generated from running systems, producible in minutes
-- [ ] Access-review pipeline is diff-based with archived runs; sample the latest run for actual revocations (zero revocations ever = rubber stamp)
-- [ ] Audit populations generated by reproducible queries from systems of record
-- [ ] Top-10 findings list above swept explicitly: orphaned access, shared accounts, rubber-stamp reviews, MFA gaps on admin planes
+- [ ] Control matrix exists as code: control → mechanism → evidence source → owner; covers SOC 2 CC and/or ISO 27001:2022 Annex A as applicable; each evidence source is a query over the enforcing system's records, not screenshots (§1)
+- [ ] Certification target is ISO 27001:2022 (2013 is dead); SoA current and justified; audit scope is stated explicitly and follows the inventory's data flows (§2)
+- [ ] Every prod change traces to a reviewed PR (§1, §3); emergency path logged; drift detection on infra
+- [ ] Access provisioning is IaC/IdP-driven (§1, §2b); offboarding automated with measured latency; quarterly diff-based access reviews with recorded dispositions
+- [ ] Policy-as-code gates: encryption, public exposure, regions, classification tags, no `0.0.0.0/0` ingress to data stores, logging on data services; exception register with owner + expiry, and CI re-fails the day an exception expires (§4)
+- [ ] Backup restores tested on schedule with recorded results (§3); IR exercised ([rules/06](06-incident-breach-readiness.md))
+- [ ] Policies promise no more than mechanisms enforce (§3) (read policy, then find the mechanism — divergence is a finding)
+- [ ] Vendor registry tiered by data touched (§5); Tier 1/2 vendors have DPAs + reviews; CI ties new integrations to registry entries; customer-facing subprocessor list generated from it
+- [ ] Tier-1 and served-script supplier agreements carry security terms: disclosure channel, per-severity remediation SLA, secure-development evidence, SBOM; served-script vendors also code-integrity monitoring and liability for malicious code (§5) — MEDIUM. Locator listing every third-party served script that needs a registry entry and those terms (each hit is read, not a finding): `grep -rnE "<script[^>]+src=[\"']?(https?:)?//" .`
+- [ ] Continuous-compliance tooling (if any) treated as evidence aggregator (§5), not control owner; itself risk-assessed as Tier 1
+- [ ] Privacy artifacts (RoPA, DPIAs, consent records, DSAR/deletion logs with timing stats, retention-enforcement monitoring output, processor list + DPAs, breach register incl. non-reportable incidents, training-data lineage where the AI Act applies) generated from running systems, producible in minutes (§7)
+- [ ] Access-review pipeline is diff-based (against last quarter, the role matrix and the HR roster) with archived runs; revocations execute through the IaC path that granted them; sample the latest run for actual revocations (zero revocations ever = rubber stamp) (§2b)
+- [ ] Audit populations generated by reproducible queries from systems of record; audit findings mapped to tickets with owner and date; control-mechanism changes scheduled at Type II period boundaries (§6)
+- [ ] Top-10 findings list above swept explicitly: orphaned access, shared accounts, direct-to-prod changes, rubber-stamp reviews, stale risk/vendor reviews, untested backups/IR, unevidenced log review, policy/practice divergence, unregistered crypto/TLS exceptions, MFA gaps on admin planes (§3)

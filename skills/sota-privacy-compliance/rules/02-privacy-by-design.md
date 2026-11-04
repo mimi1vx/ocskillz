@@ -29,7 +29,7 @@ profile" — where the product uses only email. Six liabilities, zero features.
 **Minimize in dimensions, not just fields:**
 - **Precision:** store city, not GPS coordinates; year of birth, not full DOB;
   truncate IPs (/24, /48) when only geo/abuse-tier matters.
-- **Duration:** event-level data → aggregate after N days, drop raw (rules/03 §6).
+- **Duration:** event-level data → aggregate after N days, drop raw ([rules/03](03-consent-and-user-rights.md) §6).
 - **Population:** sample analytics (1-in-N users) instead of recording everyone.
 - **Payloads in transit:** internal services pass user IDs, not embedded user
   objects; each consumer fetches only the fields it is purpose-scoped to read.
@@ -37,8 +37,8 @@ profile" — where the product uses only email. Six liabilities, zero features.
 **Fingerprinting is a tracker, and anti-bot is not an exemption.** Browser and
 device fingerprints (canvas or WebGL renderer hashes, installed-font lists,
 audio-context probes, mouse and scroll telemetry) identify a person as well as
-a cookie does, so they go in the tracker inventory (rules/03 §2) and the privacy
-notice like any other identifier (rules/01 §2). Prefer passive network-level
+a cookie does, so they go in the tracker inventory ([rules/03](03-consent-and-user-rights.md) §2) and the privacy
+notice like any other identifier ([rules/01](01-data-inventory-classification.md) §2). Prefer passive network-level
 signals (TLS and HTTP/2 fingerprints) and reach for invasive browser signals
 only on sensitive flows such as signup, login and checkout, behind consent
 where ePrivacy-style law requires it. Store a keyed hash or truncated form,
@@ -65,7 +65,7 @@ const BillingView    = pick(User, ['id', 'email', 'countryCode']);
 
 ## 2. Purpose limitation in code
 
-**Rule:** Purpose is machine-readable metadata bound to data (rules/01 §1) AND an
+**Rule:** Purpose is machine-readable metadata bound to data ([rules/01](01-data-inventory-classification.md) §1) AND an
 access-control dimension. A service or job declares the purposes it serves; access
 to purpose-tagged data outside a declared purpose is denied or at minimum audited.
 
@@ -126,7 +126,7 @@ requires a documented review with attack assumptions, not a checkbox.
 
 **Tokenization:** replace the sensitive value with a random token; the vault
 holding the mapping becomes the high-security zone, and downstream systems fall
-out of sensitive scope. This is THE PCI DSS descoping move (rules/04 §4) and works
+out of sensitive scope. This is THE PCI DSS descoping move ([rules/04](04-regulatory-landscape.md) §4) and works
 for SSNs/bank details too:
 
 ```text
@@ -160,7 +160,7 @@ def pseudonym(user_id: str, context: str) -> str:
 Per-context keys give you compartmentalization (analytics pseudonyms can't join
 against support pseudonyms) and a kill switch (destroy the context key →
 pseudonyms in that context become unlinkable noise — crypto-shredding's cousin,
-rules/03 §4).
+[rules/03](03-consent-and-user-rights.md) §4).
 
 ## 4. Differential privacy & privacy-preserving analytics — when aggregates are exposed
 
@@ -191,7 +191,7 @@ HAVING count(*) >= 10;            -- cells under k are suppressed, structurally
 3. Event-level, first-party, pseudonymous, short raw retention (e.g., 90 days →
    aggregate), no third-party sharing.
 4. Third-party analytics: processor with DPA, EU-hostable if needed, IP truncation
-   on, identify-calls minimal (rules/01 §4).
+   on, identify-calls minimal ([rules/01](01-data-inventory-classification.md) §4).
 Session replay and heatmap tools deserve special suspicion: they exfiltrate form
 contents and screens wholesale — require explicit masking allowlists, not blocklists.
 
@@ -256,6 +256,8 @@ risk than none. OWASP: User Privacy Protection cheat sheet.
 
 ## 6. LINDDUN threats → build patterns (quick map)
 
+*(advisory)* — a cross-reference table: each mitigation is a rule of another section, probed there (account-existence leaks: [`sota-code-security` rules/02](../../sota-code-security/rules/02-authentication.md)).
+
 When a LINDDUN session raises a threat, these are the
 default mitigations in this skill:
 
@@ -265,33 +267,35 @@ default mitigations in this skill:
 | Identifiability | Minimization/precision reduction (§1), k-threshold & DP on releases (§4) |
 | Non-repudiation (user can't deny) | Minimize identity binding in records; aggregate where intent allows |
 | Detectability (existence leaks) | Uniform responses/timing on lookup APIs; don't confirm account existence |
-| Disclosure of information | Projections (§1), tier-bound encryption & access (rules/01 §2) |
-| Unawareness | Notices + consent records at collection (rules/03 §1), default-private (§5) |
-| Non-compliance | Catalog + CI gates (rules/01), retention automation (rules/03 §6) |
+| Disclosure of information | Projections (§1), tier-bound encryption & access ([rules/01](01-data-inventory-classification.md) §2) |
+| Unawareness | Notices + consent records at collection ([rules/03](03-consent-and-user-rights.md) §1), default-private (§5) |
+| Non-compliance | Catalog + CI gates ([rules/01](01-data-inventory-classification.md)), retention automation ([rules/03](03-consent-and-user-rights.md) §6) |
 
 ## 7. Retrofit order for existing systems (AUDIT → remediation)
+
+*(advisory)* — a remediation ordering for findings raised by the items below; it adds no rule to probe.
 
 When auditing a system that was not built this way, recommend remediation in this
 order (highest risk-reduction per effort first):
 1. Stop the bleeding: kill unpurposed collection, PII logging, `SELECT *` exports.
 2. Tokenize/segregate the highest-tier data (cards, special-category) to shrink scope.
-3. Add retention enforcement (rules/03 §6) — drains the historical pool.
-4. Bind purpose/classification annotations + CI gate (rules/01) — stops regression.
+3. Add retention enforcement ([rules/03](03-consent-and-user-rights.md) §6) — drains the historical pool.
+4. Bind purpose/classification annotations + CI gate ([rules/01](01-data-inventory-classification.md)) — stops regression.
 5. Tighten access to purpose-scoped roles.
 6. Re-evaluate claimed anonymization with §3's failure table.
 
 ## Audit checklist
 
-- [ ] Every collected field traces to a named feature/purpose; sample 10 fields and demand the consumer code path
-- [ ] Precision minimized where full precision is unused (GPS, full DOB, full IP)
-- [ ] Internal APIs return minimal projections; no whole-user-object passing or `SELECT *` across trust boundaries
-- [ ] Purpose tags exist and are enforced by at least code review; access roles segmented by purpose for high tiers
-- [ ] New-purpose reuse of existing data triggers a documented review (check git history of purpose tags)
-- [ ] No "anonymized" claim rests on hashing identifiers or removing direct identifiers only; quasi-identifier risk assessed, k-threshold on aggregate releases
-- [ ] Cardholder/SSN-class data is tokenized or vaulted; verify no raw values in app DB, logs, or backups
-- [ ] Public/partner-facing aggregates use DP or k ≥ threshold with documented rationale
-- [ ] All privacy-affecting settings default private/off; check the three most recent features
-- [ ] Session replay / heatmap tooling absent or mask-allowlisted and consent-gated
-- [ ] Browser/device fingerprinting (canvas, WebGL, fonts, behavioural telemetry) is listed in the tracker inventory and privacy notice, used only on sensitive flows, consent-gated where required, stored hashed/truncated with hours-to-days raw retention (§1) — MEDIUM. Probe: `grep -rnE "toDataURL\(|UNMASKED_RENDERER_WEBGL|WEBGL_debug_renderer_info|@fingerprintjs|FingerprintJS" .`
-- [ ] Third-party remote content (hot-linked avatars, feed images, embeds) can be blocked by the user; rendered HTML email blocks remote content by default or loads it through a proxy (§5b) — MEDIUM. Probe for HTML email rendered straight into the page: `grep -rnE "(innerHTML|dangerouslySetInnerHTML|v-html)[^;]*(mail|message)[A-Za-z_.]*(html|body)" .` — each hit must show the remote-content rewrite or proxy
+- [ ] Every collected field traces to a named feature/purpose (§1); sample 10 fields and demand the consumer code path
+- [ ] Precision minimized (§1) where full precision is unused (GPS, full DOB, full IP)
+- [ ] Internal APIs return minimal projections (§1); no whole-user-object passing or `SELECT *` across trust boundaries
+- [ ] Purpose tags exist and are enforced by at least code review; access roles segmented by purpose for high tiers; access to purpose-tagged data outside a declared purpose is denied or at minimum audited (§2)
+- [ ] New-purpose reuse of existing data triggers a documented review (check git history of purpose tags) (§2)
+- [ ] No "anonymized" claim rests on hashing identifiers or removing direct identifiers only; quasi-identifier risk assessed, k-threshold on aggregate releases; a linkable pseudonym is keyed per context (HMAC with a managed key), never a bare hash (§3)
+- [ ] Cardholder/SSN-class data is tokenized or vaulted (§3); verify no raw values in app DB, logs, or backups
+- [ ] Public/partner-facing aggregates use DP or k ≥ threshold with documented rationale; a k-threshold is enforced in the view or endpoint itself with query auditing, and DP comes from a maintained library, not hand-rolled noise (§4)
+- [ ] All privacy-affecting settings default private/off, discoverability is opt-in, and new fields stay out of existing exports/shares until reviewed; check the three most recent features (§5)
+- [ ] Session replay / heatmap tooling absent or mask-allowlisted and consent-gated (§4)
+- [ ] Browser/device fingerprinting (canvas, WebGL, fonts, behavioural telemetry) is listed in the tracker inventory and privacy notice, used only on sensitive flows, consent-gated where required, stored hashed/truncated with hours-to-days raw retention (§1) — MEDIUM. Locator (lists every fingerprinting call; each hit is read, not a finding): `grep -rnE "toDataURL\(|UNMASKED_RENDERER_WEBGL|WEBGL_debug_renderer_info|@fingerprintjs|FingerprintJS" .`
+- [ ] Third-party remote content (hot-linked avatars, feed images, embeds) can be blocked by the user; rendered HTML email blocks remote content by default or loads it through a proxy (§5b) — MEDIUM. Locator for HTML email rendered straight into the page (each hit is read, not a finding): `grep -rnE "(innerHTML|dangerouslySetInnerHTML|v-html)[^;]*(mail|message)[A-Za-z_.]*(html|body)" .` — each hit must show the remote-content rewrite or proxy
 - [ ] Where the user base includes people at risk of coercion, a duress credential or panic mode was considered; if built, it is indistinguishable from normal use (§5c) — judgment, no probe

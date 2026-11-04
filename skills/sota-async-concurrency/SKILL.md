@@ -13,7 +13,7 @@ description: >-
   task group, goroutine, tokio, asyncio.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@a02c19971ad39254846890f87300a46b19e3e82e
+  source: martinholovsky/SOTA-skills@4c4837e3f891b4194623e467fec6294df4ff8d0a
   adapted-for: opencode
 ---
 
@@ -23,7 +23,8 @@ metadata:
 
 Read repository instructions first. This skill owns cross-language concurrency
 design, correctness, the bug catalog, and audit severity. Language skills
-(`sota-python`, `sota-rust`, `sota-typescript`, `sota-perl`, `sota-haskell`)
+(`sota-python`, `sota-rust`, `sota-golang`, `sota-swift`, `sota-typescript`,
+`sota-perl`, `sota-haskell`)
 own runtime APIs and runner syntax. `deep-performance-audit` owns
 latency/throughput methodology. `debug-loop` owns reproduce/fix sequence.
 
@@ -44,7 +45,8 @@ When writing new concurrent code:
 
 1. **Classify the workload first.** I/O-bound → async/event loop. CPU-bound →
    threads (if runtime has real parallelism) or processes. Mixed → async
-   front-end + bounded worker pool. Read `rules/01` before choosing.
+   front-end + bounded worker pool. Read [`rules/01`](rules/01-models-and-structure.md) before choosing; on an event
+   loop, keep blocking and CPU work off it ([`rules/04`](rules/04-event-loop-hygiene.md)).
 2. **Structured concurrency is the default.** Every task lives inside a scope
    (TaskGroup / nursery / errgroup / JoinSet) that joins or cancels it.
    Spawning a task with no owner is a design smell requiring written
@@ -53,17 +55,22 @@ When writing new concurrent code:
    request set, and spawn loop gets an explicit capacity. Unbounded = OOM with
    a delay timer.
 4. **Every await gets a timeout policy** — a number, or a documented reason
-   why it inherits one from an enclosing scope.
+   why it inherits one from an enclosing scope ([`rules/05`](rules/05-cancellation-timeouts-shutdown.md)).
 5. **Cancellation is a feature you build, not an exception you ignore.**
    Propagate context/AbortSignal/CancelledError; clean up in finally blocks;
-   design shutdown order (stop intake → drain → deadline → force).
+   design shutdown order (stop intake → drain → deadline → force) ([`rules/05`](rules/05-cancellation-timeouts-shutdown.md)).
 6. **Shared mutable state needs an owner.** Prefer message passing or
    single-owner tasks; if you must lock, define lock ordering and never hold a
-   lock across an await.
+   lock across an await. Races vs race conditions, atomicity and TOCTOU: [`rules/02`](rules/02-correctness.md);
+   choosing the primitive: [`rules/03`](rules/03-primitives.md). Ambient per-request context
+   (tenant, user) is reset when the request ends, or a reused worker serves the next request
+   with it: [`rules/07`](rules/07-audit-bug-catalog.md) §3.
 7. Re-read the relevant audit checklists against your own
    diff before declaring done.
 
 ## AUDIT mode
+
+**Coverage:** every `rules/` file's Audit checklist applies in AUDIT mode. Mark one *not applicable* only with its reason in the report — never skip a file because the thing it checks for is absent, since that absence may be the finding.
 
 When auditing existing code, you find races, deadlocks, and leaks by reading —
 grep is your debugger. Workflow:
@@ -87,7 +94,7 @@ grep is your debugger. Workflow:
 3. **For each suspect, prove the interleaving.** State the two (or more)
    execution orders and which one breaks. A finding without an interleaving is
    a style note, not a concurrency bug.
-4. Read `rules/07` for the full bug catalog with signatures.
+4. Read [`rules/07`](rules/07-audit-bug-catalog.md) for the full bug catalog with signatures.
 
 ### Severity conventions
 
@@ -114,13 +121,25 @@ Fix: concrete minimal change (primitive, bound, timeout value, scope).
 
 | File | Read this when... |
 |---|---|
-| `rules/01-models-and-structure.md` | Choosing event loop vs threads vs processes vs actors; CPU/I-O decision tree; structured concurrency, task groups, no orphaned tasks |
-| `rules/02-correctness.md` | Reasoning about data races vs race conditions, atomicity, memory ordering/visibility, TOCTOU, deadlock prevention, livelock, starvation, idempotency under retries |
-| `rules/03-primitives.md` | Picking or reviewing mutexes, RwLocks, semaphores, condition variables, channels (bounded vs unbounded), select/race, once/lazy init |
-| `rules/04-event-loop-hygiene.md` | Anything runs on an event loop: blocking calls, CPU work, offloading to pools, long-task chunking, microtask vs macrotask |
-| `rules/05-cancellation-timeouts-shutdown.md` | Timeout policy, propagating cancellation (context/AbortSignal/CancelledError), cleanup on cancel, graceful shutdown sequencing |
-| `rules/06-backpressure-flow-control.md` | Queues between components, producer/consumer rate mismatch, load shedding, token buckets, pull-based streaming |
-| `rules/07-audit-bug-catalog.md` | AUDIT mode: the signature, severity, and fix for every common async bug — fire-and-forget, missing await, lock-across-await, retry storms, thundering herd, unbounded spawns |
+| [`rules/01-models-and-structure.md`](rules/01-models-and-structure.md) | Choosing event loop vs threads vs processes vs actors; CPU/I-O decision tree; structured concurrency, task groups, no orphaned tasks |
+| [`rules/02-correctness.md`](rules/02-correctness.md) | Reasoning about data races vs race conditions, atomicity, memory ordering/visibility, TOCTOU, deadlock prevention, livelock, starvation, idempotency under retries |
+| [`rules/03-primitives.md`](rules/03-primitives.md) | Picking or reviewing mutexes, RwLocks, semaphores, condition variables, channels (bounded vs unbounded), select/race, once/lazy init |
+| [`rules/04-event-loop-hygiene.md`](rules/04-event-loop-hygiene.md) | Anything runs on an event loop: blocking calls, CPU work, offloading to pools, long-task chunking, microtask vs macrotask |
+| [`rules/05-cancellation-timeouts-shutdown.md`](rules/05-cancellation-timeouts-shutdown.md) | Timeout policy, propagating cancellation (context/AbortSignal/CancelledError), cleanup on cancel, graceful shutdown sequencing, retry interplay (cancellable backoff) |
+| [`rules/06-backpressure-flow-control.md`](rules/06-backpressure-flow-control.md) | Queues between components, producer/consumer rate mismatch, load shedding, token buckets, pull-based streaming |
+| [`rules/07-audit-bug-catalog.md`](rules/07-audit-bug-catalog.md) | AUDIT mode: the signature, severity, and fix for every common async bug — fire-and-forget, missing await, lock-across-await, retry storms, thundering herd, unbounded spawns, ambient per-request context (tenant, user) not reset |
+
+## Per-language detail
+
+This skill holds the cross-runtime model. Each language skill carries its runtime's half — its primitives, its executor, its leak and deadlock shapes — in one file. Read it beside this one whenever the code is in that language:
+
+| Language | File |
+|---|---|
+| Python | [`sota-python` rules/04](../sota-python/rules/04-async.md) |
+| Go | [`sota-golang` rules/03](../sota-golang/rules/03-concurrency.md) |
+| Rust | [`sota-rust` rules/04](../sota-rust/rules/04-async-tokio.md) |
+| JavaScript / TypeScript | `sota-typescript` (promises and cancellation) |
+| Swift | [`sota-swift` rules/03](../sota-swift/rules/03-concurrency.md) |
 
 ## Top 10 non-negotiables
 
@@ -135,7 +154,7 @@ Fix: concrete minimal change (primitive, bound, timeout value, scope).
    best and deadlocks it at worst. The **stated exception**: when exclusive access genuinely
    must span an await — a protocol exchange on one connection, say — use the runtime's
    *async-aware* mutex (`tokio::sync::Mutex`, `asyncio.Lock`) and accept the serialization
-   you are buying. `sota-rust` rules/04 prescribes exactly that case; without this exception
+   you are buying. [`sota-rust` rules/04](../sota-rust/rules/04-async-tokio.md) prescribes exactly that case; without this exception
    the two skills contradict each other on the same code.
 5. **Every await has a timeout policy.** External calls get explicit deadlines;
    internal ones inherit a scope deadline. "Forever" is a decision, not a

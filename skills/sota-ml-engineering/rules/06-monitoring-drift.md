@@ -8,6 +8,8 @@ retraining.
 
 ## 1. What drifts
 
+*(advisory: definitions of the four drift kinds; detection is probed under §2, live performance under §3)*
+
 - **Data/feature drift (covariate shift)**: the input distribution P(X) moves
   away from training. Detect *before* performance visibly drops.
 - **Concept drift**: the relationship P(y|X) changes — the same inputs now map
@@ -49,14 +51,16 @@ retraining.
 ## 4. Operational & data-quality monitoring
 
 - Monitor the serving system like any service: latency, throughput, error rate,
-  resource use (cross-ref `sota-observability`).
+  resource use (cross-ref [`sota-observability`](../../sota-observability/SKILL.md)).
 - Monitor **input data quality** at serving: schema conformance, null/NaN spikes,
   range violations, unexpected categories, feature freshness/staleness — a broken
   upstream feature is a common silent failure (ML Test Score monitoring tests).
 - Watch for **training/serving skew** continuously by comparing logged served
-  features to training (`rules/02`).
+  features to training ([`rules/02`](02-data-and-features.md)). The served-feature log
+  carries the same PII minimisation as training data: mask or drop PII fields before
+  logging ([`rules/07`](07-security-governance.md) §3, [`rules/02`](02-data-and-features.md) §6).
 - Record the out-of-distribution flags raised by the inference-time gate
-  (`rules/07` §1) and trend their rate; a rising rate is early drift.
+  ([`rules/07`](07-security-governance.md) §1) and trend their rate; a rising rate is early drift.
 
 ## 5. Retraining strategy
 
@@ -64,35 +68,43 @@ retraining.
   drift rate), or **drift/performance-triggered** (retrain when PSI or metric
   crosses a threshold). Don't retrain blindly on a timer if nothing changed, and
   don't wait for a complaint if drift is detected.
-- Retraining runs the **same validated pipeline** with gates (`rules/03`,
-  `rules/04`) — an automatically-retrained model still passes validation and
+- Retraining runs the **same validated pipeline** with gates ([`rules/03`](03-training-experimentation.md),
+  [`rules/04`](04-evaluation-validation.md)) — an automatically-retrained model still passes validation and
   progressive rollout before it serves. Beware feedback loops contaminating new
-  training data (`rules/01`).
+  training data ([`rules/01`](01-ml-systems-architecture.md)).
 - Keep model/version history and the ability to roll back a bad retrain
-  (`rules/05`).
+  ([`rules/05`](05-deployment-serving.md)).
 
 ## 6. Alerting & ownership
 
 - Drift/decay/data-quality alerts route to an owner with a runbook (what to
   check, when to retrain, when to roll back) — cross-ref `sota-observability`
-  and `sota-observability` for alerting discipline. An alert nobody owns
+  and security-monitoring guidance for alerting discipline. An alert nobody owns
   is noise.
 
 ## Audit checklist
 
-- [ ] **Any production monitoring at all? — HIGH if none** —
+- [ ] **Any production monitoring at all? — HIGH if none** (§2, §3) —
       `out=$(grep -rniE 'evidently|nannyml|whylogs|drift|psi|kolmogorov|ks_2samp|monitor' --include='*.py' . 2>&1); rc=$?` ;
       `case $rc in 0) printf '%s\n' "$out" | head ;; 1) echo "no drift/perf monitoring found — HIGH" ;; *) echo "SWEEP FAILED, not a finding about their code: $out" ;; esac`
-- [ ] **Drift detection method present?** —
-      `grep -rniE 'population_stability|psi|ks_2samp|chi2|js_diverg|wasserstein' --include='*.py' . | head`
-- [ ] **Live performance tracking + label lag handling — HIGH** —
-      `grep -rniE 'ground.?truth|label.*lag|actual|delayed|backfill.*label|live.*metric' --include='*.py' . | head`
-- [ ] **Data-quality/freshness monitoring at serving — MEDIUM/HIGH** —
-      `grep -rniE 'freshness|stale|null.*rate|schema.*serv|nan|range.*check' --include='*.py' . | head`
+- [ ] **Drift detection method present?** (§2) —
+      `grep -rqiE 'population_stability|psi|ks_2samp|chi2|js_diverg|wasserstein' --include='*.py' . || echo "no drift detection method"`
+- [ ] **Live performance tracking + label lag handling (§3) — HIGH** —
+      `grep -rqiE 'ground.?truth|label.*lag|actual|delayed|backfill.*label|live.*metric' --include='*.py' . || echo "no live performance tracking"`
+      ; manual: is ground-truth collection designed, and are performance estimates confirmed with
+      labels once they land?
+- [ ] **Data-quality/freshness monitoring at serving (§4) — MEDIUM/HIGH** —
+      `grep -rqiE 'freshness|stale|null.*rate|schema.*serv|nan|range.*check' --include='*.py' . || echo "no serving data-quality monitoring"`
+      ; manual: served features compared to training continuously, the served-feature log masks or
+      drops PII before logging, and the OOD-flag rate is trended
 - [ ] **Retraining trigger defined? — MEDIUM/HIGH** —
       `out=$(grep -rniE 'retrain|schedule|cron|airflow|trigger|cadence' . | grep -iE 'train|drift|model'); rc=$?` ;
       `case $rc in 0) printf '%s\n' "$out" | head ;; *) echo "no explicit retraining trigger (rc=$rc; if the first grep failed, rerun it alone)" ;; esac`
-- [ ] **Alerts have an owner/runbook — MEDIUM (manual)**
+      ; manual, for each trigger found: trace the retrain job to promotion — does it pass the
+      [rules/04](04-evaluation-validation.md) gate and the [rules/05](05-deployment-serving.md) progressive rollout (this file's §5)? A retrain that deploys
+      directly = HIGH
+- [ ] **Alerts have an owner/runbook (§6) — MEDIUM (manual)** — do drift, decay and data-quality
+      alerts route to an owner whose runbook says what to check, when to retrain and when to roll back?
 - [ ] **Drift method fits the data type; abrupt shifts routed apart (§2) — MEDIUM** — for
       text/image models: `grep -rniE 'embedding.?drift|mmd|mean.discrepancy|domain.?classifier' --include='*.py' . || echo "no embedding-level drift test"`
       ; manual: does a step change page separately instead of triggering a retrain?

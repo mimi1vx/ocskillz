@@ -22,9 +22,9 @@ Rules of thumb:
   different modules; pick per-module, not per-company.
 - **A microservice fleet must NOT lean on cross-service e2e.** Combinatorial
   environments, slow feedback, ownership ambiguity. Use in-service integration
-  tests with containerized dependencies (`rules/04`) plus contract tests at
+  tests with containerized dependencies ([`rules/04`](04-integration-contract-system.md)) plus contract tests at
   every service edge, and keep cross-service e2e to a handful of smoke flows.
-- **Whatever the shape, the e2e tip stays small** (see `rules/05`). The shape
+- **Whatever the shape, the e2e tip stays small** (see [`rules/05`](05-e2e-and-ui.md)). The shape
   argument is about the middle and bottom, never about growing the top.
 - **Write the decision down.** One paragraph in CONTRIBUTING.md: "In this repo
   a unit is X, integration tests run against Y, e2e covers flows Z1..Zn."
@@ -94,7 +94,7 @@ Every test costs forever (1.6). Spend nothing on:
   contract, not the output line-by-line.
 - **Third-party API behavior.** You can't fix it and the test will flake.
   Pin your *assumptions* about it instead with a thin contract test you run
-  separately (see `rules/03` "don't mock what you don't own").
+  separately (see [`rules/03`](03-doubles-and-test-data.md) "don't mock what you don't own").
 - **Log message wording, exact error prose, UI copy** — unless it IS the
   contract (CLIs, public APIs, i18n keys). Assert on error *types/codes*.
 - **The same behavior at multiple layers.** If a unit test proves the
@@ -109,11 +109,11 @@ Test depth must follow risk, not module enumeration. Score each area by
 
 - **High impact, high likelihood** (payment calculation, authz checks, data
   migrations, concurrency-sensitive code): exhaustive unit + integration,
-  property-based where inputs are open-ended (`rules/06`), negative paths
+  property-based where inputs are open-ended ([`rules/06`](06-property-fuzzing-mutation.md)), negative paths
   mandatory.
 - **High impact, low likelihood** (rarely-changed core invariants): solid
   tests once, then mutation-test the area occasionally to confirm the tests
-  still bite (`rules/06`).
+  still bite ([`rules/06`](06-property-fuzzing-mutation.md)).
 - **Low impact, high likelihood** (admin screens, formatting): thin happy-path
   coverage; rely on types/lint.
 - **Low impact, low likelihood**: consciously untested. Write the decision
@@ -144,16 +144,15 @@ The Agile Testing Quadrants (Marick/Crispin/Gregory) catch a different gap
 than the pyramid: whole categories of testing nobody owns.
 
 - **Q1 — technology-facing, supporting the team**: unit + component tests.
-  Automated. This skill's `rules/02`–`03`.
+  Automated. This skill's [`rules/02`](02-test-design-quality.md)–`03`.
 - **Q2 — business-facing, supporting the team**: acceptance/API/contract
-  tests expressing requirements as examples. Automated. `rules/04`–`05`.
+  tests expressing requirements as examples. Automated. [`rules/04`](04-integration-contract-system.md)–`05`.
 - **Q3 — business-facing, critiquing the product**: exploratory testing,
   usability, UAT. *Human* — do not pretend automation covers this; schedule
   exploratory sessions for risky releases.
 - **Q4 — technology-facing, critiquing the product**: performance, load,
   security, chaos/fault-injection. Tooling, run out-of-band from the PR
-  suite. Pointers: `rules/06` §6.5, `deep-performance-audit`,
-  `sota-code-security`.
+  suite. Pointers: [`rules/06`](06-property-fuzzing-mutation.md) §6.5, `deep-performance-audit`, [`sota-code-security`](../../sota-code-security/SKILL.md).
 
 Audit question: name the artifact covering each quadrant. "None for Q4" is a
 finding (High for systems with availability/latency SLOs).
@@ -165,7 +164,7 @@ The first term is the smallest and the only one people budget for.
 
 - **Run cost compounds brutally.** A 2-second test in a 50-engineer repo
   running 200 CI builds/day costs ~28 machine-hours/month *and* sits inside
-  every human feedback loop. Speed budgets per layer in `rules/07`.
+  every human feedback loop. Speed budgets per layer in [`rules/07`](07-suite-health-and-ci.md).
 - **Maintain cost is dominated by coupling.** Tests coupled to implementation
   (solitary mocks, snapshot dumps, CSS selectors) levy a tax on every
   refactor. Behavior-coupled tests are near-free to maintain.
@@ -184,7 +183,7 @@ The pathological shape: hundreds of slow e2e/UI tests, a thin brittle unit
 layer, QA-automation owned, 2-hour pipeline. Don't fix it test-by-test; fix
 it flow-by-flow:
 
-1. **Freeze the top**: no new e2e tests without a `rules/05` §5.1
+1. **Freeze the top**: no new e2e tests without a [`rules/05`](05-e2e-and-ui.md) §5.1
    justification; cap the e2e stage's wall-clock now.
 2. **Pick the highest-churn flow** and build its lower-layer coverage first
    (unit for the logic, one integration test for the wiring) — *then* delete
@@ -197,8 +196,8 @@ it flow-by-flow:
 
 The inverse pathology — thousands of mock-heavy "unit" tests and zero
 integration confidence — is fixed the same way in reverse: add containerized
-integration tests for the riskiest I/O paths (`rules/04`), then delete the
-mock choreography that duplicates them (`rules/03` §3.2).
+integration tests for the riskiest I/O paths ([`rules/04`](04-integration-contract-system.md)), then delete the
+mock choreography that duplicates them ([`rules/03`](03-doubles-and-test-data.md) §3.2).
 
 ## 1.8 TDD: when it pays, what actually matters
 
@@ -217,27 +216,38 @@ If not doing strict TDD, keep the two load-bearing habits:
 
 - [ ] Is there a written statement of suite shape and unit/integration
       boundary? (Look in CONTRIBUTING.md, docs/testing.md, test READMEs.
-      Missing → Medium.)
+      Missing → Medium.) (§1.1, §1.2)
 - [ ] Does the actual distribution match the architecture? Count tests per
       layer (`find . -path '*e2e*' -name '*test*' | wc -l` vs unit dirs).
-      Microservices with a giant cross-service e2e suite → High.
+      Microservices with a giant cross-service e2e suite → High (§1.1). Inverted
+      (ice-cream cone)? New e2e frozen behind a justification, the e2e stage
+      wall-clock capped, and the per-layer ratio tracked monthly? None → Medium (§1.7).
 - [ ] Are "unit" tests actually units? Grep unit-test dirs for I/O:
       `grep -rE 'localhost|127\.0\.0\.1|Connect\(|connect\(|requests\.|http\.Client|fetch\(' test/unit/` → mislabeled
-      integration tests (Medium; High if they make the unit suite >seconds).
+      integration tests (Medium; High if they make the unit suite >seconds). (§1.2)
 - [ ] Solitary-by-reflex? Ratio of mock constructions to test files —
       `grep -rcE 'Mock\(|mock\.|jest\.mock|@Mock|mockk|gomock' tests/` ;
-      mocks of *in-process, owned* collaborators → High (refactor-hostile).
+      mocks of *in-process, owned* collaborators → High (refactor-hostile). (§1.2)
 - [ ] Framework/getter tests present? Grep for tests asserting trivial
       delegation or ORM basics (`assert.*getId\(\)|test.*getter|save.*find.*assert equal` patterns) → Low, delete.
+      Also sample for private functions tested directly, generated/vendored output asserted
+      line-by-line, third-party API behavior asserted in the main suite, and log wording or
+      error prose asserted where it is not the contract → Low (§1.3).
 - [ ] Do the riskiest modules (top churn × past incidents) have the deepest
       tests, including negative paths? Sample 3 critical modules; happy-path-only
-      on a money/auth path → High.
+      on a money/auth path → High. Low-impact, low-likelihood areas left untested
+      with no written decision → Low (§1.4).
 - [ ] Is any behavior tested at 3+ layers? Pick one business rule and grep for
-      its assertions across unit/integration/e2e → Medium (consolidate down).
+      its assertions across unit/integration/e2e → Medium (consolidate down). (§1.3)
 - [ ] Quadrant gaps: is there *anything* for performance/security/chaos (Q4)
-      and exploratory (Q3)? None for a system with SLOs → High.
+      and exploratory (Q3)? None for a system with SLOs → High. (§1.5)
 - [ ] Are bug fixes accompanied by a regression test? Sample 5 recent
       fix-commits (`git log --grep='fix' --oneline | head`) and check each
-      touched a test → missing pattern is Medium.
+      touched a test → missing pattern is Medium. Feature PRs whose tests land in
+      a follow-up PR → Medium (§1.8).
 - [ ] Any test that cannot fail? Spot-check: invert a core `assert` or stub
-      the SUT in 2–3 important tests and rerun — still green → Critical.
+      the SUT in 2–3 important tests and rerun — still green → Critical. (§1.8)
+- [ ] Do test deletions record why? Find commits that remove tests with the deleted-test
+      probe of [rules/07](07-suite-health-and-ci.md) §7.10 (run over `git show <sha>`) and read each message:
+      no rationale → Low; a test deleted in the commit that "fixes" its own failure →
+      High (§1.6).

@@ -16,7 +16,7 @@ Rules:
 - Standard SLI shapes:
   - **Availability**: non-5xx (and non-timeout) responses / valid requests.
   - **Latency**: requests faster than threshold / valid requests — computed
-    from a histogram bucket boundary at the threshold (rules/02 §4), not
+    from a histogram bucket boundary at the threshold ([rules/02](02-metrics.md) §4), not
     from a p99 estimate.
   - **Freshness/lag** (pipelines): events processed within X / all events;
     or age of oldest unprocessed message under threshold.
@@ -154,7 +154,7 @@ Every alert must pass ALL of these or be deleted/demoted:
   permanent silence is a deletion in denial.
 - Never alert on every ERROR log line; alert on the SLI. Error logs are for
   diagnosis after the symptom alert fires. (Crash/error-tracker spike
-  notifications are tickets, not pages — rules/05 §5.)
+  notifications are tickets, not pages — [rules/05](05-operational-readiness.md) §5.)
 - Protect the alerting path itself: dead-man's-switch (an always-firing
   alert whose absence pages via an independent channel) so a broken
   Prometheus/Alertmanager doesn't equal silence-as-success.
@@ -163,7 +163,7 @@ Every alert must pass ALL of these or be deleted/demoted:
   alerts on its age, not its errors:
   `time() - job_last_success_timestamp_seconds > <interval × k>`, plus
   `absent(job_last_success_timestamp_seconds{job="…"})` for a job that never
-  reported. Data-pipeline freshness SLAs: `sota-data-engineering` rules/02
+  reported. Data-pipeline freshness SLAs: [`sota-data-engineering` rules/02](../../sota-data-engineering/rules/02-pipelines-and-orchestration.md)
   (Orchestration discipline).
 
 ## 6. SLO spec template and recording rules
@@ -223,6 +223,8 @@ independently.
 
 ## 8. Burn-rate math reference
 
+*(advisory)* — worked arithmetic behind the §3 burn-rate thresholds; the alerts it sizes are probed by the §3 item.
+
 For SLO target T over window W, with budget B = 1 − T:
 
 - Burn rate b means the W-budget is exhausted in W/b.
@@ -239,25 +241,35 @@ For SLO target T over window W, with budget B = 1 − T:
 ## Audit checklist
 
 - [ ] SLOs exist, are user-journey-based, and are written down (target,
-      window, SLI query, exclusions, owner); 2–5 per service, not 0, not 20.
+      window, SLI query, exclusions, owner); 2–5 per service, not 0, not 20;
+      "valid events" exclusions are documented, and 429s caused by
+      under-provisioning are counted, not excluded (§1).
 - [ ] Latency SLI computed from histogram bucket boundary at the threshold,
-      not from averaged quantiles.
+      not from averaged quantiles (§1).
 - [ ] Error budget policy documented and signed off by product; evidence it
-      has actually gated a decision at least once.
+      has actually gated a decision at least once; SLO windows are rolling,
+      not calendar, and SLOs are reviewed quarterly (§2).
 - [ ] Paging alerts are multi-window burn-rate (or equivalently
       symptom-based with auto-resolve); no raw "error rate > X for 5m"
       pagers; no cause-based pagers (CPU/restarts/disk%) except
-      lead-time-to-irreversible cases.
-- [ ] Sample 10 recent pages: every one was actionable, runbook-linked, and
-      led to action; pages per shift within budget; monthly alert review
-      happens.
+      lead-time-to-irreversible cases; sparse-traffic SLIs carry a
+      minimum-traffic guard or use synthetic probes as their source (§3).
+- [ ] Sample 10 recent pages: every one was actionable, symptom-based,
+      runbook-linked, owned, and led to action; pages per shift within
+      budget; monthly alert review happens (§4).
 - [ ] Every alert has: severity label, owner/route, runbook URL (resolving,
-      current), dashboard link.
-- [ ] Inhibition/grouping configured; silences expire and carry reasons.
-- [ ] Dead-man's-switch on the alerting pipeline; monitoring-down pages via
+      current), dashboard link (§4); each severity matches the page-vs-ticket
+      table — fast burn, a critical journey down and the telemetry pipeline
+      down page; slow burn, a degraded dependency with the SLI fine and a
+      tracker spike ticket; a self-replaced single pod OOM pages no one (§7).
+- [ ] Inhibition/grouping configured (§5); silences expire and carry reasons.
+- [ ] Dead-man's-switch on the alerting pipeline (§5); monitoring-down pages via
       an independent channel.
 - [ ] Every scheduled job alerts on the age of its last success (and on
       the gauge's absence), so a job that never ran pages (§5).
-- [ ] Low-traffic journeys covered by synthetic probes feeding SLIs.
+- [ ] Low-traffic journeys covered by synthetic probes feeding SLIs (§1, §3).
 - [ ] Alert definitions in version control, code-reviewed, deployed like
-      code (no hand-edited live alerts).
+      code (no hand-edited live alerts); each SLO is a versioned spec beside
+      its alert code; SLI ratios are recording rules shared by alerts and
+      dashboards; availability and latency each have their own burn-rate
+      alert pair (§6).

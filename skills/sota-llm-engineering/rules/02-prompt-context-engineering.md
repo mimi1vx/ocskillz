@@ -49,9 +49,18 @@ Rules that follow from how models attend and how caches key (§5):
   call). This is the *opposite* of the on-demand file loading a coding agent
   does from a router — the model executing a prompt has no loader and cannot
   fetch what you name. (Adopted 2026-07-24.)
+- **A brief to another agent is a prompt, and its premises propagate.** A subagent
+  brief, a research prompt or a review request becomes the premise of everything sent back,
+  and of every report built on that. Restate each factual premise in it from the artifact
+  (the results file, the commit, the doc), never from your own summary of it — the
+  "restate from the artifact" discipline applied to output that does not *look* user-visible.
+  Example: a research prompt said one probe "matched" another. The results file said the
+  other was best on every category, and two external reports built their verdict on the
+  wrong premise. What caught it was a subagent told to read primary sources, not the brief.
+  The inverse direction, a subagent's *result*, is [rules/04](04-agents-tools.md)'s "validate them".
 - **Don't prompt what you can enforce in code.** Format → schema (§6).
-  Authorization → code (sota-code-security rules/08). Budgets → harness
-  (rules/04). Prompts are steering, never the enforcement boundary.
+  Authorization → code ([sota-code-security rules/08](../../sota-code-security/rules/08-llm-ai-security.md)). Budgets → harness
+  ([rules/04](04-agents-tools.md)). Prompts are steering, never the enforcement boundary.
 
 ## 2. Context budget management
 
@@ -68,14 +77,15 @@ Budget by category, enforce in code:
 | System prompt + tools | Fixed, frozen, cached (§5). Audit periodically for dead rules. |
 | Few-shot examples | Only as many as the eval justifies (§3). |
 | Retrieved context | Top-k *after* reranking, token-capped; never "all matches". |
-| Conversation history | Sliding window + summarization/compaction past a threshold (rules/04 §5); never unbounded append. |
+| Conversation history | Sliding window + summarization/compaction past a threshold ([rules/04](04-agents-tools.md) §5); never unbounded append. |
 | Live input | Validated for length at the boundary; oversized input is **rejected with an error** by default. Chunking or summarization only where the design chose it for that route — never silent truncation. |
 
 - **Measure with the provider's token counter** (e.g. a `count_tokens`
   endpoint). Never use another provider's tokenizer, and never a chars/4 rule of
   thumb. The error is **not a rounding error**: on prose it runs 15–20%+, and on
   **markdown- and code-dense text it is far worse** — one 42.8 KB instruction file
-  measured **16,934** tokens via Anthropic's `count_tokens` against **10,995** from
+  (this library's router; `count_tokens` on `claude-sonnet-5`, 2026-08-26 — counts are
+  per model) measured **16,934** tokens via Anthropic's `count_tokens` against **10,995** from
   `o200k_base` — the foreign tokenizer sits **35% below** the real count, which is the same
   gap seen from the other end as the real count being **54% above** it. A chars/4 estimate
   in that project's own docs was **38% below** a 16,442-token file (2026-08-26). *State
@@ -112,14 +122,14 @@ Few-shots are the highest-leverage and most-rotted part of prompts.
   calls, not shape.
 - Dynamic (retrieved-per-query) few-shots are powerful for diverse tasks but
   they sit in the volatile zone — place them after the cached prefix (§5)
-  and version the selector like any retrieval component (rules/03).
+  and version the selector like any retrieval component ([rules/03](03-rag-retrieval.md)).
 
 ## 4. Injection-safe interpolation
 
 Untrusted content (user input, retrieved docs, tool results, file contents)
 goes into typed slots as *data* — labeled, delimited, never concatenated into
-the instruction stream. Full threat model and defenses: sota-code-security
-rules/08. The build-quality contract here:
+the instruction stream. Full threat model and defenses: [sota-code-security
+rules/08](../../sota-code-security/rules/08-llm-ai-security.md). The build-quality contract here:
 
 ```python
 # GOOD — template with typed slots; untrusted content delimited + labeled
@@ -165,7 +175,7 @@ prompt = f"Answer this: {user_input}. Use document: {doc}. Reply as JSON."
   placement per model on the eval — it does not transfer between models.
   None of this is a control: security wording in a system prompt steers,
   assume the prompt will be disclosed, and enforce in code
-  (sota-code-security rules/08). OWASP: AISVS 2.1.6, 2.1.7; OWASP LLM
+  ([sota-code-security rules/08](../../sota-code-security/rules/08-llm-ai-security.md)). OWASP: AISVS 2.1.6, 2.1.7; OWASP LLM
   Prompt Injection Prevention cheat sheet; OWASP RAG Security cheat sheet.
 
 ## 5. Caching-aware prompt structure
@@ -195,7 +205,7 @@ prompt structure can triple spend and add seconds of latency — silently.
 - **Verify hits in telemetry**: cache-read tokens ≈ 0 across repeated
   requests with a marker present means a silent invalidator — diff two
   rendered prompts byte-for-byte. Wire cache-hit-rate into the dashboards
-  (rules/05).
+  ([rules/05](05-production-engineering.md)).
 
 ## 6. Structured output: schema over parse-and-pray
 
@@ -244,27 +254,30 @@ category = data.get("category", "other")                    # silently launders 
   remainder and **recording what was dropped** — a per-field reject counter and
   the offending value, not a discarded document. This does not extend to an
   untrusted caller: at a trust boundary, unknown or unparseable fields are still
-  reject (`sota-code-security` rules/09 §4). The distinction is who authored the
+  reject ([`sota-code-security` rules/09](../../sota-code-security/rules/09-untrusted-data-ingestion.md) §4). The distinction is who authored the
   document, not how the parse failed.
 - **When a field goes constant, the seam is here, not in the reader.** An empty
   or zero column across a large row count usually means the consumer reads a key
-  the model never emits — `sota-code-security` rules/13 §4a, whose runtime
+  the model never emits — [`sota-code-security` rules/13](../../sota-code-security/rules/13-context-dependent-silence.md) §4a, whose runtime
   detector (log the returned keys nothing consumed) is what closes it.
   Constrained decoding above is the structural fix; instructing the format in
   the prompt demonstrably is not, and §1's inline-the-schema rule does not help
   here — it was already satisfied in every reported case.
-- **Check `stop_reason` before parsing.** `max_tokens` or
-  `model_context_window_exceeded` → truncated JSON (raise the cap or shrink
-  the input, don't repair-loop it); `refusal` → no schema guarantee (handle
-  explicitly); `pause_turn` → not finished, send the content back to
-  continue (Anthropic's stop-reason values, verified 2026-09-26). Code that
-  indexes `content[0]` unconditionally breaks on refusal-shaped responses.
+- **Check `stop_reason` before parsing.** A truncated or refused response carries no
+  schema guarantee, so never parse it as if complete; the handling for each value is
+  [rules/04](04-agents-tools.md) §3. Code that indexes `content[0]` unconditionally breaks on
+  refusal-shaped responses.
 - **Set `max_tokens` explicitly at every structured-output call site.** An unset
   cap inherits a client/config default sized for chat, so a long JSON document
   hits it silently — the call returns a fragment, not an error. Where the
   provider reports usage, also assert `output_tokens < max_tokens`: a wrapper
   that drops `stop_reason` leaves that arithmetic as your only tell
-  (`sota-code-security/rules/16` §2.7, `rules/11` §2.2).
+  ([`sota-code-security/rules/16`](../../sota-code-security/rules/16-where-no-ops-hide.md) §2.7, [`rules/11`](../../sota-code-security/rules/11-dead-path-diagnostics.md) §2.2).
+  **On a reasoning model the cap covers the thinking too** — "Thinking tokens count toward
+  the `max_tokens` limit for the turn" (Anthropic extended-thinking docs, read 2026-10-27) —
+  so a cap sized for the answer alone can come back at `max_tokens` with an empty or cut
+  answer while the reasoning is still billed as output ([rules/05](05-production-engineering.md) §4). A retry at the
+  same cap is the repair loop the bullet above rules out: raise the cap or shrink the input.
 - **Schema design for models:** flat-ish, every field `description`-annotated,
   enums for closed sets, `additionalProperties: false`, no clever recursion.
   Include an escape hatch field (`"unsure": true` / `"other"` enum arm) so
@@ -278,10 +291,10 @@ category = data.get("category", "other")                    # silently launders 
   Medium finding (High if they gate consequential output). If a
   prompt-management platform is used, it must enforce review + eval gates,
   and the repo remains the source of truth or mirrors it.
-- **Every prompt change is an eval run** (rules/01 §5). Diff-review prompts
+- **Every prompt change is an eval run** ([rules/01](01-evals.md) §5). Diff-review prompts
   like code: a one-word change can flip behavior.
 - **Tag traces with prompt version** (hash or semver) so production behavior
-  is attributable to an exact prompt (rules/05).
+  is attributable to an exact prompt ([rules/05](05-production-engineering.md)).
 - **Prompt rot** — the failure mode of mature prompts: years of appended
   special-case rules ("ALWAYS...", "NEVER... except..."), contradictions,
   instructions for models two generations gone. Symptoms: nobody can explain
@@ -294,20 +307,23 @@ category = data.get("category", "other")                    # silently launders 
 
 ## Audit checklist
 
-- [ ] System prompts sectioned and stable; no timestamps/IDs/flags
+- [ ] System prompts sectioned and stable (§1); no timestamps/IDs/flags
       interpolated into the prefix; per-request content injected late.
-- [ ] Critical instructions placed at the edges of long contexts; no
+- [ ] Critical instructions placed at the edges of long contexts (§1); no
       contradictions across system prompt / few-shots / templates.
-- [ ] Prompt is self-contained: every schema/format/enum/rule it depends on is
+- [ ] Briefs to other agents (subagent, research, review prompts) state each factual
+      premise from the artifact it came from, not from a summary of it (§1).
+- [ ] Prompt is self-contained (§1): every schema/format/enum/rule it depends on is
       inlined or code-assembled, not referenced by pointing at a file that may
       not be in context (which degrades silently to fabrication).
-- [ ] Context assembled under explicit per-category token budgets; provider
+- [ ] Context assembled under explicit per-category token budgets (§2); provider
       token counter used; truncation explicit, boundary-aware, surfaced.
 - [ ] Few-shots consistent with current instructions, demonstrate boundary
-      cases, count justified by evals.
-- [ ] Untrusted content enters via typed, delimited, trust-labeled slots
+      cases, count justified by evals; dynamic few-shots placed after the cached
+      prefix with a versioned selector (§3).
+- [ ] Untrusted content enters via typed, delimited, trust-labeled slots (§4)
       with delimiter escaping — no f-string concatenation into instructions
-      (cross-check sota-code-security rules/08).
+      (cross-check [sota-code-security rules/08](../../sota-code-security/rules/08-llm-ai-security.md)).
 - [ ] Untrusted text never tokenizes into control tokens; instruction
       hierarchy stated and eval-tested; key instructions restated after
       retrieved content; no prompt wording treated as the control (§4).
@@ -315,24 +331,26 @@ category = data.get("category", "other")                    # silently launders 
       `grep -rnE 'allowed_special[[:space:]]*=[[:space:]]*.all|split_special_tokens[[:space:]]*=[[:space:]]*False' .`
       (also read calls that omit `split_special_tokens` — False is the default).
 - [ ] Prompts are named constants/files in the repo, versioned, diffable;
-      traces carry prompt version.
+      traces carry prompt version; no dashboard-edited prompt bypasses review
+      and CI evals — Medium, High if it gates consequential output (§7).
 - [ ] Cache-aware ordering verified: frozen prefix, deterministic
-      serialization, volatile content last, cache-hit rate monitored.
-- [ ] All machine-consumed output schema-constrained (structured output API
+      serialization, volatile content last, no tool-set or model swap
+      mid-conversation, cache-hit rate monitored (§5).
+- [ ] All machine-consumed output schema-constrained (§6) (structured output API
       or strict tool schema), client-validated, bounded repair then explicit
       reject; no regex/substring JSON harvesting.
 - [ ] Whole-document rejection over one bad field is treated as a **recall**
       decision — valid remainder salvaged and the drop recorded — for
       model-authored documents, and never relaxed at a trust boundary (§6);
       no field read out of a model response with a default that is
-      indistinguishable from absence (`sota-code-security` rules/13 §4a).
-- [ ] `stop_reason`/refusal/truncation handled before parsing; no
+      indistinguishable from absence ([`sota-code-security` rules/13](../../sota-code-security/rules/13-context-dependent-silence.md) §4a).
+- [ ] `stop_reason`/refusal/truncation handled before parsing (§6); no
       unconditional `content[0]` access; `max_tokens` set explicitly at every
       structured-output call site, and `output_tokens < max_tokens` asserted.
-- [ ] Schemas: descriptions on fields, enums for closed sets, escape-hatch
+- [ ] Schemas (§6): descriptions on fields, enums for closed sets, escape-hatch
       field present, provider-unsupported constraints validated client-side.
 - [ ] No prompt rot: every rule traceable to an eval case; legacy
-      model-specific scaffolding removed on model migration.
+      model-specific scaffolding removed on model migration (§7).
 - [ ] User input over the token budget rejected with an error by default;
       chunking/summarization only where chosen per route; no slice or
       tokenizer truncation of user text or the assembled prompt (§2).

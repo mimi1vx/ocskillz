@@ -98,7 +98,10 @@ compatibility, not least privilege. For a real sandbox, profile the workload
 tries `clone3` first and falls back to `clone` only on `ENOSYS` (`clone-internal.c`), so
 an `EPERM` default breaks every thread start (measured 2026-09-26, podman+crun: Python
 `can't start new thread`; with the rule above, threads start). Confirm the errno your
-runtime actually delivers — a one-rule allow-default test profile returned `EPERM` anyway.
+runtime actually delivers: crun before 1.30 caches compiled filters under a checksum that
+omits per-rule `errnoRet`, so a profile differing from an earlier one only in `errnoRet`
+silently reuses the old filter (reproduced 2026-09-27 on crun 1.24 — `errnoRet` 38, then 95,
+on the same rule set both returned 38; fixed in crun 1.30, commit `10b754c`).
 
 **R3.2 — Syscalls that must never appear in an untrusted-workload allowlist** unless
 specifically justified: `ptrace`, `process_vm_readv/writev`, `bpf`, `perf_event_open`,
@@ -197,6 +200,17 @@ container↔host file isolation for free) or AppArmor (Debian/Ubuntu:
 `label=unconfined`, `apparmor=unconfined`, `:Z`-mounting whole host paths, or a
 permissive-everything custom profile are findings, not fixes.
 
+**R6.4 — A shipped profile declared `flags=(unconfined)` is a grant, not a carve-out.** AppArmor
+ships such profiles so that named binaries keep a permission a policy otherwise withholds. The
+documented case is user-namespace creation under `kernel.apparmor_restrict_unprivileged_userns=1`,
+which allows it only to a profile with a `userns,` rule (Ubuntu's rollout, Launchpad #2035315).
+Leave them as shipped, and do not report them under R6.2. That rule is about runtime opt-outs
+(`apparmor=unconfined`, `--security-opt`) and hand-written permissive profiles. Field-measured
+2026-10-22 on apparmor 4.1.8: 78 of 145 shipped profiles carried the flag, and forcing all of them
+into complain mode broke rootless Podman (`failed to reexec: Permission denied`). Toggling the
+`podman` profile alone, with each other change reverted, reproduced and cleared it. Why complain
+mode denied anything there is **unverified**. Count them: `grep -l 'flags=(unconfined)' /etc/apparmor.d/*`.
+
 **R6.3 — LSM is your mount-scope backstop**, not your primary policy. Primary scoping
 comes from mount namespaces/Landlock; LSM catches what they miss (e.g., leaked FDs,
 `/proc/$pid/root` traversals).
@@ -224,6 +238,15 @@ input. Measured 2026-08-18 in a container, linux/amd64:
 |---|---|---|---|
 | Go 1.26, hello world | 1,227,204 kB (~1.17 GiB) | 2,376 kB | `fatal error: failed to reserve page summary memory` |
 | Temurin 25, `-Xmx128m` | 3,937,756 kB (~3.75 GiB) | 112,908 kB | `Could not reserve enough space for 131072 KB object heap` |
+| native C, many shared libs (`ffprobe` 7.1) | — | — | under `ulimit -v 200M`: exit **127**, `error while loading shared libraries: … failed to map segment` |
+
+**Native binaries fail differently, and the code says "missing", not "failed".** The last row
+dies in the dynamic loader before `main`, and **127** is the shell's *command not found* code.
+A caller that maps a non-zero probe to "no output" or "tool unavailable" turns the AS cap into a
+silent skip: the inspection reports **EMPTY**, not FAILED. Reproduced 2026-10-12 on
+`debian:stable-slim` with ffmpeg: `ulimit -d 200M` runs the same probe (rc 0) and still kills a
+400 MiB allocation (rc 12). Field-reported first in a file-inspection worker, where an AS cap
+had already been patched twice at the symptom.
 
 Reported against Go 1.14, whose allocator change introduced the jump
 (golang/go#38010); it has not come back down — the row above is Go 1.26. **`RLIMIT_DATA` is the working knob**: since Linux 4.7 it covers private
@@ -233,7 +256,7 @@ without touching the reservation. Same run, both arms: `ulimit -d 512M` complete
 `RLIMIT_DATA` bounds only `brk` and will not cap an mmap-backed heap at all — check
 the kernel before relying on it. Testing only the deny arm here is how the AS cap
 survives review: it refuses the runaway allocation exactly as intended, and also
-every legitimate one (`sota-code-security` rules/12 §1a).
+every legitimate one ([`sota-code-security` rules/12](../../sota-code-security/rules/12-verifying-the-verifier.md) §1a).
 
 **R7.2b — when you cannot get a cgroup (a child inside an existing container).**
 `memory.max` is the right primitive and is routinely *unavailable* to the process
@@ -243,7 +266,7 @@ memory pids`. Verified 2026-08-18 (podman, `cgroupns=private`, unprivileged):
 `mkdir /sys/fs/cgroup/probe` → `Read-only file system`; remounting it `rw` →
 `Permission denied`. **Probe with `mkdir`, never by reading `cgroup.controllers`** —
 the controller list describes the hierarchy, not your write access to it (the
-"it's enabled" claim of `sota-code-security` rules/10, applied to cgroups).
+"it's enabled" claim of [`sota-code-security` rules/10](../../sota-code-security/rules/10-silent-control-failure.md), applied to cgroups).
 Fallbacks, best first:
 
 1. **A delegated sub-cgroup** — needs the runtime to hand you a writable subtree
@@ -256,6 +279,14 @@ Fallbacks, best first:
 4. **A parent watchdog** polling the child's RSS and `SIGKILL`-ing it — lossy by the
    poll interval, so budget headroom; it terminates rather than throttles, which is
    what a runaway parser needs.
+
+**Not Linux: macOS has no cgroup and accepts no memory rlimit.** `setrlimit` rejects
+`RLIMIT_DATA`, `RLIMIT_AS` and `RLIMIT_RSS` (`EINVAL`; `ulimit -d`/`-v` print "cannot modify
+limit"; CPython's `resource.setrlimit` raises `ValueError` for `EINVAL`, per `Modules/resource.c`),
+and a Python `preexec_fn` that tries aborts the spawn with `SubprocessError`. Measured
+2026-10-23 on macOS 26.7.1 with CPython 3.9.6 and 3.14.8 (control: `RLIMIT_NOFILE` lowers fine);
+the same `preexec_fn` capped a child at 1 GiB on Linux. So only 3 (a container, which on macOS is
+a Linux VM) and 4 remain there.
 
 Runtime knobs are **not** a boundary for untrusted code: `GOMEMLIMIT` is documented
 as a *soft* limit that excludes `syscall.Mmap` and C-allocated memory
@@ -312,31 +343,50 @@ do not change the boundary class.
 ## Audit checklist
 
 - [ ] All seven namespace types unshared unless a documented need to share; host
-      `/proc` never bind-mounted into PID-namespaced sandboxes.
+      `/proc` never bind-mounted into PID-namespaced sandboxes; PID 1 inside is a
+      reaping init (`tini`, `catatonit`, `--init`); the root is built with
+      `pivot_root` (not chroot), mount propagation `MS_PRIVATE`/`MS_SLAVE`, and
+      `/proc/kcore`, `/proc/sys`, `/sys/firmware`, `/proc/sysrq-trigger` masked (§1).
 - [ ] Userns posture decided explicitly: rootless mapping used for sandboxes AND
-      unprivileged userns creation restricted on untrusted-code hosts.
+      unprivileged userns creation restricted on untrusted-code hosts (§1).
 - [ ] cgroup v2 budget present: `memory.max` + `swap.max=0`, `pids.max`, `cpu.max`,
-      `memory.oom.group=1`; host cgroupfs not writable from inside.
+      `io.max`, `memory.oom.group=1`; host cgroupfs not writable from inside; on mixed
+      hosts the enforcing hierarchy is confirmed v2 (`stat -fc %T /sys/fs/cgroup`
+      with GNU stat on the host prints `cgroup2fs`) (§2).
 - [ ] Memory bounded by cgroup `memory.max` or `RLIMIT_DATA` — **never
       `RLIMIT_AS`**, which kills Go/JVM workloads at startup (R7.2a); where no
       cgroup can be created, the fallback is chosen deliberately and write access
-      was probed with `mkdir`, not inferred from `cgroup.controllers` (R7.2b).
+      was probed with `mkdir`, not inferred from `cgroup.controllers` (R7.2b). On a
+      macOS host neither applies (R7.2b, *Not Linux*): `setrlimit` returns `EINVAL`, so
+      require a container or an RSS watchdog and confirm the `setrlimit` return is checked.
+      `GOMEMLIMIT` or `-Xmx` never stands as the memory cap for code you do not trust (§7).
 - [ ] seccomp: deny-by-default allowlist (not the Docker default for high-risk
       workloads); all ABIs covered; R3.2 hard-deny set absent from allowlist;
-      filter loaded after `no_new_privs`, before untrusted code.
-- [ ] No design relies on seccomp filtering pointer arguments (paths).
+      filter loaded after `no_new_privs`, before untrusted code; a `clone3` deny
+      returns `"errnoRet": 38` (ENOSYS), not the default `EPERM` (§3).
+- [ ] No design relies on seccomp filtering pointer arguments (paths), and no
+      `seccomp_unotify` supervisor makes a security decision on a pointer
+      argument (§3).
 - [ ] Landlock (or mount-ns scoping) restricts file access to enumerated paths;
-      every `handled_access_fs` bit handled; fails closed on old kernels.
+      every `handled_access_fs` bit the running ABI supports handled, and
+      `handled_access_net` and `scoped` (abstract-UNIX socket, signal) set where
+      the ABI has them; fails closed on old kernels (§4).
 - [ ] Capabilities: bounding set cleared, ambient scrubbed, add-backs individually
-      justified; no `CAP_SYS_ADMIN`/`CAP_SYS_PTRACE`/`CAP_BPF` for untrusted work.
-- [ ] `no_new_privs` set on every sandboxed process.
-- [ ] One LSM enforcing on hosts; no unconfined/permissive carve-outs without
-      written justification.
-- [ ] Read-only rootfs; writable mounts are size-capped tmpfs `nosuid,nodev,noexec`.
-- [ ] FDs, env, signals, TTY scrubbed at the boundary; `RLIMIT_CORE=0`; wall-clock
-      kill exists in addition to CPU quota.
-- [ ] systemd services: `systemd-analyze security` exposure reviewed; the R7.4 set
-      applied or deviations justified.
+      justified; no `CAP_SYS_ADMIN`/`CAP_SYS_PTRACE`/`CAP_BPF`, nor any other
+      root-equivalent capability R5.1 lists, for untrusted work (§5).
+- [ ] `no_new_privs` set on every sandboxed process (§5).
+- [ ] One LSM enforcing on hosts; no unconfined/permissive carve-outs **you added** without
+      written justification, no `:Z` relabel of a whole host path, and no `setenforce 0`
+      used to clear a denial. Shipped `flags=(unconfined)` profiles are grants (R6.4): not a
+      finding, and not to be forced into complain or enforce mode (§6).
+- [ ] Read-only rootfs; writable mounts are size-capped tmpfs `nosuid,nodev,noexec`;
+      nothing both writable and executable except a confined JIT dir (§7).
+- [ ] FDs, env, signals, TTY scrubbed at the boundary; `umask 077`; `RLIMIT_CORE=0`,
+      `RLIMIT_NOFILE` and `RLIMIT_FSIZE` set; wall-clock kill exists in addition to
+      CPU quota (§7).
+- [ ] systemd services: `systemd-analyze security` exposure reviewed (above 8.0 on a
+      network-facing service is a finding); the R7.4 set applied or deviations
+      justified (§7).
 - [ ] Sandbox hosts apply the R8.1 sysctl baseline (esp. unprivileged BPF,
       userfaultfd, ptrace_scope, perf_event_paranoid) and restrict on-demand
-      module autoloading; deviations documented.
+      module autoloading; deviations documented (§8).

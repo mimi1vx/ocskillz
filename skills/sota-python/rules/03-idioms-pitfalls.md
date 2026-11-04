@@ -95,9 +95,12 @@ below 3.15 — before that the default is the locale encoding (cp1252 on many Wi
 the same file reads differently per machine. UTF-8 mode is on by default from 3.15 (PEP 686;
 `sys.flags.utf8_mode` read 1 on 3.15.0b4 and 0 on 3.14.6, measured 2026-09-25), and an
 explicit `encoding=` stays correct on every version. Security note: `Path` does NOT prevent
-traversal; see rules/05 §4.
+traversal; see [rules/05](05-security.md) §4.
 
 ## 6. EAFP vs LBYL
+
+*(audited in [`sota-async-concurrency` rules/02](../../sota-async-concurrency/rules/02-correctness.md): its check-then-act sweep;
+the dict double lookup is ruff SIM401, in this file's ruff item)*
 
 Default to EAFP — ask forgiveness — because LBYL check-then-act races:
 
@@ -156,7 +159,7 @@ class Status(StrEnum):          # 3.11+: members ARE str — JSON/DB-friendly
 
 Know cold: `itertools.chain`, `batched` (3.12), `pairwise`, `groupby` (input must be sorted by
 the same key — classic bug), `islice`, `product`, `takewhile`;
-`functools.cache`/`lru_cache` (caveats in rules/06), `cached_property`, `partial`, `reduce`
+`functools.cache`/`lru_cache` (caveats in [rules/06](06-performance.md)), `cached_property`, `partial`, `reduce`
 (sparingly), `singledispatch` for type-based dispatch without isinstance ladders;
 `collections.Counter`, `defaultdict`, `deque` (O(1) popleft — never `list.pop(0)` in a loop).
 Hand-rolled chunking/flattening/windowing functions in a utils.py are an audit smell: replace
@@ -209,6 +212,21 @@ Rules:
       for e in eg.exceptions: logger.error("fetch failed: %s", e)
   ```
   Code that catches `Exception` around a TaskGroup and inspects nothing loses errors.
+- **What no `except` reaches: bound depth and size before the work, not after.**
+  `RecursionError` and `MemoryError` are `Exception` subclasses, so a top-level handler does
+  catch them, once the CPU and memory are already spent. Three failures run no handler at
+  all: a crash inside a C extension or `ctypes` call (SIGSEGV), the kernel or a container
+  limit killing the process for memory (SIGKILL cannot be caught, signal(3)), and on CPython
+  ≤ 3.11 C-level recursion after `sys.setrecursionlimit` was raised. Measured: a
+  10⁶-deep list through `repr()` with the limit raised exited 139 (SIGSEGV) on 3.11.15 and
+  raised a catchable `RecursionError` on 3.12.13 and 3.14.8, which have their own C-stack
+  guard. Rules: never raise `sys.setrecursionlimit` on a request path; cap the body size
+  before `json.loads` (n levels of nesting cost only 2n bytes); bound the depth of any
+  recursive walk over parsed data yourself. `json.loads` has no depth parameter, and the
+  depth it accepts depends on the version: measured, 3.12.13 and 3.13.13 rejected 10,000
+  levels, 3.14.8 accepted 100,000 and rejected 200,000 (its C-stack guard, not
+  `sys.getrecursionlimit()`). So a 3.14 parse can hand a 100,000-deep tree to your own
+  recursive code.
 
 ## 11. Logging done right
 
@@ -246,12 +264,12 @@ except StorageError:
   (interning makes it *sometimes* work, which is worse).
 - Returning `-1`/`0`/`""` to mean "absent" instead of `None`: type-checks, survives a
   truthiness check, and flips ordering comparisons. Producer shape and the three
-  detectors in rules/02 §2a.
+  detectors in [rules/02](02-typing-correctness.md) §2a.
 - Naive datetimes: always `datetime.now(tz=timezone.utc)`; `utcnow()` is deprecated and naive
   (ruff DTZ).
 - `zip(a, b, strict=True)` (3.10+) when silent truncation would hide a length-mismatch bug.
 - Shadowing builtins (`list`, `id`, `type`, `input`) — rename (ruff A).
-- String building in loops: collect + `"".join(parts)` (perf details rules/06).
+- String building in loops: collect + `"".join(parts)` (perf details [rules/06](06-performance.md)).
 - `round()` is banker's rounding; money math uses `Decimal` with explicit quantize.
 - **Non-finite numbers from input.** `float()` accepts `"nan"`, `"inf"`, `"Infinity"` in any
   case and with surrounding whitespace; `Decimal("NaN")`/`Decimal("Infinity")` parse too, and
@@ -275,7 +293,7 @@ except StorageError:
 
 Everything above is about code that works. This is about code other people import, where the
 cost of a change is paid by someone who cannot see your reasoning. The shared design rules
-live in `sota-architecture`; what follows is the Python-specific mechanism.
+live in [`sota-architecture`](../../sota-architecture/SKILL.md); what follows is the Python-specific mechanism.
 
 **`__all__` controls exactly one thing, and it is not privacy.** It is the name list for
 `from mod import *`, and it is what documentation tooling reads as the public surface. It
@@ -334,21 +352,39 @@ def get(url: str) -> Response: ...
 ```
 
 **`DeprecationWarning` is hidden by default** outside `__main__`, so the warning your users
-need is the one they will not see. Make your own test suite fail on it
-(`filterwarnings = ["error::DeprecationWarning"]` in pytest config) or you will ship past your
-own deprecations without noticing.
+need is the one they will not see. Make your test suite fail on **every** warning —
+`filterwarnings = ["error", "ignore:<message>:<Category>"]` in pytest config, each `ignore`
+scoped to one third-party message with a comment saying why. Scoping the error to a category
+(`error::DeprecationWarning`) misses library warnings that subclass `UserWarning`. Measured
+2026-10-12: pydantic-settings 2.15's `IncompleteFieldDefinitionWarning` (a settings field "may
+fail to correctly resolve its value") is a `UserWarning`, and a blanket `error` turned it into
+33 failing tests where it had sat unread in a container log.
 
 ## Audit checklist
 
-- [ ] **Ruff covers most of this file — run first** —
-      `uvx ruff check --select B006,B008,B023,B904,E722,BLE,G,T20,DTZ,PTH,SIM,A,C4 --statistics .`
-- [ ] **Bare/broad excepts [HIGH if swallowing, MEDIUM otherwise]** —
-      `grep -rn "except:$\|except: " --include="*.py" src/` ;
+- [ ] **Text I/O without an explicit encoding (§5, below a 3.15 floor) — MEDIUM** —
+      `grep -rnE '(open|read_text|write_text)\(' --include="*.py" src/ | grep -v 'encoding=' | grep -vE "['\"](rb|wb|ab|r\+b|w\+b)['\"]"`
+      (each hit reads or writes text in the locale encoding: cp1252 on many Windows hosts)
+- [ ] **Ruff covers most of this file — run first (§3: C4)** —
+      `uvx ruff check --select B006,B008,B023,B904,E722,BLE,G,T20,DTZ,PTH,SIM,A,C4 --statistics .` ;
+      `grep -rnE '^[[:space:]]*\[[^]=]+ for [^]]+\][[:space:]]*$' --include='*.py' --exclude-dir=.venv .`
+      (a comprehension run for its side effects: use a `for` loop [LOW]; ruff B018 does not flag it, measured)
+- [ ] **Bare/broad excepts [HIGH if swallowing, MEDIUM otherwise]** (§10) —
+      `grep -rnE 'except:([[:space:]]|$)' --include="*.py" src/` ;
       `grep -rn -A1 "except Exception" --include="*.py" src/ | grep -B1 "pass$"`
-- [ ] **Exception chaining lost** — `uvx ruff check --select B904 .` (raise-without-from in
+- [ ] **Exception chaining lost** (§10) — `uvx ruff check --select B904 .` (raise-without-from in
       except)
-- [ ] **Mutable defaults & late binding** — `uvx ruff check --select B006,B023 .`
-- [ ] **Logging** —
+- [ ] **Depth and size unbounded before parse or recursion (§10) [HIGH where a request body
+      reaches it; MEDIUM otherwise]** —
+      `grep -rnE 'setrecursionlimit\(' --include='*.py' src/` (raised: a C-stack crash on
+      ≤ 3.11, deeper recursion before the error on any version) ;
+      `grep -rnE 'json\.loads?\(' --include='*.py' src/` (lists every JSON parse; each hit is
+      read, not a finding: for each request-reachable call, find the body-size cap before it,
+      and a depth bound in any recursive walk after it)
+- [ ] **Mutable defaults (§1) & late binding (§2)** — `uvx ruff check --select B006,B008,B023,RUF008,RUF009 .`
+      (B008: a call such as `datetime.now()` evaluated once as a default; RUF008/RUF009: a mutable
+      or call default on a dataclass field)
+- [ ] **Logging** (§11) —
       `grep -rn 'logger\.\(debug\|info\|warning\|error\)(f"' --include="*.py" src/` (f-strings
       in logs [LOW-MED]);
       `grep -rn "basicConfig" --include="*.py" src/ | grep -v "main\|__main__\|cli"` (library
@@ -362,27 +398,41 @@ own deprecations without noticing.
       `grep -rniE '^[[:space:]]+[a-z_]*(passw|secret|token|api_?key)[a-z_]*[[:space:]]*:[[:space:]]*(str|bytes)([^[:alnum:]_]|$)' --include="*.py" src/ | grep -v 'repr=False'`
       (a class field typed plain `str`: a dataclass `repr` prints it — measured,
       `Creds(user='bob', password='hunter2')` — so use `field(repr=False)` or `SecretStr`)
-- [ ] **Resource handling** — `grep -rn "= open(" --include="*.py" src/ | grep -v "with "`
+- [ ] **Resource handling (§4)** — `grep -rn "= open(" --include="*.py" src/ | grep -v "with "`
       (unmanaged file handles [MEDIUM]); `grep -rn "\.close()" --include="*.py" src/ | head`
-      (manual close → with-able?)
-- [ ] **datetime & os.path modernization** — `uvx ruff check --select DTZ,PTH --statistics .` ;
+      (manual close → with-able?) ; `grep -rnE '\.acquire\(\)' --include='*.py' --exclude-dir=.venv .`
+      (a lock taken by hand, not `with lock:` [MEDIUM])
+- [ ] **datetime & os.path modernization** (§5, §12) — `uvx ruff check --select DTZ,PTH --statistics .` ;
       `grep -rn "utcnow()" --include="*.py" src/` (naive UTC [MEDIUM])
-- [ ] **Identity misuse & list.pop(0)** —
+- [ ] **Identity misuse & list.pop(0)** (§12, §9) —
       `grep -rn 'is "" \|is "\| is [0-9]' --include="*.py" src/` ;
       `grep -rn "\.pop(0)" --include="*.py" src/` (O(n) dequeue [perf])
-- [ ] **groupby without sort (manual review)** — `grep -rn "groupby(" --include="*.py" src/`
+- [ ] **groupby without sort; hand-rolled itertools (§9) (manual review)** — `grep -rn "groupby(" --include="*.py" src/ | grep -v "sorted("` ;
+      `grep -rnE 'def [a-z_]*(chunk|batch|flatten|window|pairwise)[a-z_]*\(' --include='*.py' --exclude-dir=.venv .`
+      (a utils helper that itertools/`batched`/`pairwise` replaces [LOW])
+- [ ] **Dataclasses that are not frozen and slotted (§7) [LOW]** —
+      `grep -rnE '^[[:space:]]*@(dataclasses\.)?dataclass' --include='*.py' --exclude-dir=.venv . | grep -vE 'frozen=True.*slots=True|slots=True.*frozen=True'`
+      (each opt-out needs a reason, such as `cached_property` needing `__dict__`) ; a boolean field, or
+      more than three fields, without `kw_only=True` is a read of the class
+- [ ] **Magic strings and enums compared to raw strings (§8) [LOW]** —
+      `grep -rnE '\.(value|name)[[:space:]]*(==|!=)[[:space:]]*["'"'"']' --include='*.py' --exclude-dir=.venv .`
+      (compare members by identity past the parse boundary) ;
+      `grep -rhoE '(==|!=)[[:space:]]*["'"'"'][A-Za-z_]+["'"'"']' --include='*.py' --exclude-dir=.venv . | sort | uniq -c | awk '$1>=3'`
+      (a string branched on three or more times: an enum) ;
+      `grep -rnE '^[A-Z_]+[[:space:]]*=[[:space:]]*1[[:space:]]*<<[[:space:]]*[0-9]+' --include='*.py' --exclude-dir=.venv .` (int
+      bitmask constants: `Flag`)
 - [ ] **--- Public API surface (§13) --- Package modules with no stated surface [MEDIUM for a
       library, INFO for an app]** —
-      `find src -name '*.py' -not -name '__init__.py' -not -path '*/tests/*' -print0 |` ;
-      `while IFS= read -r -d '' f; do` ; `grep -q '__all__' "$f" || echo "no __all__: $f"` ;
-      `done`
-- [ ] **Boolean/optional parameters frozen positionally — no `*` in the signature [MEDIUM]** —
+      `grep -rL '__all__' --include='*.py' --exclude='__init__.py' --exclude-dir=tests src/`
+      (each file listed is a module with no `__all__`)
+- [ ] **Boolean/optional parameters frozen positionally — no `*` in the signature [MEDIUM]** (§13) —
       `grep -rnE 'def [a-z_]+\([^*)]*(flag|force|strict|verbose|dry_run)[^)]*\)' --include="*.py" src/`
-- [ ] **Deprecation by docstring only — invisible to type checkers and to runtime [MEDIUM]** —
-      `grep -rn -i 'deprecated' --include="*.py" src/ | grep -v '@deprecated' | grep -v 'DeprecationWarning'`
-- [ ] **Does the suite fail on its own DeprecationWarnings? [MEDIUM if absent]** —
-      `grep -rn 'error::DeprecationWarning' pyproject.toml setup.cfg pytest.ini tox.ini 2>/dev/null`
-- [ ] **__slots__ added to a class that subclasses something unslotted — no saving [INFO]** —
+- [ ] **Deprecation by docstring only — invisible to type checkers and to runtime [MEDIUM]** (§13) —
+      `grep -rn -i 'deprecated' --include="*.py" src/ | grep -v '@deprecated' | grep -v 'DeprecationWarning' | grep -vE 'import[^#]*deprecated'`
+- [ ] **Does the suite fail on warnings? [MEDIUM if absent]** (§13) —
+      `grep -qE 'filterwarnings|-W ?error' pyproject.toml setup.cfg pytest.ini tox.ini || echo "suite does not fail on warnings"`;
+      a category-scoped `error::DeprecationWarning` with no blanket `"error"` misses `UserWarning`s
+- [ ] **__slots__ added to a class that subclasses something unslotted — no saving [INFO]** (§13) —
       `grep -rn -B3 '__slots__' --include="*.py" src/ | grep 'class .*('`
 - [ ] **Money in binary floats (§12) — MEDIUM, HIGH in billing** —
       `grep -rnE 'Decimal\([[:space:]]*-?[0-9]+\.[0-9]' --include='*.py' src/` (built from a

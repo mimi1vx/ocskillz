@@ -46,7 +46,7 @@ one entity plus value objects. Big aggregates serialize writes (lock contention)
 and bloat loads.
 
 **Rule:** One transaction modifies one aggregate. Cross-aggregate consistency is
-eventual, coordinated by domain events or sagas (rules/03). If you "need" to
+eventual, coordinated by domain events or sagas ([rules/03](03-distributed-systems-and-events.md)). If you "need" to
 update two aggregates atomically, your boundary is wrong or the invariant is
 weaker than you think — interrogate the invariant first.
 
@@ -77,13 +77,13 @@ Kafka, system clock) outside it. Frameworks, ORMs, and SDK types never appear
 in core signatures.
 
 **Rationale:** This is what makes the core testable without infrastructure and
-makes Type 1 dependencies (rules/01 §6) swappable. It is also the cheapest
+makes Type 1 dependencies ([rules/01](01-architecture-styles-and-decisions.md) §6) swappable. It is also the cheapest
 insurance against vendor lock-in you can buy.
 
 **Rule:** Ports are defined by the consumer's need, not the provider's API.
 `PaymentGateway.charge(order_id, amount) -> ChargeResult`, not a passthrough of
 Stripe's 40-field request object. A port that mirrors the vendor SDK is a leaky
-abstraction (rules/07).
+abstraction ([rules/07](07-anti-patterns-catalog.md)).
 
 ```text
         inbound adapters              core                outbound adapters
@@ -97,7 +97,7 @@ abstraction (rules/07).
 
 **Rule:** Dependencies point inward only: `adapters → application (use cases) →
 domain`. Nothing in domain imports application; nothing in application imports
-adapters. Enforce with architecture tests (rules/01 §2), not convention.
+adapters. Enforce with architecture tests ([rules/01](01-architecture-styles-and-decisions.md) §2), not convention.
 
 **Rule:** Use cases (application services) orchestrate: load aggregate, call
 domain method, persist, publish events. They contain no business rules and no
@@ -125,12 +125,12 @@ state couples your model to their release schedule.
 
 **Rule:** Aggregates record domain events (`OrderPlaced`, `QuoteExpired`) as
 part of their state changes; the application layer publishes them after commit
-(via outbox — rules/03 §4). Events are named in past tense, in ubiquitous
+(via outbox — [rules/03](03-distributed-systems-and-events.md) §4). Events are named in past tense, in ubiquitous
 language, and carry the data consumers need without forcing a callback query
 for every field ("event-carried state transfer" for hot fields, IDs for the rest).
 
 **Rule:** Events published across context boundaries are a public contract:
-versioned, schema-checked, additive-only changes by default (see rules/03 §8).
+versioned, schema-checked, additive-only changes by default (see [rules/03](03-distributed-systems-and-events.md) §8).
 Internal events can change freely; published ones cannot.
 
 ## 8. Value objects and invariant-encoding types
@@ -203,8 +203,11 @@ Three probes, decreasing precision:
 otherwise sentinel-free) domain.** Measure the per-field distribution before
 linting; a field where the sentinel is 99% of rows and one where it is 0% are
 different problems, and a field whose producer emits it legitimately makes such a
-lint 100% false-positive. Language-specific stdlib traps and the idiomatic
-alternative: each `sota-<language>` skill. Persistence: database-engine guidance rules/01.
+lint 100% false-positive. A converter that treats every field alike does not tell you each
+field's domain, so key the rule on the **declaration**: add a value lint only on the fields
+whose sentinel-free domain is written down. Usually it is not yet, and writing it down is
+part of the fix. Language-specific stdlib traps and the idiomatic
+alternative: each `sota-<language>` skill. Persistence: database-engine guidance.
 
 ## 9. Repositories and persistence
 
@@ -262,7 +265,7 @@ the name is the smell.
 **Rule:** Don't force reads through aggregates. Queries that cross aggregates
 (dashboards, lists, search) bypass the domain model via dedicated read models /
 query services that return DTOs — read side may join freely against tables or
-projections (lightweight CQRS, see rules/03 §6). Loading 500 aggregates to
+projections (lightweight CQRS, see [rules/03](03-distributed-systems-and-events.md) §6). Loading 500 aggregates to
 render a list is the standard self-inflicted performance bug of strict-DDD
 codebases.
 
@@ -275,7 +278,7 @@ projection that a list view rendered.
 **Rule:** Cut boundaries around *capabilities and change-reasons*
 ("Pricing", "Fulfillment", "Risk"), not around nouns ("UserService",
 "OrderService", "ProductService"). Noun-services force every real use case to
-choreograph three services and own no invariant (rules/07 §13).
+choreograph three services and own no invariant ([rules/07](07-anti-patterns-catalog.md) §13).
 
 **Rule:** A bounded context should be explainable in one sentence naming its
 responsibility and its key invariants. If the sentence needs "and", consider
@@ -300,7 +303,7 @@ escaped the core — move it in and leave a call behind.
 build understands, not a convention in someone's head. Coverage, mutation, and
 complexity tooling then measure the core only. Measuring the untestable shell
 distorts every number in both directions and buries the signal (see
-`sota-testing` rules/07 §7.2 and rules/06 §6.3).
+[`sota-testing` rules/07](../../sota-testing/rules/07-suite-health-and-ci.md) §7.2 and [rules/06](../../sota-testing/rules/06-property-fuzzing-mutation.md) §6.3).
 
 **Rationale:** this is the precondition for any test metric meaning anything.
 "62% coverage" over a codebase where a third is an untestable UI shell is not
@@ -319,7 +322,7 @@ GOOD: core:  invoice.limit_status(customer) -> OverLimit | Ok   # unit-tested
 ```
 
 **Rule:** The shell still needs *some* verification — a small number of
-end-to-end or smoke tests that prove it is wired up (`sota-testing` rules/05),
+end-to-end or smoke tests that prove it is wired up ([`sota-testing` rules/05](../../sota-testing/rules/05-e2e-and-ui.md)),
 not unit metrics. And treat shell growth as an **architecture** finding: if the
 untestable region keeps expanding, logic is leaking outward, and no amount of
 test discipline will reach it.
@@ -330,22 +333,23 @@ test discipline will reach it.
       nullable, second return value, `NULL`, omitted property, exception) — no
       `-1`/`0`/`""`/`9999-12-31` sentinels. Where one is forced: per-field domain
       documented, and the **comparison** sites audited first (§8a).
-- Can the team produce a context map? Are seam relationship types (ACL, conformist, published language) explicit?
-- Does any domain term ("customer", "order", "account") have different meanings sharing one class/table across contexts?
-- Are aggregates small, referenced by ID, and modified one-per-transaction? Search for transactions touching multiple aggregates.
-- Are business invariants enforced inside aggregate methods, or scattered across service classes (anemic model)?
-- Does domain code import frameworks, ORM types, vendor SDKs, or transport types (HTTP requests, Kafka records)?
-- Are ports defined by consumer need, or do they mirror vendor APIs one-to-one?
-- Is the dependency rule (adapters → application → domain) enforced by an automated architecture test?
-- Do external/legacy models cross into the domain without an anti-corruption layer?
-- Are cross-context events versioned, past-tense, schema-validated public contracts?
-- Is money a float anywhere? Are state machines stringly-typed with unguarded transitions?
-- Is modeling rigor proportional: full DDD on core domains, simple transaction scripts on CRUD subdomains — or uniform ceremony/uniform mud?
-- Do repositories use optimistic concurrency, or can concurrent writers silently lose updates?
-- Are entity lifecycles explicit state machines with guarded transitions and history, or free-form status strings?
-- Do `Helper`/`Manager`/`Util` classes in the domain hold logic that belongs on aggregates or value objects?
-- Do list/dashboard reads go through dedicated read models, or do they load aggregates in bulk?
-- Do any write decisions consume read-model/projection data instead of loading the aggregate?
-- Are services/modules named after capabilities or after entities (noun-services)?
-- Is the boundary between the testable core and the environment-bound shell (GUI, device, IO, process spawn) explicit in the build, or only in convention? Does business branching live in that shell?
-- Does the shell keep growing release over release (logic leaking outward), and do coverage/mutation/complexity tools measure the core or the whole tree?
+- [ ] **Code speaks the domain's language (§2), Medium:** take three verbs/nouns from the domain experts' own glossary or tickets and look for them in code, schema and event names; numeric status setters stand in for a named operation — `grep -rnE 'set_?[sS]tatus\([[:space:]]*[0-9]+[[:space:]]*\)' .` (calibrated: 3 of 3 bad, 0 of 4 good) — and boolean-flag pairs (`isReturn && isExchange`) stand in for a missing concept type. Each is a finding.
+- Can the team produce a context map? Are seam relationship types (ACL, conformist, published language) explicit? Does any service/module boundary split one bounded context or fuse two? (§1)
+- Does any domain term ("customer", "order", "account") have different meanings sharing one class/table across contexts? (§1)
+- Are aggregates small, referenced by ID, and modified one-per-transaction? Search for transactions touching multiple aggregates. (§3)
+- Are business invariants enforced inside aggregate methods, or scattered across service classes (anemic model)? Are identity-uniqueness invariants backed by a DB unique constraint rather than an aggregate check? (§3)
+- Does domain code import frameworks, ORM types, vendor SDKs, or transport types (HTTP requests, Kafka records)? (§4)
+- Are ports defined by consumer need, or do they mirror vendor APIs one-to-one? (§4)
+- Is the dependency rule (adapters → application → domain) enforced by an automated architecture test? Do use cases only orchestrate, or does any contain a business-policy `if` or build SQL? (§5)
+- Do external/legacy models cross into the domain without an anti-corruption layer? Do consumers store another context's event payload as their own domain state instead of translating it in the consumer adapter? (§6)
+- Are cross-context events versioned, past-tense, schema-validated public contracts? Are they published after commit via the outbox, never before? (§7)
+- Is money a float anywhere? Are state machines stringly-typed with unguarded transitions? Is raw input parsed into value types once at the boundary, or are identities passed as bare strings/ints through layers? (§8)
+- Is modeling rigor proportional: full DDD on core domains, simple transaction scripts on CRUD subdomains — or uniform ceremony/uniform mud? (§5)
+- Do repositories use optimistic concurrency, or can concurrent writers silently lose updates? Is there one repository per aggregate (not per table) returning whole aggregates, and does ORM lazy loading or a bidirectional mapping cross aggregate boundaries? (§9)
+- Are entity lifecycles explicit state machines with guarded transitions and history, or free-form status strings? Is the `state` column CHECK/enum-constrained, and does each transition emit a domain event? (§10)
+- Do `Helper`/`Manager`/`Util` classes in the domain hold logic that belongs on aggregates or value objects? Is complex aggregate creation done by a factory returning only valid instances, or by create-empty-then-set? (§11)
+- Do list/dashboard reads go through dedicated read models, or do they load aggregates in bulk? (§12)
+- Do any write decisions consume read-model/projection data instead of loading the aggregate? (§12)
+- Are services/modules named after capabilities or after entities (noun-services)? Can each bounded context be explained in one sentence naming its responsibility and key invariants, without "and"? (§13)
+- Is the boundary between the testable core and the environment-bound shell (GUI, device, IO, process spawn) explicit in the build, or only in convention? Does business branching live in that shell? (§14)
+- Does the shell keep growing release over release (logic leaking outward), and do coverage/mutation/complexity tools measure the core or the whole tree? Is the shell itself covered by a few end-to-end/smoke tests rather than unit metrics? (§14)

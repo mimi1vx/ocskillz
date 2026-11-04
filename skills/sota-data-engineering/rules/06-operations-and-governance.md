@@ -4,7 +4,7 @@ A pipeline that works is a prototype; a pipeline that is deployable,
 observable, recoverable, and access-controlled is a product. This file
 covers the gap.
 
-## Environments for data
+## 1. Environments for data
 
 Code environments are easy; **data** environments are where platforms cheat.
 
@@ -20,7 +20,7 @@ Code environments are easy; **data** environments are where platforms cheat.
   - *Sampled subsets* refreshed on schedule: fast dev iteration; document
     the sampling so devs don't "discover" sampling artifacts.
   - *Masked copies* where PII rules require (PII handling itself:
-    `sota-privacy-compliance`). Production PII in dev environments = HIGH.
+    [`sota-privacy-compliance`](../../sota-privacy-compliance/SKILL.md)). Production PII in dev environments = HIGH.
 - Synthetic-only dev data is a trap: pipelines pass on clean synthetic rows
   and die on real-world nulls/dupes/encodings. Use sampled-real (masked)
   where at all possible.
@@ -29,9 +29,9 @@ Code environments are easy; **data** environments are where platforms cheat.
 - Per-PR ephemeral schemas (e.g. `pr_1234` in a CI database) beat one
   shared, perpetually-dirty "staging" everyone fights over.
 
-## Deploying pipeline changes
+## 2. Deploying pipeline changes
 
-Pipeline code is software: version control, review, CI (rules/02, 04). The
+Pipeline code is software: version control, review, CI ([rules/02](02-pipelines-and-orchestration.md), 04). The
 extra dimension is that deploys change *tables others read*.
 
 ### Write-Audit-Publish (WAP) — default for risky changes
@@ -41,7 +41,7 @@ Never let unvalidated data become visible to consumers.
 1. **Write** the new run's output to an unpublished location: a staging
    table, an Iceberg branch (engine support varies — verify yours), or an
    unswapped table version.
-2. **Audit:** run the block-tier quality battery (rules/04) against the
+2. **Audit:** run the block-tier quality battery ([rules/04](04-data-quality-and-contracts.md)) against the
    unpublished output — plus diff-vs-current checks for logic changes (row
    counts, key metric deltas within tolerance).
 3. **Publish** atomically only on pass: branch fast-forward, partition
@@ -78,7 +78,7 @@ consumer comparison.
 - **AUDIT:** Logic changes that rewrite consumer-facing tables in place
   with no validation gate = HIGH; with no rollback artifact = HIGH.
 
-## Access control
+## 3. Access control
 
 (RBAC and row-policy mechanics are engine-specific; PII classification and
 lawful basis live in `sota-privacy-compliance`. This is the
@@ -97,13 +97,13 @@ data-platform layer.)
 - Audit logging on access to sensitive marts; review grants on a schedule
   (orphaned humans, over-privileged services).
 
-## Retention & GDPR deletion in immutable-ish stores
+## 4. Retention & GDPR deletion in immutable-ish stores
 
 "Immutable raw forever" collides with deletion duties. Design for erasure
 up front; retrofitting is brutal.
 
 - **Know where every subject's data lives:** PII column tags + lineage
-  (rules/04) make "find all copies" answerable. Copies include: raw,
+  ([rules/04](04-data-quality-and-contracts.md)) make "find all copies" answerable. Copies include: raw,
   staging, marts, snapshots/time-travel, DLQs, dev clones, BI extracts.
 - **Lakehouse deletion that actually deletes:** `DELETE`/`MERGE` on
   Iceberg/Delta marks rows deleted in the *current* snapshot — the bytes
@@ -123,9 +123,9 @@ up front; retrofitting is brutal.
 - Deletion requests are pipelines too: idempotent, monitored, with
   completion SLO and verification query.
 
-## Observability for pipelines
+## 5. Observability for pipelines
 
-(Generic telemetry stack: `sota-observability`. Data-specific layer here.)
+(Generic telemetry stack: [`sota-observability`](../../sota-observability/SKILL.md). Data-specific layer here.)
 
 - **The four golden signals of data:** freshness (did it land on time?),
   volume (the right amount?), quality (checks green?), lineage-aware status
@@ -137,12 +137,12 @@ up front; retrofitting is brutal.
 - Every alert has an **owner and a runbook link**. Unrouted alerts and
   alert channels with >daily noise = the platform is unmonitored in
   practice (MEDIUM, HIGH for critical marts).
-- Track **cost** as a first-class signal (rules/05): per-pipeline spend
+- Track **cost** as a first-class signal ([rules/05](05-storage-and-performance.md)): per-pipeline spend
   trend on the same dashboard — cost regressions are incidents too.
 - SLOs documented per critical mart (freshness target + measurement) and
   reviewed; an SLO nobody measures is decoration.
 
-## Runbook discipline
+## 6. Runbook discipline
 
 - Every production pipeline has a runbook answering: what it produces and
   for whom (links to contracts/SLOs); how to rerun/backfill an interval
@@ -150,7 +150,7 @@ up front; retrofitting is brutal.
   contacts; escalation path.
 - Runbooks live next to the code (repo `runbooks/` or per-DAG docs), are
   linked from every alert, and are updated as part of incident postmortems
-  (rules/04). A runbook last touched two years before the last incident is
+  ([rules/04](04-data-quality-and-contracts.md)). A runbook last touched two years before the last incident is
   fiction.
 - Test the runbook: a new on-call engineer should be able to execute a
   rerun from it without tribal knowledge. If only one person can operate a
@@ -159,22 +159,32 @@ up front; retrofitting is brutal.
 ## Audit checklist
 
 - [ ] Dev/staging/prod separated in storage *and* credentials; dev cannot
-      write prod?
-- [ ] Dev data is cloned/sampled (masked where PII), refreshed by
-      automation; schemas built from the same code as prod?
-- [ ] Risky changes gated by WAP or blue-green + reconciliation; consumers
-      read through views?
+      write prod (dev holding prod write credentials = CRITICAL) (§1)?
+- [ ] Dev data is cloned/sampled (masked where PII; production PII in dev =
+      HIGH), refreshed by automation, not synthetic-only; schemas built from
+      the same code as prod (§1)?
+- [ ] Risky changes gated by WAP (publish atomically only on a passed
+      block-tier audit) or blue-green + reconciliation; consumers read through
+      views? In-place rewrite with no validation gate = HIGH (§2)
 - [ ] Rollback artifact (previous table/snapshot) retained for every
-      consumer-facing change?
-- [ ] Layer-based grants: no consumer/BI access to raw; no shared human
-      use of service accounts?
+      consumer-facing change until it has survived N cycles (none = HIGH)
+      (§2)?
+- [ ] Layer-based grants: no consumer/BI access to raw (BI `SELECT ANY` on
+      raw = HIGH); pipelines write only to their layer; no shared human use of
+      service accounts (§3)?
 - [ ] PII columns tagged; masking/row policies keyed off tags; access to
-      sensitive marts audit-logged?
+      sensitive marts audit-logged; grants reviewed on a schedule (§3)?
 - [ ] GDPR erasure path covers snapshots, compaction, DLQs, dev clones,
-      and Kafka retention — with a measured SLA?
+      and Kafka retention — with a measured SLA; deletion requests run as
+      idempotent, monitored pipelines with a verification query (§4)?
 - [ ] Retention enforced by scheduled jobs for every layer (raw, snapshots,
-      DLQ, dev clones)?
+      DLQ, dev clones)? Unbounded-retention PII stores = HIGH (§4)
 - [ ] Freshness/volume/quality dashboard for critical marts; alerts
-      symptom-based, owned, runbook-linked, low-noise?
-- [ ] Per-pipeline cost visible with trend alerts?
-- [ ] Runbooks current, co-located with code, executable by a newcomer?
+      symptom-based, owned, runbook-linked, low-noise (unrouted or >daily noise
+      = MEDIUM, HIGH for critical marts); freshness SLO documented and measured
+      per critical mart (§5)?
+- [ ] Per-pipeline cost visible with trend alerts (§5)? Same probe as the cost-attribution item in
+      [rules/05](05-storage-and-performance.md)'s checklist — answer it once, there.
+- [ ] Runbooks current, co-located with code, linked from every alert,
+      executable by a newcomer (rerun/backfill command, failure modes,
+      contacts, escalation)? A pipeline only one person can operate = HIGH (§6)

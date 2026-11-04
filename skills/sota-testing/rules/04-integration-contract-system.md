@@ -25,7 +25,7 @@ Rules:
   amortize with one container per suite/session; get per-test isolation via
   transactions/schemas/keys (4.3), not per-test containers.
 - **Mock the third parties you can't containerize** at your adapter port
-  (`rules/03` §3.3) or run their official emulators/sandboxes in the same
+  ([`rules/03`](03-doubles-and-test-data.md) §3.3) or run their official emulators/sandboxes in the same
   container-per-suite pattern — and keep a small non-blocking live-sandbox
   suite to catch emulator drift.
 
@@ -95,7 +95,7 @@ func TestOrders(t *testing.T) {
 
 ## 4.5 Contract testing between services
 
-The honeycomb's load-bearing wall (`rules/01` §1.1): each consumer–provider
+The honeycomb's load-bearing wall ([`rules/01`](01-strategy-and-shape.md) §1.1): each consumer–provider
 edge is verified **in isolation, asynchronously**, replacing combinatorial
 cross-service e2e.
 
@@ -138,13 +138,15 @@ Discipline that makes it work:
   (type/shape) over exact values wherever the value isn't the contract.
 - **Provider states are part of the provider's test code** ("a user 42
   exists") — keep them thin, built on the same builders as other tests
-  (`rules/03`).
+  ([`rules/03`](03-doubles-and-test-data.md)).
 - Contract tests verify *schema and semantics of the edge*, not provider
   business logic — that's the provider's own unit/integration suites.
 
 **Schema-based / bi-directional alternative:** provider publishes its schema
 (typically OpenAPI); the broker statically checks consumer pacts against it
-instead of replaying against a running provider. Cheaper, weaker (no
+instead of replaying against a running provider (bi-directional contract
+testing is a PactFlow feature — the open-source Pact Broker does not run this
+check). Cheaper, weaker (no
 provider-state semantics, only shape compatibility). Reasonable for: public
 APIs with many unknown consumers, org boundaries where CDC coordination won't
 happen, GraphQL/gRPC where the schema is first-class (then: schema-diff
@@ -182,7 +184,7 @@ queued-for is an anti-pattern. Modern default:
 - Keep ONE shared environment at most, as a production-mirror for
   release-candidate soak — not as everyone's integration playground.
 - Environment seeding uses the same builders/seed scripts as tests
-  (`rules/03`), version-controlled. Hand-curated environment data is
+  ([`rules/03`](03-doubles-and-test-data.md)), version-controlled. Hand-curated environment data is
   unreproducible by definition.
 - If full ephemeral envs are too heavy, the in-repo answer is 4.1: most
   "needs staging" tests are really "needs a real DB/broker", which
@@ -196,7 +198,7 @@ them apart. *"No vulnerability reproduced"* and *"the runtime refused to start a
 produce the same red or green, and **the first is a scientific conclusion about the target**
 while the second is a broken bench.
 
-Field-reported: after a `prune`/`fstrim` corrupted a container runtime
+Observed in practice: after a `prune`/`fstrim` corrupted a container runtime
 (CI and supply-chain controls), an exploit-validation file went from 3 passed to 1 passed
 / 2 failed with a missing-envelope error. Nothing in the failure said *the container never
 ran*; it read as the target not being exploitable.
@@ -209,20 +211,20 @@ ran*; it read as the target not being exploitable.
   colour.** §4.8's other bullets describe a bench that produces nothing; this one produces
   a pass. Where tests skip themselves when a dependency is absent — the standard
   `skipif(not docker_available)` shape — a stopped container runtime does not fail them, it
-  **removes** them: field-reported 2026-09-10, a stopped machine turned exactly 30 tests
+  **removes** them: in one observed case, a stopped machine turned exactly 30 tests
   into skips while the suite reported **0 failed**. The only moving number was the skip
   count (30 → 60). So **assert the count, not just the colour**: pin an expected number of
   collected/executed tests for any lane with environment-gated skips, or fail the lane when
-  skips exceed a recorded baseline. (`rules/07` §7.6 treats a *drifting* skip count as slow
+  skips exceed a recorded baseline. ([`rules/07`](07-suite-health-and-ci.md) §7.6 treats a *drifting* skip count as slow
   rot; this is the acute version, and it is invisible in one run.)
 - **Read a skip condition from the environment, never from the subject's opinion of it.**
-  Field-reported: four tests skipped when the code under test returned `Unsupported` with a
+  Observed in practice: four tests skipped when the code under test returned `Unsupported` with a
   reason mentioning `lsm=`. That reason was a **fixed string the codebase wrote**, emitted
   identically when the kernel lacked the feature and when one of the project's own programs
   was rejected, so a broken feature reported `12 passed`. Ask the host itself (for example
   `/sys/kernel/security/lsm`), and on a host that *has* the capability make the
   `Unsupported` path **fail** and print its reason. Then a skip is a fact about the host and a
-  failure is a fact about the code. It is `sota-code-security` rules/15 §2.4 (evidence the
+  failure is a fact about the code. It is [`sota-code-security` rules/15](../../sota-code-security/rules/15-instruments-and-guards.md) §2.4 (evidence the
   subject supplies about itself), applied to *why it cannot run*.
 - **Assert the setup's effect, not its exit code.** `modprobe` exits 0 for a module that is
   **built into** the kernel: libkmod counts a built-in as already present
@@ -233,10 +235,10 @@ ran*; it read as the target not being exploitable.
 - **Empty is not a result.** An empty output file, an empty stdout, a zero-length report is
   a **failed measurement until proven otherwise** — assert the artefact is non-empty *and*
   contains the summary line you expect before reading anything into it. (The pipe version of
-  this — a filter destroying the evidence — is shell-scripting guidance)
+  this — a filter destroying the evidence — is [`sota-shell-scripting` rules/01](../../sota-shell-scripting/rules/01-safety-baseline.md) §3.)
 - **Name the subject in the message.** *"exploit not reproduced"* is a claim about the
   target; *"no envelope returned — harness did not start"* is a claim about the bench. The
-  general form is `sota/rules/03` §2: when a check reports, say what it is reporting about.
+  general form: when a check reports, say what it is reporting about.
 - Distinguish this from a *flaky* dependency. Flakiness is intermittent and the retry is the
   usual answer; this is a bench that is uniformly broken while still looking healthy from
   outside, and retrying it produces the same confident wrong answer every time.
@@ -254,36 +256,43 @@ ran*; it read as the target not being exploitable.
 
 - [ ] Do integration tests run the real engine? Grep test config for
       lookalikes: `:memory:|sqlite|H2|fakeredis|embedded` standing in for a
-      different prod engine → High.
+      different prod engine → High. (§4.1)
 - [ ] Container images pinned to prod versions? Grep `latest` in
-      testcontainers setup / docker-compose.test → Medium.
+      testcontainers setup / docker-compose.test → Medium. (§4.1)
 - [ ] Hardcoded host/ports? Grep `localhost:(5432|3306|6379|9092|27017)` in
-      tests → High (machine-coupled, parallel-unsafe).
+      tests → High (machine-coupled, parallel-unsafe). (§4.1)
 - [ ] Readiness by sleep? Grep `sleep` between container start and first use
-      → High; replace with wait strategies.
+      → High; replace with wait strategies. (§4.1)
 - [ ] Does CI run migrations from empty and test against the migrated schema?
-      A separate drifting `schema.sql` loaded directly → High.
-- [ ] Is per-test DB isolation centralized and matched to needs? Rollback
+      A separate drifting `schema.sql` loaded directly → High. Destructive/data
+      migrations with no rehearsal on masked representative data, or a rollback never
+      verified and not documented forward-only → Medium (§4.2).
+- [ ] Is per-test DB isolation centralized and matched to needs (§4.2)? Rollback
       strategy + tests asserting cross-connection visibility/commit hooks →
       those tests are lying (High). Copy-pasted cleanup SQL across files →
       Medium.
 - [ ] Auth coverage: for each protected route, is there a 401/403 test?
-      Spot-check 5 routes; missing on sensitive routes → High.
+      Spot-check 5 routes; missing on sensitive routes → High. (§4.4)
 - [ ] Whole-body equality on API responses? Grep
       `assertEquals.*responseBody|toEqual\(.*body\)|json\(\) == ` → Medium
-      (brittle to additive change).
+      (brittle to additive change). Error responses asserted on human-readable message
+      instead of code/type, or a published OpenAPI spec never validated against responses
+      in tests → Medium (§4.4).
 - [ ] Service edges: does every consumer–provider pair have a contract
       (pact/broker, schema-diff CI for gRPC/GraphQL, registry compatibility
       for events)? Uncovered edge between independently-deployed services →
-      High.
+      High. (§4.5)
 - [ ] Is deployment gated on contract compatibility (can-i-deploy or
       equivalent), or do contracts exist but gate nothing → Medium (theater).
+      Consumer contracts asserting exact values on fields the consumer never reads,
+      instead of type/shape matchers → Medium (§4.5).
 - [ ] Queue tests: is there a redelivery/idempotency test and a DLQ test for
-      each consumer? None → High for money/state-changing handlers.
+      each consumer? None → High for money/state-changing handlers. (§4.6)
 - [ ] Eventually-consistent assertions: polling helpers with timeout, or raw
-      sleeps? Grep `sleep` in queue/e2e test paths → High.
+      sleeps? Grep `sleep` in queue/e2e test paths → High. Messages without a
+      test-run id, so parallel runs read each other's traffic → Medium (§4.6).
 - [ ] Shared staging as the only integration venue, hand-maintained data →
-      Medium, recommend ephemeral envs or containerized deps.
+      Medium, recommend ephemeral envs or containerized deps. (§4.7)
 - [ ] **Does every out-of-process test assert liveness separately from its result?** (§4.8) A
       harness that could not start and one that ran and found nothing produce the same output,
       and only the second is a conclusion about the target. Empty artefacts are failed

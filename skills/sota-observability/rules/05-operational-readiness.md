@@ -81,7 +81,7 @@ Rules:
   filtered by operators and stop being read, which returns the system to silent
   failure. This matters most for **security controls**: a scanner or policy
   engine running inert must be a distinct health state, not a quiet default
-  (`sota-code-security` rules/10).
+  ([`sota-code-security` rules/10](../../sota-code-security/rules/10-silent-control-failure.md)).
 
 ## 3. Debug endpoints: powerful and dangerous
 
@@ -105,7 +105,12 @@ Rules:
   are admin APIs: authenticated, audited, rate-limited.
 - Audit move: enumerate every listening port and route table; diff against
   "intended public surface". Anything debug-shaped reachable without auth is
-  a CRITICAL finding.
+  a finding, rated by what it returns (the library's one scale; language skills
+  point here): **CRITICAL** when it returns process memory, environment or
+  configuration — a heap dump, an env page that shows values, an argv or vars
+  page holding a secret — because that is secrets exposure; **HIGH** when it returns profiles,
+  stack traces or internals, or lets a caller trigger CPU profiling (a cheap DoS);
+  one band lower when only the internal network reaches it.
 
 ## 4. Profiling in production
 
@@ -163,7 +168,7 @@ Rules:
   - Resolved-then-reoccurred ("regression") notifications ON — that's the
     highest-signal notification type the tool has.
 - Notification policy: new issue / regression / spike → TICKET (or chat),
-  not page. Pages come from SLOs (rules/04); the tracker tells you WHICH
+  not page. Pages come from SLOs ([rules/04](04-slos-alerting.md)); the tracker tells you WHICH
   exception is burning the budget.
 
 ## 6. Shutdown, crashes, and the last 10 seconds
@@ -216,7 +221,7 @@ Rules:
 - Delete dashboards nobody opened in 90 days (usage stats exist). Curation
   is a feature: the on-call landing page lists THE five dashboards that
   matter.
-- No averaged percentiles, no per-instance p99 walls (rules/02 §4); prefer
+- No averaged percentiles, no per-instance p99 walls ([rules/02](02-metrics.md) §4); prefer
   route/tenant breakdowns over instance breakdowns for symptom dashboards.
 
 ## 7a. The question with no instrument, and the substitute that answers a different one
@@ -228,7 +233,7 @@ and the proxy returns a number.
 The canonical case is a removal decision. *"Is this feature still used?"* is a
 question about **requests**, and it is answerable only from request-level telemetry
 at the edge: gateway/ingress/load-balancer access logs, or per-route and per-field
-usage metrics (API design guidance step 4, rules/03 §11 — *without
+usage metrics ([`sota-api-design` rules/02](../../sota-api-design/rules/02-versioning-evolution.md) §5 step 4, [rules/03](../../sota-api-design/rules/03-graphql.md) §11 — *without
 per-field usage data you can never delete anything*). With those absent, the
 reachable substitute is the **stored data**: query the corpus, count what carries
 the feature's shape, conclude.
@@ -242,14 +247,15 @@ dependency's presence in a manifest standing in for it being reached (CI and sup
 Rules:
 - **Edge access logs are a required telemetry stream**, not an optional one, wherever
   a gateway/ingress/LB fronts a versioned or deprecable surface. Sample if volume
-  demands, but **retain across one deprecation runway** — API design guidance publishes a ≥ 6-month runway, so 30-day retention cannot support
+  demands, but **retain across one deprecation runway** — [`sota-api-design`
+  rules/02](../../sota-api-design/rules/02-versioning-evolution.md) §5 publishes a ≥ 6-month runway, so 30-day retention cannot support
   the decision it exists for.
   Log the route *template* and the principal *id*, not the raw path and identity
-  (cardinality and PII: rules/01).
+  (cardinality and PII: [rules/01](01-structured-logging.md)).
 - **Instrument the question you will be asked, not only the ones you are asked
   today.** "Which surfaces can we retire?" is asked of every system that lives long
   enough; it needs a per-route/per-field usage counter from the day the surface
-  ships (API design guidance "usage metric … the day its successor
+  ships ([`sota-api-design` rules/02](../../sota-api-design/rules/02-versioning-evolution.md) §7's "usage metric … the day its successor
   ships").
 - **When you substitute, say so in the same sentence as the number.** Name the
   question you could answer, the question you were asked, and the direction the
@@ -273,7 +279,7 @@ Rules:
   from the regions users are in.
 - Tag synthetic traffic (`synthetic: true` header → wide-event field) so it
   is excludable from SLIs/business metrics while feeding its own
-  availability SLI for low-traffic journeys (rules/04 §1).
+  availability SLI for low-traffic journeys ([rules/04](04-slos-alerting.md) §1).
 - Probe failures page only on consecutive failures from multiple locations
   (single-location flaps are network noise).
 - Certificates, DNS, and domain expiry are synthetic checks too — classic
@@ -305,38 +311,65 @@ distinguishable from telemetry production writes, at the point of collection.**
   repo, not the test rows out of the aggregate.
 - The reader-side obligation — every aggregate over a shared sink states its exclusion
   filter, and an unexplained jump in n is contamination rather than power — is
-  `sota-code-security` rules/11 §2.7.
+  [`sota-code-security` rules/11](../../sota-code-security/rules/11-dead-path-diagnostics.md) §2.7.
 
 ## Audit checklist
 
 - [ ] Liveness, readiness, startup probes distinct; liveness contains NO
       dependency checks; readiness fails only on required deps; probes are
-      cheap, cached, and bounded.
+      cheap, cached, and bounded; health endpoints are not internet-exposed
+      and are excluded from access logs and request metrics (§1).
 - [ ] Optional-dependency failure degrades service without failing
       readiness; shared-dependency behavior (fail vs degrade) is a
-      documented decision.
+      documented decision (§1).
 - [ ] All degradation paths (fallbacks, breakers, kill switches) emit
       metric + log + span attribute when active; long-running degradation
-      tickets someone.
+      tickets someone; degradation goes through one shared helper deduped
+      per (component, reason), not per request; breaker state is a metric;
+      every fallback is exercised in CI or a chaos drill (§2).
 - [ ] Port/route inventory done: no pprof/actuator/metrics/heapdump/env/
       introspection endpoints reachable without auth from outside the
       internal network; Go DefaultServeMux not publicly served with pprof
-      imported.
-- [ ] Continuous profiling running with version tags; on-demand capture
-      path documented; off-CPU/lock profiling available where supported.
+      imported; Actuator exposes an explicit include-list only; log-level and
+      other debug togglers are authenticated, audited and rate-limited (§3).
+- [ ] Continuous profiling running with version tags, CPU and allocation
+      profiles at minimum; on-demand capture path documented; off-CPU/lock
+      profiling available where supported (§4).
 - [ ] No sink receives both test-suite and production telemetry without a write-time
       marker or a separate destination; any analysis over a shared sink states its
       exclusion filter (§8a).
 - [ ] Error tracker captures all runtimes incl. frontend with sourcemaps;
-      release+environment on every event; trace_id linked; PII scrubbed.
+      release+environment on every event; trace_id linked; PII scrubbed (§5).
 - [ ] Issue grouping healthy (no message-interpolation shatter); triage
       rota exists; regression notifications enabled; open-untriaged count
-      is bounded.
+      is bounded; new-issue, regression and spike notifications go to a
+      ticket or chat, never a page (§5).
+- [ ] (**Medium**) Shutdown and crashes are observable (§6): on SIGTERM the
+      process logs `shutdown_started`, fails readiness, drains with a
+      deadline, flushes every telemetry exporter (spans, metrics, logs, error
+      tracker) and logs `shutdown_completed` with drained/aborted counts;
+      fatal paths write a structured last-gasp line to stdout; OOM kills
+      (`OOMKilled`, exit code 137) and restarts per workload are tracked and
+      ticketed; startup logs version, config hash and listening ports once.
+      Probe for termination handlers whose file neither flushes telemetry
+      nor logs completion — a lead, since the flush may live in another
+      file; read each one listed:
+      `grep -rlE 'SIGTERM|addShutdownHook|SignalKind::terminate' --include='*.py' --include='*.go' --include='*.js' --include='*.ts' --include='*.java' --include='*.kt' --include='*.rs' . | while IFS= read -r f; do grep -qE '[Ff]orce_?[Ff]lush|shutdown_completed' "$f" || echo "$f"; done`
 - [ ] Per-service dashboard follows symptom→cause layout with deploy
       annotations; paging alerts link runbook + dashboard; panels
-      click-through to traces/logs.
+      click-through to traces/logs (§7).
 - [ ] Dashboards and alerts are code-reviewed and provisioned, not
-      hand-edited; stale dashboards pruned.
+      hand-edited; stale dashboards pruned (§7).
+- [ ] (**High** where a critical journey has no end-to-end probe, **Medium**
+      otherwise) Synthetic monitoring (§8): every critical journey has a
+      scripted end-to-end probe (login → action → assertion on response
+      content, not just `/health`) run from outside the network in the
+      regions users are in; synthetic traffic is tagged (`synthetic: true`)
+      and excluded from SLIs and business metrics; a probe pages only on
+      consecutive failures from multiple locations; certificate, DNS and
+      domain expiry are probed. Manual check: diff the synthetic-check
+      inventory against the critical-journey list — a journey covered only
+      by a `/health` probe, or by none, is the finding.
 - [ ] Edge access logs (gateway/ingress/LB) exist for every deprecable surface,
       with per-route/per-field usage counters and retention covering a full
       deprecation runway — and where a usage question was answered from stored

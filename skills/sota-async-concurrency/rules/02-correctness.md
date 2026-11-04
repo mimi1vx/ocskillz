@@ -1,6 +1,6 @@
 # 02 — Correctness: Races, Atomicity, Memory Ordering, Deadlock
 
-## Data race vs race condition — different bugs, different fixes
+## 1. Data race vs race condition — different bugs, different fixes
 
 - **Data race:** two threads access the same memory location concurrently,
   at least one writes, with no synchronization. In C/C++/Rust(unsafe)/Go this
@@ -37,7 +37,7 @@ async def get_user(uid):
         raise
 ```
 
-## Atomicity: find the invariant, protect the whole transition
+## 2. Atomicity: find the invariant, protect the whole transition
 
 `count += 1` is read-modify-write: three steps, racy everywhere (yes, also in
 CPython — the GIL serializes bytecodes, not statements; and `+=` on an
@@ -65,7 +65,7 @@ Heuristics:
   lock across the compound, or a primitive that is compound-atomic
   (`dict.setdefault`, `sync.Map.LoadOrStore`, `compute_if_absent`, UPSERT).
 
-## Check-then-act / TOCTOU
+## 3. Check-then-act / TOCTOU
 
 Any `if <state> then <act-on-state>` where state is shared (memory, file
 system, DB, remote API) is suspect. The gap between check and act is the race
@@ -84,7 +84,7 @@ window — and on the filesystem it's also a security hole (symlink swap between
 atomic syscall, compound-atomic API). Checking first and acting second is only
 valid as an optimization *before* an atomic operation, never as the guard.
 
-## Memory visibility & ordering (the 20% you need)
+## 4. Memory visibility & ordering (the 20% you need)
 
 On multicore hardware, writes by one thread are not visible to others in
 program order unless synchronization establishes **happens-before**. Without
@@ -133,7 +133,7 @@ atomic release-store, task join), never via a plain flag. The same bug in
 Java is a non-volatile `done`; in C++ a non-atomic bool (UB); in Rust the
 compiler simply refuses — which is the correct default to internalize.
 
-## Deadlock
+## 5. Deadlock
 
 Requires all four Coffman conditions: mutual exclusion, hold-and-wait, no
 preemption, circular wait. Break any one — in practice you break **circular
@@ -162,7 +162,9 @@ Prevention rules, in order of preference:
    or mutate the state without it. Unsafe: `lock(this)` / `synchronized(this)`
    and Java `synchronized` methods on a type untrusted code can hold (they lock
    `this`; `static synchronized` locks the class object, reachable via
-   `getClass()`); `lock(typeof(T))` / `synchronized(T.class)`; string literals
+   `getClass()`); C# `[MethodImpl(MethodImplOptions.Synchronized)]` and Kotlin
+   `@Synchronized`, which lock the instance, or the type for a static member;
+   `lock(typeof(T))` / `synchronized(T.class)`; string literals
    or interned strings, and in Java boxed primitives/`Boolean` (shared
    instances); in Go, a `sync.Mutex` **embedded** in a struct promotes `Lock`/
    `Unlock` to every holder of the value — use a named unexported field
@@ -184,7 +186,7 @@ handler waiting on a pool slot held by its own parent; a bounded channel
 where the consumer awaits the producer's reply on the same full channel.
 Audit the **wait-for graph**, not just the mutexes.
 
-## Livelock & starvation
+## 6. Livelock & starvation
 
 - **Livelock:** everyone busy, nobody progresses (mutual try-lock-retry,
   retry storms in lockstep). Fix: randomized backoff (jitter), or impose
@@ -195,7 +197,7 @@ Audit the **wait-for graph**, not just the mutexes.
   shadowing others. Fix: fair/queued primitives, bounded work per turn, or
   explicit rotation.
 
-## Idempotency under retries
+## 7. Idempotency under retries
 
 Every retry (and every at-least-once queue) means your operation can execute
 **twice**. Concurrency-correct code is idempotent or deduplicated:
@@ -209,7 +211,7 @@ Every retry (and every at-least-once queue) means your operation can execute
   Retrying a timed-out non-idempotent call without a dedupe key is a
   double-charge bug (HIGH in audits).
 
-## Async-signal-safety (pointer)
+## 8. Async-signal-safety (pointer)
 
 Signal handlers (POSIX) may only call async-signal-safe functions — no
 malloc, no printf, no locks (the interrupted thread may hold them → instant
@@ -222,26 +224,38 @@ do real work in a raw handler.
 ## Audit checklist
 
 - [ ] Every shared mutable variable: what synchronizes it? "It's just a flag"
-      is not an answer in threaded code (visibility).
+      is not an answer in threaded code (visibility) (§1, §4).
 - [ ] Grep for read-modify-write on shared state: `+=`, `count++`,
-      `x = x + `, `append` to shared slices/lists from multiple tasks.
+      `x = x + `, `append` to shared slices/lists from multiple tasks (§2).
+      Fields that must change together guarded by one lock or owner task, not
+      by separate atomics? Compound map ops (check-then-insert,
+      get-then-update) under one lock or a compound-atomic primitive?
 - [ ] Check-then-act sweep: `if ... in` / `exists(` / `has(` followed by a
       mutation of the same state — is the pair atomic? Includes
-      filesystem (TOCTOU) and SELECT-then-INSERT.
+      filesystem (TOCTOU) and SELECT-then-INSERT (§3).
 - [ ] In async code: any await between a check and its act? Any shared-state
-      invariant temporarily broken across an await?
+      invariant temporarily broken across an await? (§1)
 - [ ] Multi-lock code: is there a documented order? Build the lock graph from
-      the call sites; any cycle is CRITICAL.
-- [ ] Callbacks/virtual calls/logging/awaits inside lock regions?
-- [ ] Lock reachable by outside code (rule 5; HIGH where untrusted or
+      the call sites; any cycle is CRITICAL (§5).
+- [ ] Callbacks/virtual calls/logging/awaits inside lock regions (§5)?
+- [ ] Lock reachable by outside code (§5 rule 5; HIGH where untrusted or
       plugin code can reach the object, else MEDIUM):
-      `grep -rnE '(^|[^A-Za-z0-9_])(lock|synchronized) *\( *((this|getClass\(\)|[A-Za-z_][A-Za-z0-9_]*\.class) *\)|"|typeof *\()|(public|protected)( [a-z]+)* synchronized |synchronized( [a-z]+)* (public|protected) |^[[:space:]]+\*?sync\.(RW)?Mutex[[:space:]]*(//.*)?$' --include='*.cs' --include='*.java' --include='*.kt' --include='*.go' .`
-      — a Go hit is an embedded mutex; confirm the enclosing type escapes.
-- [ ] Wait-for cycles without locks: tasks awaiting each other, self-feeding
+      `grep -rnE '(^|[^A-Za-z0-9_])(lock|synchronized) *\( *((this|getClass\(\)|[A-Za-z_][A-Za-z0-9_]*\.class) *\)|"|typeof *\()|(public|protected)( [a-z]+)* synchronized |synchronized( [a-z]+)* (public|protected) |MethodImplOptions\.Synchronized([^A-Za-z0-9_]|$)|@([a-z]+:)?(kotlin\.jvm\.)?Synchronized([^A-Za-z0-9_]|$)|^[[:space:]]+\*?sync\.(RW)?Mutex[[:space:]]*(//.*)?$' --include='*.cs' --include='*.java' --include='*.kt' --include='*.go' .`
+      — a Go hit is an embedded mutex; confirm the enclosing type escapes. A
+      `MethodImplOptions.Synchronized` or `@Synchronized` hit locks the instance (the type, if
+      static): reachable when that type is public.
+- [ ] Wait-for cycles without locks (§5): tasks awaiting each other, self-feeding
       queues, pool-within-pool acquisition.
-- [ ] RwLocks under write-heavy or reader-storm load: starvation analysis.
+- [ ] RwLocks under write-heavy or reader-storm load: starvation analysis
+      (§6). Also: try-lock/retry loops without jitter or asymmetry
+      (livelock); a `select` with an always-ready branch, unfair locks or
+      priority tasks starving other waiters?
 - [ ] Every retried or queued mutation: idempotency key or natural
-      idempotence? Timeout treated as "unknown", not "failed"?
+      idempotence? Processed keys stored in the same transaction as the
+      effect? Timeout treated as "unknown", not "failed"? (§7)
 - [ ] Atomics: any load-then-write-based-on-it that isn't a CAS loop? Any
-      `Relaxed` ordering guarding non-counter data?
-- [ ] Signal handlers doing more than set-flag/write-byte?
+      `Relaxed` ordering guarding non-counter data? Hand-rolled
+      double-checked locking instead of a `Once` primitive? (§2, §4)
+- [ ] Signal handlers doing more than set-flag/write-byte, or raw handlers
+      where the runtime's facility (`add_signal_handler`, `signal.Notify`,
+      `tokio::signal`) exists? (§8)

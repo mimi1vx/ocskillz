@@ -1,6 +1,6 @@
 # 05 — Web Platform Security
 
-Scope: XSS, CSP, CSRF, CORS, clickjacking, security headers, cookies (file uploads: rules/21).
+Scope: XSS, CSP, CSRF, CORS, clickjacking, security headers, cookies (file uploads: [rules/21](21-file-uploads.md)).
 Maps to OWASP A05/A02/A07:2025, CWE-79/352/942/1021/434/1004.
 
 Core principle: the browser enforces your security policy — but only the policy you
@@ -121,11 +121,12 @@ Content-Security-Policy:
   in `style-src`; move inline `on*=` handlers to `addEventListener` (a nonce
   cannot cover an attribute). Check each policy with a CSP evaluator. CSP does
   not stop DOM clobbering or reuse of script gadgets that are allowed to run.
+  Clobbering defences: `sota-typescript`.
   OWASP: CSP, DOM Clobbering Prevention cheat sheets; Proactive Controls 2024 C8.
 - User files and API responses a browser may open directly get the header
   `Content-Security-Policy: sandbox` (opaque origin, no scripts; ignored in
   `<meta>` and report-only). The iframe `sandbox` attribute is a second layer
-  only: untrusted content still gets its own origin (rules/21 §1) and is not rendered
+  only: untrusted content still gets its own origin ([rules/21](21-file-uploads.md) §1) and is not rendered
   where sandboxing is unavailable. OWASP: ASVS 5.0 V3.2.1; HTML5 Security cheat sheet.
 - Deployment pitfalls: a `<meta http-equiv>` policy ignores `frame-ancestors`,
   `sandbox` and `report-uri`, cannot be report-only, and covers only markup
@@ -165,7 +166,7 @@ Content-Security-Policy:
 - Login CSRF is real (attacker logs victim into attacker's account to harvest
   data). No session exists yet, so issue a pre-session carrying its own token
   on the login form (or require a custom header on a same-origin `fetch`), then
-  regenerate the session ID on login (rules/17 §2).
+  regenerate the session ID on login ([rules/17](17-sessions-and-tokens.md) §2).
 - **Not defenses** on their own: a secret cookie, POST-only, multi-step flows,
   URL rewriting, HTTPS, CAPTCHA. For `fetch`/XHR send the token in a custom
   header; a script-readable token never contains the raw session ID.
@@ -214,17 +215,17 @@ verify: take the token from the header/form field, split it, recompute the HMAC
 
 - Token lifecycle: a CSRF token lives as long as its session (rotate it with
   the session id at login and privilege change) and carries no timestamp
-  expiry of its own — the scoped exception to rules/04 §7 "verify expiry".
+  expiry of its own — the scoped exception to [rules/04](04-cryptography.md) §7 "verify expiry".
   Per-request tokens are stricter but break Back and multi-tab use; keep
   them for high-value forms. On failure return `403`, log a suspected-CSRF
   security event (user, route, `Origin`), optionally rotate the token. A
   Fetch Metadata/Origin reject and a disallowed CORS origin log the same way,
-  with the reason (`malicious_csrf`, `malicious_cors`; rules/07 §2.1).
+  with the reason (`malicious_csrf`, `malicious_cors`; [rules/07](07-data-exposure.md) §2.1).
   OWASP: CSRF Prevention, Logging Vocabulary cheat sheets; Code Review Guide v2.
 - **Behind reverse proxies**: the *expected* origin (scheme+host+port) comes
   from server config, never from `Host`/`X-Forwarded-Host`. Trust
   `X-Forwarded-Proto`/`-Host` only when your own proxy sets them and strips
-  client copies (network-security guidance R6) — e.g. Django
+  client copies (network-security guidance) — e.g. Django
   `SECURE_PROXY_SSL_HEADER`/`USE_X_FORWARDED_HOST`, Express `trust proxy`.
   Proxies, gateways and load balancers must pass `Origin` and `Sec-Fetch-*`
   through unchanged; one that strips them sends every request down the
@@ -253,7 +254,7 @@ verify: take the token from the header/form field, split it, recompute the HMAC
   internal IP is same-origin with your service — and the request still
   carries the attacker's name in `Host`. Every web app, above all one bound
   to localhost or an internal network (dev servers, admin UIs, local agents,
-  MCP servers — sota-llm-engineering rules/04), rejects a `Host` that is
+  MCP servers — [sota-llm-engineering rules/04](../../sota-llm-engineering/rules/04-agents-tools.md)), rejects a `Host` that is
   not an expected name: e.g. Django `ALLOWED_HOSTS` (never `'*'`), Vite
   `server.allowedHosts` (never `true`), webpack-dev-server `allowedHosts`
   (never `'all'`). Authenticate the local listener as well. OWASP:
@@ -315,10 +316,10 @@ Cache-Control: no-store                      (on authenticated/personal response
   callback) send `Referrer-Policy: no-referrer`: the baseline still sends the
   full URL on same-origin requests, and a `referrerpolicy` attribute on an
   element can widen it. Load no third-party resources there, and redirect to
-  a token-free URL once the token is consumed (rules/02 §5). Forms on such a
+  a token-free URL once the token is consumed ([rules/02](02-authentication.md) §5). Forms on such a
   page POST with `Origin: null` (§3). OWASP: Forgot Password cheat sheet,
   Secure Headers Project.
-- `nosniff` is what makes your upload Content-Type discipline (rules/21 §1) stick.
+- `nosniff` is what makes your upload Content-Type discipline ([rules/21](21-file-uploads.md) §1) stick.
 - Remove fingerprint headers (`Server`, `X-Powered-By`) — low value but free.
 - Cross-origin isolation (Spectre-class leaks; needed for SharedArrayBuffer):
   COOP plus COEP `require-corp` (or `credentialless`); each allowed cross-origin
@@ -358,7 +359,7 @@ Cache-Control: no-store                      (on authenticated/personal response
 - Size/count discipline: cookies ride every request — keep tokens, not data;
   name + value over 4096 bytes is dropped silently (RFC 6265bis). **Every**
   cookie is `Secure` (`__Secure-` where `__Host-` can't apply; `__Host-` forces
-  `Path=/`). Session cookies carry no `Expires`/`Max-Age` (remember-me: rules/17
+  `Path=/`). Session cookies carry no `Expires`/`Max-Age` (remember-me: [rules/17](17-sessions-and-tokens.md)
   §2), reach the client only via `Set-Cookie` (never a response body), one header
   per cookie, under a non-default name (not `JSESSIONID`/`PHPSESSID`), one name
   per cookie across paths/domains; inventory them. OWASP: ASVS 5.0 V3.3.1/4/5.
@@ -424,56 +425,55 @@ Cache-Control: no-store                      (on authenticated/personal response
   percent-encoding (double encoding too), `;` parameters and dot-segments
   identically — or the edge normalises once and rejects non-canonical paths.
   Test it: send variants of a protected path through the whole chain and
-  assert every component reaches the same decision (rules/01 §4, §11 parser
+  assert every component reaches the same decision ([rules/01](01-input-injection.md) §4, §11 parser
   differentials). OWASP: WSTG-CONF-13.
 - **Cache poisoning**: any request input that affects the response but isn't
   in the cache key (headers like `X-Forwarded-Host`, `X-Original-URL`,
   unkeyed query params) lets an attacker poison the shared cache. Don't
   reflect unkeyed inputs; `Vary` on what you use; strip override headers at
-  the edge (rules/01 §11 Host-header rules apply).
+  the edge ([rules/01](01-input-injection.md) §11 Host-header rules apply).
 - Browser-side: `Cache-Control: no-store` for sensitive pages also defends
   shared-computer history attacks (`no-cache` still permits storing, RFC 9111
-  section 5.2.2.4); pair with `Clear-Site-Data: "*"` on logout for high-sensitivity
-  apps, and also clear Web Storage, IndexedDB and sensitive DOM from client code
-  (works offline). No PII/financial data there. OWASP: ASVS 5.0 V14.3.1, V14.3.3.
+  section 5.2.2.4). Logout clearing (`Clear-Site-Data` value, client-side storage
+  wipe): [rules/17](17-sessions-and-tokens.md) §2. No PII/financial data in browser
+  storage. OWASP: ASVS 5.0 V14.3.1, V14.3.3.
 
 File upload handling (formerly section 10) moved to [rules/21](21-file-uploads.md) §1 on 2026-09-25.
 
 ## Audit checklist
 
-- [ ] Is all output encoded for its exact context, with every auto-escape bypass (`innerHTML`, `|safe`, `dangerouslySetInnerHTML`) justified and sanitized?
-- [ ] Is rich-text HTML sanitized with an allowlist sanitizer (DOMPurify-class), never regex?
-- [ ] Is CSP nonce/hash-based with `strict-dynamic`, no `unsafe-inline`/`unsafe-eval`, per-response nonces, and actually enforcing (not report-only)?
-- [ ] Do all state-changing endpoints require non-GET methods plus CSRF tokens, with SameSite cookies as the second layer?
-- [ ] Does `postMessage` handling verify `event.origin`, and WS handshakes verify `Origin`?
-- [ ] Is CORS exact-match allowlisted (no reflection, no `null`, no substring matching), with `Vary: Origin`?
-- [ ] Are `frame-ancestors`/XFO set, especially on auth and confirmation pages?
-- [ ] Is the full header baseline present (HSTS w/ includeSubDomains, nosniff, Referrer-Policy, COOP) and `Cache-Control: no-store` on personal data?
-- [ ] Do session cookies use `__Host-` prefix, Secure, HttpOnly, SameSite, host-scoped?
-- [ ] Do third-party scripts carry SRI or self-hosted pins, with tag managers excluded from auth/payment pages?
-- [ ] Are authenticated responses `no-store`/`private` with cache keys covering every response-affecting input (no unkeyed header reflection)?
-- [ ] Are sandboxed iframes used for untrusted embeds without `allow-scripts`+`allow-same-origin` together?
-- [ ] **Unencodable DOM contexts — HIGH**: no untrusted attribute/tag names or `on*`/`style` values via `setAttribute`: `grep -rnEi -- "setAttribute\([[:space:]]*([A-Za-z_][A-Za-z0-9_.]*|['\"](on[a-z]+|style|href|src|srcdoc|formaction)['\"])[[:space:]]*," .` — each hit needs a literal harmless name or a validated value.
-- [ ] **DOM-sourced request target — HIGH**: `grep -rnEi -- "(fetch|\.open|axios[.a-z]*)\(.*(location\.|document\.referrer|window\.name|event\.data)|\.src[[:space:]]*=[^=].*(location\.|document\.referrer|window\.name|event\.data)" .` — a hit that builds the URL rather than looking it up in a fixed table is a client-side CSRF/script-injection finding.
-- [ ] **Raw HTML through a markup renderer, or post-sanitize edits — HIGH**: `grep -rnEi -- "html:[[:space:]]*true|['\"]commonmark['\"]|allowDangerousHtml|sanitize\(.*\)\.(replace|concat)\(" .` — every user-markup path renders then sanitizes the output, and nothing alters it after.
-- [ ] **CSP delivery — MEDIUM**: `grep -rnEi -- "http-equiv=['\"]?Content-Security-Policy|-src[^;]*[[:space:]](https?://)?\*\.|replace\(.*<script" .` — meta-delivered policy where a header is possible, `*.` host wildcards in any directive, or nonce-stamping by rewrite.
-- [ ] **Fetch Metadata fails open — HIGH**: `grep -rnEi -- "sec-fetch-site[^#]*[(,[:space:]](none|null|undefined)[,)]|sec-fetch-site['\"][[:space:]]*,[[:space:]]*['\"]same-|sec-fetch-site['\"]\)[[:space:]]*&&" .` — an absent header passes, or defaults to same-origin, instead of falling back to the Origin check.
-- [ ] **Origin/Referer prefix match — HIGH**: `grep -rnEi -- "(origin|referer|referrer)[^;]*\.(startswith|includes|indexof|contains|endswith)\(|['\"][[:space:]]+in[[:space:]]+[^;]*(referer|origin)" .` — source origin must equal a configured origin exactly.
-- [ ] **Double-submit compares header to cookie only — HIGH**: `grep -rnEi -- "(csrf|xsrf)[^;]*(!==?|===?)[^;]*cookie|cookie[^;]*(!==?|===?)[^;]*(csrf|xsrf)|(compare_digest|equals|timingSafeEqual)\([^;]*cookie" .` — acceptable only if a session-bound HMAC is also recomputed.
-- [ ] **Forwarded headers trusted wholesale — HIGH**: `grep -rnEi -- "USE_X_FORWARDED_HOST[[:space:]]*=[[:space:]]*True|trust proxy['\"][[:space:]]*,[[:space:]]*true|://[^;]*X-Forwarded-Host" .` — each hit needs a proxy that strips client copies; expected origins come from config.
-- [ ] **Any Host accepted (DNS rebinding) — HIGH on localhost/internal apps**: `grep -rnEi -- "ALLOWED_HOSTS[[:space:]]*=[[:space:]]*\[[[:space:]]*['\"]\*['\"]|allowedHosts['\"]?[[:space:]]*:[[:space:]]*(true|['\"]all['\"])" .`; a server with no Host check at all is the same finding.
-- [ ] **Framing-control defects — MEDIUM (HIGH on auth/consent pages)**: `grep -rnEi -- "http-equiv=[^>]*frame-ancestors|frame-ancestors[[:space:]]+(none|self)|ALLOW-FROM|top\.location[^=]*=[^=]|top[[:space:]]*!==?[[:space:]]*(window\.)?self" .` — meta or unquoted `frame-ancestors`, `ALLOW-FROM`, or JS frame-busting relied on.
-- [ ] **Referrer widened, or token pages leak — MEDIUM**: `grep -rnEi -- "referrerpolicy=['\"]?(unsafe-url|origin-when-cross-origin|no-referrer-when-downgrade)|Referrer-Policy:[[:space:]]*(unsafe-url|no-referrer-when-downgrade|origin-when-cross-origin)" .`; and do reset/magic-link/callback pages send `no-referrer`?
-- [ ] **Path used as an app boundary — MEDIUM**: `grep -rnEi -- "cookie.*path['\"]?[[:space:]]*[:=][[:space:]]*['\"]?/[A-Za-z0-9_-]" .` — a path-scoped session cookie usually means several apps share one origin; they need separate hostnames.
-- [ ] **Unpinned or unvetted vendor script — MEDIUM**: `grep -rnEi -- "<script[^>]*src=['\"]?https?://" . | grep -vi 'integrity='` — each remaining hit has a vetted owner/domain and content-change monitoring.
-- [ ] **Tag manager runs arbitrary code — HIGH**: `grep -rlEi -- "googletagmanager\.com/gtm\.js" . | xargs -r grep -LEi -- "gtm\.blocklist[^]]*(customScripts|['\"]html['\"])"` — each file loads a container with no custom-code block; also confirm console MFA and a data-layer-only tag design.
-- [ ] **Vendor script "sandboxed" in a worker — MEDIUM**: `grep -rnEi -- "type=['\"]?text/partytown|<Partytown" .` — a vendor that must be contained runs in a separate-domain iframe instead; the worker keeps your origin.
-- [ ] **Retired subdomain still trusted — HIGH** (network-security guidance R4, identity and access-management guidance): `grep -rnEi -- "(redirect_?uris?|allowed_?origins|cors_?origins|-src[[:space:]])[^#]*[a-z0-9-]\.[a-z]{2,}" .` — every host listed resolves to a live, owned service; a name gone from DNS is purged from redirect-URI, CSP and CORS lists in the same change.
-- [ ] **Web cache deception, origin half — HIGH**: `curl -s -o /dev/null -w '%{http_code}\n' -b "$SESSION" https://HOST/account/x.css` (and `/account;x.css`) returns `404`/redirect, not `200` with the account page.
-- [ ] **Path-normalisation disagreement — HIGH**: a test sends variants of a protected path (`/admin/`, `/ADMIN`, `/%61dmin`, `/x/../admin`, `/admin;x`) through CDN, proxy, WAF and app and asserts the same allow/deny at each — sent raw (`curl --path-as-is`), or the client itself collapses `/x/../admin` to `/admin` and the variant is never tested.
-- [ ] **CSRF token leaves the origin or sits in storage — HIGH**: `grep -rnEi -- "withXSRFToken[[:space:]]*:[[:space:]]*true|(localStorage|sessionStorage)\.setItem\([^)]*(csrf|xsrf)" .` — the token rides only same-origin requests, from a meta tag or memory.
-- [ ] **Cross-window leaks — MEDIUM**: `grep -rnEi -- "postMessage\(.*,[[:space:]]*['\"]\*['\"]|window\.open\(" . | grep -vi noopener` — every send names an exact `targetOrigin`; every `window.open` to a foreign URL passes `noopener`.
-- [ ] **Mixed content — MEDIUM**: `grep -rnEi -- "(src|href|action)[[:space:]]*=[[:space:]]*['\"]?http://" .` — no plain-HTTP subresource, form target or link on an HTTPS page.
-- [ ] **Header value defects — MEDIUM**: `grep -rnEi -- "x-xss-protection['\"]?[[:space:]]*[:,=]?[[:space:]]*['\"]?1|text/html(['\"]|[[:space:]]*$)|cache-control[^;]*no-cache" . | grep -vi no-store` — auditor enabled, HTML without `charset=utf-8`, or `no-cache` where `no-store` was meant.
-- [ ] **Sensitive data in browser storage — MEDIUM**: `grep -rnEi -- "(localStorage|sessionStorage)\.setItem|indexedDB\.open" .` — each hit holds no PII/financial data and is cleared client-side at logout.
-- [ ] **CSP gaps — MEDIUM**: `grep -rnEi -- "style-src[^;]*unsafe-inline|<[a-z][^>]*[[:space:]]on[a-z]+=|report-uri" . | grep -vi report-to` — inline styles/handlers to refactor; `report-uri` without `report-to`; enforced policy reports somewhere.
+- [ ] Is all output encoded for its exact context (quoted attributes, data passed via `<script type="application/json">` rather than script blocks, no untrusted data in CSS), with URL-bearing attributes scheme-allowlisted (`https?:`/relative) after decoding character references, every auto-escape bypass (`innerHTML`, `|safe`, `dangerouslySetInnerHTML`) justified and sanitized, and DOM sources (`location.*`, `postMessage` data, `window.name`) kept from `innerHTML`/`eval`/`document.write` sinks under enforced Trusted Types (`require-trusted-types-for 'script'`) with no pass-through default policy (§1)?
+- [ ] Is rich-text HTML sanitized with an allowlist sanitizer (DOMPurify-class), never regex, and is user CSS given a property allowlist or refused (§1)?
+- [ ] Is CSP nonce/hash-based with `strict-dynamic`, no `unsafe-inline`/`unsafe-eval`, per-response nonces, `base-uri 'none'`, `object-src 'none'` and `form-action` set, and actually enforcing (not report-only), and do user files and API responses a browser may open directly carry the `Content-Security-Policy: sandbox` header (§2)?
+- [ ] Do all state-changing endpoints, cookie-authenticated JSON APIs and the login form (pre-session token) included, require non-GET methods plus CSRF tokens, with SameSite cookies as the second layer, the token rotated with the session id at login and privilege change and never containing the raw session id, and each failure returning `403` with a logged suspected-CSRF event (§3)?
+- [ ] Does `postMessage` handling verify `event.origin` (§1), and WS handshakes verify `Origin` (§4)?
+- [ ] Is CORS exact-match allowlisted (no reflection, no `null`, no substring matching), with `Vary: Origin`, minimal `Allow-Methods`/`Allow-Headers` (no `*` on a credentialed API), CORS headers only on routes read cross-origin, plain-HTTP requests carrying an `https://` `Origin` refused, and data endpoints served as `application/json` with no JSONP (§4)?
+- [ ] Are `frame-ancestors`/XFO set as response headers, especially on auth, consent, payment and account-change pages, with XFO sent once (not by both app and proxy), and do one-click sensitive actions (OAuth Authorize, payment or permission changes) require an interaction-gated confirmation that a framer or a double-click window swap cannot drive (§5)?
+- [ ] Is the full header baseline present (HSTS w/ includeSubDomains and preload only once every subdomain is HTTPS-ready, nosniff, Referrer-Policy, COOP, CORP, a Permissions-Policy denying every unused feature), `Server`/`X-Powered-By` removed, COEP set wherever cross-origin isolation is needed, unknown user files served as `application/octet-stream`, and `Cache-Control: no-store` on personal data (§6)?
+- [ ] Do session cookies use `__Host-` prefix, Secure, HttpOnly, SameSite, host-scoped, with no `Expires`/`Max-Age`, a non-default name (not `JSESSIONID`/`PHPSESSID`) and delivery only via `Set-Cookie`; and is every other cookie `Secure`, `HttpOnly` unless script needs it, listed in a cookie inventory, and free of unsigned authorization state such as `is_admin=1` (§7)?
+- [ ] Do third-party scripts carry SRI or self-hosted pins, with tag managers excluded from auth/payment pages and container changes reviewed like a release (§8)?
+- [ ] Are authenticated responses `no-store`/`private` with cache keys covering every response-affecting input (no unkeyed header reflection), and override headers (`X-Forwarded-Host`, `X-Original-URL`) stripped at the edge (§9)?
+- [ ] Are sandboxed iframes used for untrusted embeds without `allow-scripts`+`allow-same-origin` together, with minimal `allow=` permissions and no unsanitized untrusted HTML in `srcdoc` (§8)?
+- [ ] **Unencodable DOM contexts — HIGH**: no untrusted attribute/tag names or `on*`/`style` values via `setAttribute`: `grep -rnEi -- "setAttribute\([[:space:]]*([A-Za-z_][A-Za-z0-9_.]*|['\"](on[a-z]+|style|href|src|srcdoc|formaction)['\"])[[:space:]]*," .` — each hit needs a literal harmless name or a validated value (§1).
+- [ ] **DOM-sourced request target — HIGH**: `grep -rnEi -- "(fetch|\.open|axios[.a-z]*)\(.*(location\.|document\.referrer|window\.name|event\.data)|\.src[[:space:]]*=[^=].*(location\.|document\.referrer|window\.name|event\.data)" .` — a hit that builds the URL rather than looking it up in a fixed table is a client-side CSRF/script-injection finding (§1).
+- [ ] **Raw HTML through a markup renderer, or post-sanitize edits — HIGH**: `grep -rnEi -- "html:[[:space:]]*true|['\"]commonmark['\"]|allowDangerousHtml|sanitize\(.*\)\.(replace|concat)\(" .` — every user-markup path renders then sanitizes the output, and nothing alters it after (§1).
+- [ ] **CSP delivery — MEDIUM**: `grep -rnEi -- "http-equiv=['\"]?Content-Security-Policy|-src[^;]*[[:space:]](https?://)?\*\.|replace\(.*<script" .` — meta-delivered policy where a header is possible, `*.` host wildcards in any directive, or nonce-stamping by rewrite, or one blanket org-wide policy instead of one per app (§2).
+- [ ] **Fetch Metadata fails open — HIGH**: `grep -rnEi -- "sec-fetch-site[^#]*[(,[:space:]](none|null|undefined)[,)]|sec-fetch-site['\"][[:space:]]*,[[:space:]]*['\"]same-|sec-fetch-site['\"]\)[[:space:]]*&&" .` — an absent header passes, or defaults to same-origin, instead of falling back to the Origin check (§3).
+- [ ] **Origin/Referer prefix match — HIGH**: `grep -rnEi -- "(origin|referer|referrer)[^;]*\.(startswith|includes|indexof|contains|endswith)\(|['\"][[:space:]]+in[[:space:]]+[^;]*(referer|origin)" .` — source origin must equal a configured origin exactly (§3).
+- [ ] **Double-submit compares header to cookie only — HIGH**: `grep -rnEi -- "(csrf|xsrf)[^;]*(!==?|===?)[^;]*cookie|cookie[^;]*(!==?|===?)[^;]*(csrf|xsrf)|(compare_digest|equals|timingSafeEqual)\([^;]*cookie" .` — acceptable only if a session-bound HMAC is also recomputed (§3).
+- [ ] **Forwarded headers trusted wholesale — HIGH**: `grep -rnEi -- "USE_X_FORWARDED_HOST[[:space:]]*=[[:space:]]*True|trust proxy['\"][[:space:]]*,[[:space:]]*true|://[^;]*X-Forwarded-Host" .` — each hit needs a proxy that strips client copies; expected origins come from config (§3).
+- [ ] **Any Host accepted (DNS rebinding) — HIGH on localhost/internal apps**: `grep -rnEi -- "ALLOWED_HOSTS[[:space:]]*=[[:space:]]*\[[[:space:]]*['\"]\*['\"]|allowedHosts['\"]?[[:space:]]*:[[:space:]]*(true|['\"]all['\"])" .`; a server with no Host check at all is the same finding (§4).
+- [ ] **Framing-control defects — MEDIUM (HIGH on auth/consent pages)**: `grep -rnEi -- "http-equiv=[^>]*frame-ancestors|frame-ancestors[[:space:]]+(none|self)|ALLOW-FROM|top\.location[^=]*=[^=]|top[[:space:]]*!==?[[:space:]]*(window\.)?self" .` — meta or unquoted `frame-ancestors`, `ALLOW-FROM`, or JS frame-busting relied on (§5).
+- [ ] **Referrer widened, or token pages leak — MEDIUM**: `grep -rnEi -- "referrerpolicy=['\"]?(unsafe-url|origin-when-cross-origin|no-referrer-when-downgrade)|Referrer-Policy:[[:space:]]*(unsafe-url|no-referrer-when-downgrade|origin-when-cross-origin)" .`; and do reset/magic-link/callback pages send `no-referrer` (§6)?
+- [ ] **Path used as an app boundary — MEDIUM**: `grep -rnEi -- "cookie.*path['\"]?[[:space:]]*[:=][[:space:]]*['\"]?/[A-Za-z0-9_-]" .` — a path-scoped session cookie usually means several apps share one origin; they need separate hostnames (§7).
+- [ ] **Unpinned or unvetted vendor script — MEDIUM**: `grep -rnEi -- "<script[^>]*src=['\"]?https?://" . | grep -vi 'integrity='` — each remaining hit has a vetted owner/domain and content-change monitoring (§8).
+- [ ] **Tag manager runs arbitrary code — HIGH**: `grep -rlEi -- "googletagmanager\.com/gtm\.js" . | xargs -r grep -LEi -- "gtm\.blocklist[^]]*(customScripts|['\"]html['\"])"` — each file loads a container with no custom-code block; also confirm console MFA and a data-layer-only tag design (§8).
+- [ ] **Vendor script "sandboxed" in a worker — MEDIUM**: `grep -rnEi -- "type=['\"]?text/partytown|<Partytown" .` — a vendor that must be contained runs in a separate-domain iframe instead; the worker keeps your origin (§8).
+- [ ] **Web cache deception, origin half — HIGH**: `curl -s -o /dev/null -w '%{http_code}\n' -b "$SESSION" https://HOST/account/x.css` (and `/account;x.css`) returns `404`/redirect, not `200` with the account page (§9).
+- [ ] **Path-normalisation disagreement — HIGH**: a test sends variants of a protected path (`/admin/`, `/ADMIN`, `/%61dmin`, `/x/../admin`, `/admin;x`) through CDN, proxy, WAF and app and asserts the same allow/deny at each — sent raw (`curl --path-as-is`), or the client itself collapses `/x/../admin` to `/admin` and the variant is never tested (§9).
+- [ ] **CSRF token leaves the origin or sits in storage — HIGH**: `grep -rnEi -- "withXSRFToken[[:space:]]*:[[:space:]]*true|(localStorage|sessionStorage)\.setItem\([^)]*(csrf|xsrf)" .` — the token rides only same-origin requests, from a meta tag or memory (§3).
+- [ ] **Cross-window leaks — MEDIUM**: `grep -rnEi -- "postMessage\(.*,[[:space:]]*['\"]\*['\"]|window\.open\(" . | grep -vi noopener` — every send names an exact `targetOrigin`; every `window.open` to a foreign URL passes `noopener` (§1).
+- [ ] **Mixed content — MEDIUM**: `grep -rnEi -- "(src|href|action)[[:space:]]*=[[:space:]]*['\"]?http://" .` — no plain-HTTP subresource, form target or link on an HTTPS page (§6).
+- [ ] **Header value defects — MEDIUM**: `grep -rnEi -- "x-xss-protection['\"]?[[:space:]]*[:,=]?[[:space:]]*['\"]?1|text/html(['\"]|[[:space:]]*$)|cache-control[^;]*no-cache" . | grep -vi no-store` — auditor enabled, HTML without `charset=utf-8`, or `no-cache` where `no-store` was meant (§6, §9).
+- [ ] **Sensitive data in browser storage — MEDIUM**: `grep -rnEi -- "(localStorage|sessionStorage)\.setItem|indexedDB\.open" .` — each hit holds no PII/financial data and is cleared client-side at logout, with `Clear-Site-Data` sent on logout (§9; header value in [rules/17](17-sessions-and-tokens.md) §2).
+- [ ] **CSP gaps — MEDIUM**: `grep -rnEi -- "style-src[^;]*unsafe-inline|<[a-z][^>]*[[:space:]]on[a-z]+=|report-uri" . | grep -vi report-to` — inline styles/handlers to refactor; `report-uri` without `report-to`; enforced policy reports somewhere, to a collector that keeps `effective-directive`/`blocked-uri`/`disposition` and strips query strings; each policy also passes a CSP evaluator (§2).

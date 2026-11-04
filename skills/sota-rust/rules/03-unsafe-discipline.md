@@ -101,7 +101,7 @@ Audit unsafe code against these, in observed-frequency order:
    C calls a destructor twice; `CString::new(s).unwrap().as_ptr()` — temporary
    dropped at end of statement, dangling pointer (`temporary_cstring_as_ptr`
    lint). Struct layout across FFI requires `#[repr(C)]`.
-6. **Unwinding across FFI** — see rules/02 §5. A Rust panic leaving an `extern "C"`
+6. **Unwinding across FFI** — see [rules/02](02-errors-and-panics.md) §5. A Rust panic leaving an `extern "C"`
    fn **aborts** since 1.81 (a DoS, no longer UB); a foreign exception unwinding
    into Rust through a `"C"` declaration is still UB.
 7. **Data races**: `unsafe impl Send/Sync` on types containing raw pointers or
@@ -199,7 +199,7 @@ must have a valid discriminant, a `fn` pointer and a reference must be non-null,
 include a guarantee that destructors will always run" — which is why §3a forbids unsafe
 code from relying on `Drop`. The operational half is separate: **every leak API skips the
 destructor.** In a long-running service a per-request leak is an unbounded-memory DoS, and
-for a secret it is an erasure that never happens (rules/05 §5).
+for a secret it is an erasure that never happens ([rules/05](05-security-supply-chain.md) §5).
 
 - **`mem::forget`: don't.** To suppress a drop, hold the value in `ManuallyDrop` and hand
   it back with `ManuallyDrop::into_inner` (or drop it explicitly) on every path.
@@ -217,7 +217,7 @@ for a secret it is an erasure that never happens (rules/05 §5).
   path, including errors, and call `from_raw` only on a pointer that came from the same
   type's `into_raw` (§3 item 5). In a crate with no `unsafe`, an `into_raw` has no
   legitimate partner. (MEM-INTOFROMRAWALWAYS, -ONLY, MEM-NORAWPOINTER)
-- `Rc`/`Arc` cycles leak silently — rules/01 §2 (`Weak`). (MEM-MUT-REC-RC)
+- `Rc`/`Arc` cycles leak silently — [rules/01](01-ownership-and-api-design.md) §2 (`Weak`). (MEM-MUT-REC-RC)
 
 ## 4. Miri, sanitizers, fuzzing — CI for the unchecked
 
@@ -241,12 +241,20 @@ Any crate with non-trivial `unsafe` runs **Miri in CI**:
   when the environment has no suitable system toolchain and the user or
   repository explicitly permits rustup.
 - Miri can't run FFI/syscall-heavy paths; for those use sanitizers:
-  `RUSTFLAGS="-Zsanitizer=address" cargo test` under a system-provided nightly
-  (ASan), TSan for
-  concurrency claims, and `loom` for testing lock-free/atomic algorithms
-  exhaustively.
+  `RUSTFLAGS="-Zsanitizer=address" cargo test --target "$(rustc -vV | sed -n 's/^host: //p')"`
+  under a system-provided nightly (ASan), TSan for concurrency claims, and `loom` for testing lock-free/atomic algorithms
+  exhaustively. **`--target` is not optional**: without it `RUSTFLAGS` also reaches build
+  scripts and proc macros (the unstable book: *"always remember to pass `--target`"*). Measured
+  2026-10-24 on a crate with one proc-macro dependency: without it, Linux nightly refused
+  (`building proc macro crate with sanitizers enabled is not supported`) and macOS aborted
+  (`Interceptors are not working`), both rc 101; with it, both caught a planted
+  heap-buffer-overflow. The book also strongly recommends `-Zbuild-std` so `std` is
+  instrumented. There is no UBSan for Rust code: nightly rejects `-Zsanitizer=undefined`.
+- Proving rather than sampling — panic-, overflow- and out-of-bounds-freedom over every input
+  within a bound, or pointer validity of an `unsafe` wrapper's safe API — is a Kani harness:
+  [rules/09](09-formal-verification.md). Kani does not replace Miri here.
 - Parsers and any unsafe-touching decoder: fuzz with `cargo fuzz` (libFuzzer)
-  — fuzzing + Miri/ASan is the practical soundness net (see rules/05 §6).
+  — fuzzing + Miri/ASan is the practical soundness net (see [rules/05](05-security-supply-chain.md) §6).
 
 ## 5. Supply-chain visibility of unsafe
 
@@ -259,7 +267,7 @@ Any crate with non-trivial `unsafe` runs **Miri in CI**:
   promise and makes regressions un-mergeable. Workspace-wide:
   `[lints.rust] unsafe_code = "forbid"` with per-crate opt-out.
 - Record unsafe review in `cargo vet` audits (criteria `safe-to-deploy` +
-  unsafe review) — rules/05 §2.
+  unsafe review) — [rules/05](05-security-supply-chain.md) §2.
 
 ## 6. Soundness review protocol (for AUDIT mode)
 
@@ -282,21 +290,30 @@ For each `unsafe` block, in order:
 
 ## Audit checklist
 
-- [ ] `rg 'unsafe' -t rust --count-matches` — map the surface first; unsafe
-      outside dedicated modules/crates is a structure finding.
-- [ ] Undocumented blocks: `rg -B2 'unsafe \{' -t rust | rg -v 'SAFETY'` (then
-      verify by eye); enforce `clippy::undocumented_unsafe_blocks`.
-- [ ] `rg 'transmute' -t rust` — each one: why not `bytemuck`/`zerocopy`/
+- [ ] `rg 'unsafe' -t rust --count-matches` (§1) — map the surface first; unsafe
+      outside dedicated modules/crates is a structure finding. For each block: is there a safe
+      equivalent from the §1 list? An `unsafe` "optimization" with no benchmark showing the safe
+      version is the bottleneck = Low–Medium.
+- [ ] Undocumented blocks (§2): `rg -B2 'unsafe \{' -t rust | rg -v 'SAFETY'` (then
+      verify by eye); enforce `clippy::undocumented_unsafe_blocks`, and `clippy::missing_safety_doc`
+      for an `unsafe fn` with no `/// # Safety`; `unsafe_op_in_unsafe_fn` not `allow`ed. A SAFETY
+      comment that does not address each precondition of the called API counts as missing.
+- [ ] `rg 'transmute' -t rust` (§3) — each one: why not `bytemuck`/`zerocopy`/
       `from_bits`/`cast`? Lifetime-extending transmute = Critical.
-- [ ] `rg 'from_utf8_unchecked|get_unchecked|assume_init|set_len' -t rust` —
+- [ ] `rg 'from_utf8_unchecked|get_unchecked|assume_init|set_len' -t rust` (§3) —
       verify the stated invariant actually holds on all paths incl. panics.
-- [ ] `rg 'static mut|&mut \*\(|as \*mut' -t rust`; compiler lints
+- [ ] `rg 'static mut|&mut \*\(|as \*mut' -t rust` (§3); compiler lints
       `static_mut_refs`, `invalid_reference_casting` must be deny.
-- [ ] `rg 'unsafe impl (Send|Sync)' -t rust` — require per-field justification
+- [ ] `rg 'unsafe impl (Send|Sync)' -t rust` (§3) — require per-field justification
       comment; absence = High.
-- [ ] FFI: `rg 'extern "C"' -t rust` — check `#[repr(C)]` on crossing types,
+- [ ] FFI (§3): `rg 'extern "C"' -t rust` — check `#[repr(C)]` on crossing types,
       panic containment, allocator pairing (`into_raw`/`from_raw` symmetry),
       `as_ptr()` on temporaries.
+- [ ] **Hand-written bindings and untyped handles** (§3b) — `grep -rnE 'c_void' --include='*.rs' .`
+      (a `*mut c_void`/`*const c_void` standing for a foreign object in an `extern` signature is an
+      untyped handle = Medium); for each crate with an `extern "C"` block,
+      `grep -rnE 'bindgen|cbindgen' build.rs Cargo.toml .github/ 2>/dev/null` printing nothing
+      means hand-written bindings with no regenerate-or-diff step = Medium (layout drift).
 - [ ] **Values that foreign code fills** (§3b):
       `grep -rnE -A12 'extern "C(-unwind)?"' --include='*.rs' . | grep -E '(: *|-> *)(bool|char|&)|: *(unsafe )?extern "C(-unwind)?" fn|(: *|-> *)[A-Z][A-Za-z0-9_]*([,;)]|$| *\{)'`
       — an inbound `bool`, `char`, `&T`, non-`Option` fn pointer, or a capitalised by-value
@@ -308,20 +325,36 @@ For each `unsafe` block, in order:
       — a hit reached per request or connection = High (unbounded memory); an `into_raw`
       without `from_raw` on every path = Medium; `mem::forget` of a secret-bearing value =
       High (erasure skipped).
-- [ ] `grep -rnE 'mem::(uninitialized|zeroed)(::<[^>]*>)?\(' --include='*.rs' .` —
+- [ ] `grep -rnE 'mem::(uninitialized|zeroed)(::<[^>]*>)?\(' --include='*.rs' .` (§3) —
       `uninitialized` = Critical for almost every type; `zeroed` is UB wherever all-zero is
       invalid (references, `NonNull`, fn pointers, most enums). rustc's `invalid_value`
       lint flagged both on concrete types and said nothing for a generic `T` (measured).
-- [ ] Layout assumptions: `rg 'repr\(' -t rust` — byte-casting/FFI types have
+- [ ] Layout assumptions (§3a): `rg 'repr\(' -t rust` — byte-casting/FFI types have
       `repr(C)`/`repr(transparent)`; `rg 'as usize as \*|usize as \*' -t rust`
       — int→ptr casts (provenance loss).
-- [ ] `rg 'map_unchecked_mut|Pin::new_unchecked|get_unchecked_mut' -t rust` —
+- [ ] `rg 'map_unchecked_mut|Pin::new_unchecked|get_unchecked_mut' -t rust` (§3a) —
       hand-rolled pin projections; prefer `pin-project`. Drop impls using
       `ptr::read`/`ManuallyDrop` checked for panic-path double-drop.
 - [ ] CI: Miri job exists and isn't `continue-on-error: true`; fuzz targets
-      exist for unsafe parsers; `cargo geiger` output reviewed for the tree.
+      exist for unsafe parsers; `cargo geiger` output reviewed for the tree (§4, §5).
+- [ ] **A sanitizer run without `--target`** (§4): `grep -rnE -e '-Zsanitizer=' .github/ .gitlab-ci.yml Makefile justfile scripts/ 2>&1 | grep -v -e '--target'`.
+      A hit is a lead, line by line: a `--target` on another line of the same job, or a
+      `No such file` line for an absent path, also prints. A confirmed one applies the sanitizer
+      to proc macros and build scripts: the job fails on any crate with a proc-macro dependency,
+      or was disabled because it did. Medium if it
+      is the only memory-safety check on FFI code.
+- [ ] **A security-critical `unsafe` wrapper with neither Miri tests over its unsafe paths nor a Kani
+      harness on its safe API** (§4, [rules/09](09-formal-verification.md) §1): `printf 'unsafe_files=%s kani_harness_files=%s\n' "$(rg -l 'unsafe \{|unsafe fn|unsafe impl' -g '*.rs' . | wc -l | tr -d ' ')" "$(rg -l '#\[kani::proof' -g '*.rs' . | wc -l | tr -d ' ')"`
+      — unsafe present and no harness: check that its Miri job runs the unsafe paths; neither =
+      Medium. Harnesses present: audit them with rules/09 — a vacuous proof is not evidence.
 - [ ] Crates with zero unsafe missing `#![forbid(unsafe_code)]` — Low, but
-      free hardening.
-- [ ] Severity calibration: reachable UB = Critical; unsound public API (safe
+      free hardening (§5).
+- [ ] **Soundness walk per `unsafe` block (§6) — Critical when safe code can break the
+      invariant** — for each block: list the unsafe operations and each documented
+      precondition; check that the SAFETY comment discharges all of them; hunt invariant escapes
+      (pub fields, safe methods, trait impls, `Deref`, `Drop`, a panic from user closures,
+      `T: Clone` or comparators mid-modification, reentrant callbacks); a written per-field
+      argument on any manual `unsafe impl Send/Sync`; Miri runs this path in CI.
+- [ ] Severity calibration (§1, §2, §4): reachable UB = Critical; unsound public API (safe
       code can trigger UB) = Critical even if unexercised; missing SAFETY
       comment = Medium; missing Miri CI on unsafe crate = Medium.

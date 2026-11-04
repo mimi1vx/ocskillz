@@ -1,6 +1,6 @@
 # 08 — Dependency & Supply-Chain Hygiene, Static-Analysis Gates
 
-Split out of rules/05 (formerly sections 9 and 10) on 2026-09-25, when rules/05 neared the
+Split out of [rules/05](05-security.md) (formerly sections 9 and 10) on 2026-09-25, when [rules/05](05-security.md) neared the
 500-line cap; they are now §1 and §2.
 
 ## 1. Dependency & supply-chain hygiene
@@ -21,7 +21,7 @@ Split out of rules/05 (formerly sections 9 and 10) on 2026-09-25, when rules/05 
   `uv export --format requirements-txt --no-emit-project -o audit-req.txt && n=$(grep -cE '^[A-Za-z0-9]' audit-req.txt || true) && echo "pip-audit: $n pinned packages" && { [ "$n" -eq 0 ] && echo 'SKIP: no third-party dependencies'; [ "$n" -eq 0 ] || uvx pip-audit --disable-pip -r audit-req.txt; }`
   (measured in bash and zsh: exit 0 with a SKIP line on the empty project, 1 on the vulnerable
   one, 2 where the export fails). `uv audit` reported "0 packages" and exited 0 on the empty
-  project. A committed `pylock.toml` (rules/01 §1) is read by `pip-audit --locked .`, which
+  project. A committed `pylock.toml` ([rules/01](01-tooling-project-setup.md) §1) is read by `pip-audit --locked .`, which
   exited 1 on the vulnerable lock.
   **Bare `uvx pip-audit` is wrong:** with no `-r`, pip-audit audits the environment it runs in,
   and `uvx` gives it a throwaway venv holding only pip-audit and its own deps — it reports "No
@@ -56,7 +56,7 @@ Split out of rules/05 (formerly sections 9 and 10) on 2026-09-25, when rules/05 
   `flask_cors.CORS(app)` (6.0) with no `origins=` reflects **any** `Origin` back; Jinja2
   (3.1.6) `Environment()` has `autoescape=False` (§1). Set them explicitly, at one factory.
 - **README snippets are demos.** A quick-start copied verbatim brings `verify=False`,
-  `CORS(app)`, `debug=True` (rules/05 §8a) or a hardcoded key with it; strip each demo setting before
+  `CORS(app)`, `debug=True` ([rules/05](05-security.md) §8a) or a hardcoded key with it; strip each demo setting before
   it leaves the prototype. (OWASP: Vulnerable Dependency Management, Software Supply Chain
   Security and Secure Coding with AI cheat sheets; SCVS V1, V6.)
 - **No `pip install` from URLs/git in prod paths** without commit pinning
@@ -85,11 +85,15 @@ Split out of rules/05 (formerly sections 9 and 10) on 2026-09-25, when rules/05 
 - Each project in its own venv (uv default); never share one env across trust levels, never
   install into the interpreter that runs your OS tooling.
 - Containers: multi-stage build, `uv sync --locked --no-dev`, run as non-root, no compiler
-  toolchain in the final image.
+  toolchain in the final image, digest-pinned `FROM` ([rules/01](01-tooling-project-setup.md) §9).
+- **A bundled artifact may carry no scanner-readable dependency list.** PyInstaller drops each
+  package's `*.dist-info` unless the spec calls `copy_metadata()`, and a `--onefile` build
+  scanned as 0 packages; a shiv zipapp keeps the metadata, but Syft does not read it. Generate
+  the SBOM from the lock at build time and fail on an empty one (CI and supply-chain controls).
 
 ## 2. Static analysis gates
 
-- Ruff `S` ruleset (bandit port) in the standard select (rules/01) — covers most greps below
+- Ruff `S` ruleset (bandit port) in the standard select ([rules/01](01-tooling-project-setup.md)) — covers most greps below
   natively: S301 pickle, S602 shell=True, S608 SQL strings, S324 weak hashes...
 - `bandit -r src/ -ll` as a CI job if you want bandit's full set, plus
   `opengrep scan --error --config <your-python-rules>` for taint-style findings
@@ -100,7 +104,7 @@ Split out of rules/05 (formerly sections 9 and 10) on 2026-09-25, when rules/05 
 
 ## Audit checklist
 
-- [ ] **One-shot scanners** — `uvx ruff check --select S --statistics .` ;
+- [ ] **One-shot scanners (§2)** — `uvx ruff check --select S --statistics .` ;
       `uvx bandit -r src/ -ll -q` ;
       `uv export --format requirements-txt --no-emit-project -o audit-req.txt && uvx pip-audit --disable-pip -r audit-req.txt`
       (never bare `uvx pip-audit`: it scans its own tool venv and exits 0, §1; exit 1 with
@@ -109,7 +113,9 @@ Split out of rules/05 (formerly sections 9 and 10) on 2026-09-25, when rules/05 
       `osv-scanner --lockfile uv.lock`
 - [ ] **Supply chain** —
       `grep -rn "git+http" pyproject.toml uv.lock 2>/dev/null | grep -v "@[0-9a-f]\{40\}"` ;
-      `grep -rn "nosec\|noqa: S" --include="*.py" src/` (justified suppressions?)
+      `grep -rn "nosec\|noqa: S" --include="*.py" src/` (lists every security
+      suppression; each hit is read for a justification, not a finding, §2) ;
+      `grep -rnE '#[[:space:]]*nosec[[:space:]]*$' --include='*.py' --exclude-dir=.venv .` (bare `# nosec` [LOW])
 - [ ] **--- Adopting a dependency and its insecure defaults (§1) --- [MEDIUM; HIGH for a
       name that does not match its intended project]** —
       `git diff origin/main -- uv.lock | grep -E '^\+name = '` (each new package: vetted on
@@ -131,3 +137,7 @@ Split out of rules/05 (formerly sections 9 and 10) on 2026-09-25, when rules/05 
       (scoped to that one step: the action's `password` input is a token, and its `attestations`
       input defaults to `true`, so only an explicit `false` turns PEP 740 provenance off. A
       fixed `grep -A` window reached a later step's registry `password:` and reported it)
+- [ ] **Bundled artifact with no build-time SBOM (§1) — MEDIUM, HIGH for a deployed
+      service** — `grep -rlE 'pyinstaller|PyInstaller|shiv[[:space:]]' --include='*.y*ml' --include='*.spec' --include='*.sh' --include='*.toml' . | head -3`
+      (each hit builds a bundle: find the step that writes an SBOM from `uv.lock` and asserts
+      a non-zero component count; an image scan of the bundle alone reads 0 packages)

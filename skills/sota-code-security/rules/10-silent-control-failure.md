@@ -11,26 +11,26 @@ absence is observable. In **AUDIT**, this is a distinct pass — the classes bel
 are invisible to source-pattern SAST, because the code is not *wrong*, it is
 *inert*.
 
-**Proving a control here actually works is rules/12** — the mutation probe (replace
+**Proving a control here actually works is [rules/12](12-verifying-the-verifier.md)** — the mutation probe (replace
 the body with the permissive no-op and watch what fails), plus the suspicion turned
 on everything doing the checking: your scorers, gates and benchmarks, and the guard
 that is an instance of what it guards.
 
-**Finding these at codebase scale is rules/11** — the cheap diagnostics (duration
+**Finding these at codebase scale is [rules/11](11-dead-path-diagnostics.md)** — the cheap diagnostics (duration
 vs claimed work, printing every gate's denominator, cross-scale delta), plus five
 classes that are correctness rather than security: scale-dependent silence, a cache
 key narrower than the behaviour it gates, a parser generalised from one sample, a
 producer/consumer seam no schema declares, and a filter whose predicate matches the
 ambient environment (an absolute path, a hostname) so a collection is correct on one
 machine and empty on another.
-Sweep with rules/11 to decide *where* to apply this file.
+Sweep with [rules/11](11-dead-path-diagnostics.md) to decide *where* to apply this file.
 
-Related: fail-open authorization → rules/03 §"authz bypass patterns"; integer
-truncation → rules/06; prompt-as-control and the LLM threat model → rules/08
-§1–2 (`rules/14` §3 here frames it as a silent-control class); the mutation probe and the
-instrument/guard pass → rules/15; test vacuity and mutation testing in general →
-`sota-testing` rules/06 and rules/09; degradation telemetry →
-`sota-observability` rules/05; build/runtime artifact drift → CI and supply-chain controls.
+Related: fail-open authorization → [rules/03](03-authorization.md) §"authz bypass patterns"; integer
+truncation → [rules/06](06-memory-resource-safety.md); prompt-as-control and the LLM threat model → [rules/08](08-llm-ai-security.md)
+§1–2 ([`rules/14`](14-control-not-in-force.md) §3 here frames it as a silent-control class); the mutation probe and the
+instrument/guard pass → [rules/15](15-instruments-and-guards.md); test vacuity and mutation testing in general →
+[`sota-testing` rules/06](../../sota-testing/rules/06-property-fuzzing-mutation.md) and [rules/09](../../sota-testing/rules/09-security-testing.md); degradation telemetry →
+[`sota-observability` rules/05](../../sota-observability/rules/05-operational-readiness.md); build/runtime artifact drift → CI and supply-chain controls.
 
 ---
 
@@ -50,7 +50,7 @@ anyone noticing.
 specific.** It finds controls that are *inert*. It misses controls that are **correctly
 enforcing the wrong predicate** — there, something observable *does* differ (a refusal, a
 missing signature, an error), so the first question answers "yes" and the control is still
-wrong. Field-reported as four instances in a single session, by an author who had just
+wrong. Observed as four instances in a single session, by an author who had just
 documented the shape:
 
 | the check asked | the question that mattered |
@@ -74,7 +74,7 @@ predicate is a proxy and it will drift. Test the dependency itself. Where it gen
 cannot be tested directly, **record the substitution in a comment at the site, including
 the direction each error fails in** — the two directions are rarely symmetric: one instance
 above blocked legitimate work when strict, and would have spent one of three PIN attempts
-on a token that blocks at zero when loose. The class entry is `rules/14` §4a.
+on a token that blocks at zero when loose. The class entry is [`rules/14`](14-control-not-in-force.md) §4a.
 
 Three follow-ups that make it concrete:
 
@@ -87,13 +87,15 @@ Three follow-ups that make it concrete:
 This question is the organizing principle of the whole file. Every class below
 is a specific way the answer comes out "no".
 
-## 2. Where silent no-ops hide — moved to `rules/16`
+## 2. Where silent no-ops hide — moved to [`rules/16`](16-where-no-ops-hide.md)
+
+*(audited in [rules/16](16-where-no-ops-hide.md))* — a pointer stub; the catalogue and its checklist items live in rules/16.
 
 The catalogue of sixteen shapes (weak existence checks, degraded optional dependencies,
 swallowed exceptions, truncation into an inspector, the control that is not in force, a flag
 that parses, the aggregate that masks a detection) now lives in
 **[rules/16](16-where-no-ops-hide.md)**, with its section numbers unchanged — what was §2.7 here is
-`rules/16` §2.7 there. This file keeps the **method**; that one is the catalogue the method
+[`rules/16`](16-where-no-ops-hide.md) §2.7 there. This file keeps the **method**; that one is the catalogue the method
 searches. Split 2026-09-12 at 484 of 500 lines.
 
 ## 3. Make degradation loud — one helper, deduped per cause
@@ -109,7 +111,7 @@ Design:
 - **Deduplicate per cause, not per request** — log once per (control, reason)
   per process or per interval. Per-request warnings get rate-limited away by
   operators and stop being read.
-- Emit all three signals, per `sota-observability` rules/05: a rate-limited WARN
+- Emit all three signals, per [`sota-observability` rules/05](../../sota-observability/rules/05-operational-readiness.md): a rate-limited WARN
   log, a **gauge** (`control_degraded{control="scanner",reason="model_missing"}`)
   that stays 1 while degraded, and a span/response attribute so a single
   request's degradation is traceable.
@@ -134,26 +136,24 @@ Design:
   defect to report as one.
 - **Say "nothing found" per category** rather than padding with weak findings.
   An honest empty category is a result.
-- **A negative claim needs more proof than a positive one.** "There are no
-  swallowed exceptions on the enforcement path" is a far stronger assertion than
-  "here is one at `auth.py:88`" — a narrow search and a true absence look
-  identical from the outside. Before asserting absence: widen the search
-  (synonyms, other languages, generated code, vendored trees), use a **second
-  independent method** (grep *and* AST/call-graph *and* a mutation run), and
-  state the search you actually performed so the reader can judge its reach.
+- **A negative claim needs more proof than a positive one** ("no swallowed exceptions
+  on the enforcement path"): widen the search, confirm by a second independent method,
+  and state the search performed.
   That governs the **search**, which is discarded once it has answered. If the
   conclusion is instead left behind as a durable **guard**, it needs the stronger
-  default in `sota-testing` rules/02 §2.10: structure in AST, behaviour by execution,
+  default in [`sota-testing` rules/02](../../sota-testing/rules/02-test-design-quality.md) §2.10: structure in AST, behaviour by execution,
   regex only where no parser exists.
 - **Before claiming a fix works**: add the regression test, then **revert the fix
   and confirm the test fails**. A regression test is not evidence until it has
   been watched to fail. Report the exact command and the pass/fail counts —
-  "should work" is not evidence (router operating principle 6).
+  "should work" is not evidence. Revert and restore
+  with file edits, in the foreground, never with a backgrounded shell chain: while the gate
+  runs, the security control sits broken on disk ([`sota-testing` rules/06](../../sota-testing/rules/06-property-fuzzing-mutation.md) §6.3).
 - **Check the fixture before concluding the code is broken.** A bad test input
   looks exactly like a broken detector; a validator rejecting a deliberately
   malformed test value is working as designed.
 - For anything that **changes enforcement behavior**, stop and present the
-  decision rather than deciding silently (router operating principle 2).
+  decision rather than deciding silently.
 
 ---
 
@@ -213,67 +213,18 @@ what will that caller do instead*. Both answers belong in the commit that adds t
       condition the dependency itself, or something that currently agrees with it? Name who
       can change one without the other. A proxy with no signal on divergence is a finding
       even while it currently works.
-- [ ] **Every "it produced something" assertion names the field that carries the
-      detection** (`sota-code-security` rules/16 §2.16): which attribute would be empty if the detector were deleted
-      but its preprocessing left intact? An aggregate over a result mixing derived
-      inputs with findings is a liveness check for the input stage, not a control.
-- [ ] **Every optional capability a design depends on was invoked once, not read from
-      `--help`** (`sota-code-security` rules/16 §2.15). Build-tag-gated flags parse and stub out; keep the output of the
-      real call. High when the capability is the load-bearing half of a security control.
-
-- [ ] Anything that writes **outward** on a schedule (a GitOps write-back
-      controller, a PR bot, a sync job) verified at the **destination** rather
-      than from its own success counters — its log reports the update it decided
-      to make, not the write landing (Kubernetes guidance)?
-
-- [ ] For each security control in scope: if it were a no-op, would any log,
+- [ ] For each security control in scope (§1): if it were a no-op, would any log,
       metric, response, or test differ? No → finding, regardless of current
       correctness.
-- [ ] Presence/enablement decided by real loaded artifacts (non-zero rule count,
-      required files present), not by `exists()`/`is_dir()`/truthiness?
-- [ ] No `except ImportError` (or equivalent) silently disabling a control; every
-      optional dependency backing a control present in the **shipped** artifact?
-- [ ] Does a loader that yields zero rules/policies fail closed and loudly? Do
-      shipped example/reference configs load to a non-empty, safe state?
-- [ ] Broad `except` on an enforcement path returning the permissive value?
-      Grep: `except Exception`/`catch (...)`/`rescue =>`/`recover()` near authz,
-      verify, validate, scan → each is fail-open, silent, or both.
-- [ ] Any flag used more broadly than its own definition claims (debug/dev_mode
-      also disabling a security check)?
-- [ ] Any prose instruction ("do not reveal/surface", "ignore instructions
-      below", authz-in-prompt) standing in for an enforced boundary over data or
-      permissions that live in the same context? Enforce structurally/in code
-      (rules/08 §1–2), not by instruction — `rules/14` §3.
-- [ ] For each gate, does run history show it has ever **executed** (not
-      all-skipped: an unreachable trigger, path/branch filter, or dead
-      lifecycle event) and ever **rejected** anything? State the sample size —
-      "not in the last N runs" is not "never" — `rules/14` §4.
-- [ ] Early-return guards on empty/oversized/unparseable input that an attacker
-      can deliberately trigger to skip inspection?
-- [ ] Any truncation (`[:N]`, byte caps, `LIMIT`) on the path *into* a scan,
-      validation, or signature check — or a cap on a **generator's output**
-      (unset `max_tokens`, `--max-results`) whose fragment is then parsed?
-- [ ] Config/policy schemas reject unknown keys, and every key in the reference
-      config resolves to a real field of its section (tested structurally)?
-- [ ] Security/privacy/cost-relevant defaults verified in **both** docs and code,
-      with a test pinning the documented default to the parsed one?
-- [ ] Numbers in tool output derived from what was actually produced, never
-      printed as literals — **and every verification word** (`verified`,
-      `confirmed`, `reachable`, `tainted`, `sanitized`) plus every severity or
-      confidence field traceable to a line that can fail, matched by claim shape
-      rather than keyword and confirmed by reading (`rules/14` §1)?
-- [ ] Any control sitting in audit / warn / dry-run / report-only mode carrying
-      an owner and an expiry, rather than having lived there since it shipped
-      (`rules/14` §5)?
-- [ ] Control smoke tests run against the **built artifact** (image/package/
-      binary), not only the source checkout? Startup asserts its own required
-      artifacts?
-- [ ] Mutation probe run on security-critical paths, and the instrument or guard
-      that reported the result validated in turn — the whole of rules/12 and rules/15?
 - [ ] One shared degraded-control helper, deduped per cause, emitting log +
-      gauge + health state — not per-request warnings?
+      gauge + span/response attribute, with health/readiness reporting a distinct
+      `degraded` state and an alert when the gauge stays 1 past a deploy — not
+      per-request warnings (§3)?
 - [ ] Findings state what looks enabled, why it is inert, and a concrete
       failure scenario; loud failures excluded; deliberate fail-open
-      distinguished from silent bypass?
-- [ ] Every "nothing found" backed by a widened search and a second independent
-      method, with the search performed stated?
+      distinguished from silent bypass; every claimed fix backed by a regression
+      test watched to fail with the fix reverted (command and counts quoted), the
+      fixture checked before the code is called broken, and enforcement-changing
+      fixes presented as a decision, not applied silently (§4)?
+- [ ] Every "nothing found" stated per category and backed by a widened search and a
+      second independent method, with the search performed stated (§4)?

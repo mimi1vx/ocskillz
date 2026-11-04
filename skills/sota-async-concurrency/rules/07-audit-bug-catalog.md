@@ -75,8 +75,8 @@ worker thread serves the next request with the previous tenant. Measured on
 Python 3.14: a 1-worker `ThreadPoolExecutor` job that set a `ContextVar`
 without reset left `"A"` visible to the next job; with `reset` it read
 `None`. On Node 22, the store was still set after an `enterWith()` call had
-returned, while after `run()` it was `undefined`. Language detail: sota-python
-rules/04 §6, JVM language guidance, `sota-typescript` rules/04.
+returned, while after `run()` it was `undefined`. Language detail: [sota-python
+rules/04](../../sota-python/rules/04-async.md) §6, JVM concurrency guidance, `sota-typescript` (Node backend).
 OWASP: Multi-Tenant Security cheat sheet.
 
 ```python
@@ -145,7 +145,8 @@ arrive in waves.
 (`sleep(rand(0, min(cap, base·2^attempt)))`); retry budget (e.g., retries ≤
 10% of requests — token bucket on the retry path); retry at **one** layer;
 honor `Retry-After`; circuit breaker for persistent failure; classify errors
-(retry 503/timeout, never 4xx except 429).
+(the retryable list — `408`, `429`, `502`–`504`, timeouts, connection errors —
+is [`sota-architecture` rules/04](../../sota-architecture/rules/04-resilience-and-failure-design.md) §2).
 
 ```python
 # GOOD
@@ -237,11 +238,13 @@ deadline: flaky in CI, broken under load. Replace with explicit
 synchronization: events, joins, polling-with-timeout on the actual condition,
 fake clocks (`tokio::time::pause`, `looptime`, Go's `testing/synctest`
 bubbles — GA in 1.25, `synctest.Wait` replaces sleep-and-hope).
-Production code that
+In a test, a sleep used as synchronization is rated where the test smells are
+owned: High each ([`sota-testing` rules/02](../../sota-testing/rules/02-test-design-quality.md) §2.7, "Sleeping test"); this
+section's MEDIUM covers the other heisenbug smells. Production code that
 "sleeps to let X finish" is finding-worthy as written — it encodes an
 ordering assumption with no enforcement.
 
-## Audit sweep order (efficient pass over a codebase)
+## 13. Audit sweep order (efficient pass over a codebase)
 
 1. **Topology first** (30 min): entry points, spawns, shared state, queues,
    locks. Write down the lock graph and channel graph.
@@ -257,24 +260,37 @@ ordering assumption with no enforcement.
 
 ## Audit checklist (meta — the whole catalog)
 
-- [ ] #1 fire-and-forget: every spawn owned, errors observed
-- [ ] #2 missing await: truthy-promise checks, forEach(async), return-in-try
+- [ ] #1 fire-and-forget: every spawn owned, errors observed; a truly
+      detached one has an error handler, shutdown registration and a comment
+      (§1)
+- [ ] #2 missing await: truthy-promise checks, forEach(async), return-in-try,
+      un-awaited async tests; `no-floating-promises`/`no-misused-promises`
+      enabled, Python "never awaited" warnings and Rust `#[must_use]`
+      warnings heeded (§2)
 - [ ] #3 shared mutable state: cross-request bleed, loop-var capture, Go maps
-- [ ] #3 request-scoped context set but never reset — HIGH when it holds a
+      (§3)
+- [ ] #3 request-scoped context set but never reset (§3) — HIGH when it holds a
       tenant or user id: `grep -rnE '^[[:space:]]*[[:alnum:]_.]+\.set\([^)]|\.enterWith\(|ThreadLocal<' --include='*.py' --include='*.js' --include='*.ts' --include='*.java' --include='*.kt' .`
       (a bare `x.set(v)` statement discards the token and cannot be reset; each
       `ThreadLocal` needs a `remove()` in `finally`; a `token = x.set(v)` or
       `with x.set(v):` does not match; a JS/Java `map.set(k, v)` hit is noise —
       keep only the context variables)
-- [ ] #4 locks across await; Rust std guards across `.await`
-- [ ] #5 blocking calls in async (rule 04 grep list); `block_on` in async
-- [ ] #6 retries: backoff+jitter+budget+classification+ctx
-- [ ] #7 herd: cache stampede single-flight; jittered periodics/reconnects
-- [ ] #8 unbounded fan-out: gather/Promise.all/go-in-loop over external input
+- [ ] #4 locks across await; Rust std guards across `.await` (Clippy
+      `await_holding_lock`); state re-validated after re-acquiring (§4)
+- [ ] #5 blocking calls in async (rule 04 grep list); `block_on` in async;
+      `.result()`/`run_until_complete` on the loop thread (§5)
+- [ ] #6 retries: backoff+jitter+budget+classification+ctx, at one layer
+      only, `Retry-After` honored (§6)
+- [ ] #7 herd: cache stampede single-flight; jittered periodics/reconnects;
+      `notify_all` waking N waiters for one item; jittered startup warmup (§7)
+- [ ] #8 unbounded fan-out: gather/Promise.all/go-in-loop over external input;
+      recursive spawns; per-event spawns in subscription handlers (§8)
 - [ ] #9 leaks: unsettleable promises, sentinel-less workers, listener/timer
-      teardown
+      teardown, channel ops without a cancellation branch (§9)
 - [ ] #10 duplicates & ordering: idempotency keys, per-key partitioning,
-      ack-after-commit
-- [ ] #11 generator/stream cleanup on early exit
-- [ ] #12 sleep-based synchronization anywhere
-- [ ] Shutdown path read end-to-end; hottest path timeout chain proven
+      ack-after-commit, `task.result()` after a `done()` check without
+      exception handling (§10)
+- [ ] #11 generator/stream cleanup on early exit (`aclosing`, a `return()`
+      on hand-rolled JS iterators, Rust resources in `Drop`) (§11)
+- [ ] #12 sleep-based synchronization anywhere, tests and production (§12)
+- [ ] Shutdown path read end-to-end; hottest path timeout chain proven (§13)

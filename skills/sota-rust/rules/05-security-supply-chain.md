@@ -41,7 +41,12 @@ unknown-git = "deny"          # git deps pinned by rev only, allowlisted
   The same scheduled job enforces ignore reviews: fail when a `review by` date
   in an `advisories.ignore` reason has passed — the tool itself cannot expire one.
 - Commit `Cargo.lock` for binaries **and** (current guidance) for libraries —
-  reproducible CI; `cargo update` is a reviewed PR, not a side effect.
+  reproducible CI; `cargo update` is a reviewed PR, not a side effect. **What unfreezes it:**
+  `cargo install <tool>` ignores the tool's packaged `Cargo.lock` without `--locked` (write
+  `cargo install --locked <tool>@<version>`), and a third-party subcommand with no `--locked` flag
+  gets none — gate its job with `cargo metadata --locked --format-version 1 >/dev/null` first
+  (with `RUSTUP_TOOLCHAIN`, `RUSTC` and `RUSTC_WRAPPER` pinned, in that order: it runs a configured
+  wrapper, and a registry credential provider that no pin stops, [rules/07](07-tooling-ci.md) §4a).
 - Dependabot/Renovate for bumps; review changelogs of security-sensitive deps
   (crypto, TLS, parsing) instead of auto-merging.
 - Minimize the tree first: every dep is attack surface and build time.
@@ -88,7 +93,8 @@ unknown-git = "deny"          # git deps pinned by rev only, allowlisted
   that typosquatted/brandjacked real crates
   and exfiltrated `.env` files from developer and CI machines. Mitigations are
   exactly the above plus secret hygiene: no long-lived credentials in `.env`
-  on build machines; rotate anything exposed to an unvetted build.
+  on build machines; rotate anything exposed to an unvetted build (rotation and short-lived
+  credentials belong with secrets-management guidance).
 - Pin GitHub Actions by SHA, not tag; CI tokens least-privilege
   (`permissions: contents: read` default).
 - **Build-time code runs before any test or review of your code does.** Each `build.rs`
@@ -96,10 +102,11 @@ unknown-git = "deny"          # git deps pinned by rev only, allowlisted
   compiled and run on the developer machine and CI runner with that user's environment.
   Measured on cargo 1.97.1: `cargo check` ran a path dependency's `build.rs` and a proc-macro,
   and an env var exported for the command was readable inside that `build.rs`; `cargo
-  metadata`, `cargo fetch` and `cargo tree` ran neither. rust-analyzer also runs them on
+  metadata`, `cargo fetch` and `cargo tree` ran neither (but each ran a repository's
+  `rustc-wrapper` or `[build] rustc` — [rules/07](07-tooling-ci.md) §4a). rust-analyzer also runs them on
   opening a project (`rust-analyzer.cargo.buildScripts.enable` and
   `rust-analyzer.procMacro.enable`, both default `true`) — set both `false` before opening an
-  untrusted checkout. `[build] rustc-wrapper` is the same trust from config (rules/07 §4a).
+  untrusted checkout. `[build] rustc-wrapper` is the same trust from config ([rules/07](07-tooling-ci.md) §4a).
   **There is no off switch**: `cargo build --help` and `cargo -Z help` (1.97.1) offer no flag
   that skips build scripts or proc-macros, so the controls are review and isolation.
   Review: list what runs with the audit probe below; on every bump read
@@ -107,14 +114,16 @@ unknown-git = "deny"          # git deps pinned by rev only, allowlisted
   Your OWN `build.rs`, proc-macro crates, `.cargo/config.toml`, `Cargo.toml`, `Cargo.lock` and
   `rust-toolchain.toml` get CODEOWNERS entries plus the branch rule "Require review from Code
   Owners" — an agent-authored PR included. CI: `cargo fetch --locked` is the networked step
-  and runs no dependency code; build and test with `--frozen` in a job that holds no publish,
+  and runs no *dependency* code, but it does run a `rustc-wrapper` or `[build] rustc` from any
+  `.cargo/config.toml` in the checkout or above it (measured, [rules/07](07-tooling-ci.md) §4a), so run it with `RUSTUP_TOOLCHAIN`, `RUSTC` and `RUSTC_WRAPPER` pinned, in that order — a registry
+  credential provider from the checkout's config still runs — or where that is acceptable; build and test with `--frozen` in a job that holds no publish,
   deploy or cloud credentials, and hand the artifact to a separate job that does. (OWASP: CI/CD
   Security cheat sheet; Software Supply Chain Security cheat sheet; NPM Security cheat sheet.)
 - **Declared but not reached**: an unused crate is still install/build-time trust
   granted (`build.rs`, proc-macros) for zero function. `cargo machete` runs on
   stable but is deliberately imprecise — false positives for crates used only
   from `build.rs`-generated code and for import names that differ from package
-  names (`--with-metadata` fixes the latter); `cargo +nightly udeps` needs
+  names (`--with-metadata` fixes the latter); `cargo udeps` needs a
   nightly and documents false *negatives*. Neither settles it alone: prove a
   candidate by removing it in a scratch copy and running the real build, clippy,
   and full suite — CI and supply-chain controls.
@@ -151,7 +160,7 @@ Any attacker-reachable panic is a denial-of-service primitive — one request
 kills a worker or (with `panic=abort`) the whole process.
 
 - Hunt the implicit panic surface in request paths: `unwrap`/`expect`
-  (rules/02), slice indexing, `&s[a..b]` on non-char boundaries, integer
+  ([rules/02](02-errors-and-panics.md)), slice indexing, `&s[a..b]` on non-char boundaries, integer
   division by zero, `with_capacity(attacker_len)` (capacity overflow /
   OOM-abort), recursion depth on nested input (stack overflow — **abort, not
   catchable**; see §6 on serde recursion).
@@ -160,7 +169,7 @@ kills a worker or (with `panic=abort`) the whole process.
   tower stacks. With `panic = "abort"`, containment is gone — pair abort with
   a supervisor (systemd `Restart=always`, k8s) and treat reachable panics as
   Critical, plus rate-limit restarts to blunt crash-loop DoS.
-- Resource-exhaustion siblings of panic-DoS: unbounded channels (rules/04),
+- Resource-exhaustion siblings of panic-DoS: unbounded channels ([rules/04](04-async-tokio.md)),
   missing request body limits, decompression bombs (cap decompressed size),
   unbounded `read_to_end` on sockets — set explicit limits at every ingest.
 
@@ -183,8 +192,8 @@ struct DbConfig { url: String, password: SecretString }
   zeroization is a window-shrinker, not a guarantee. Don't structure a security
   argument ("the key is erased after use") on the destructor running; minimize
   the secret's lifetime, avoid leaking/forgetting secret-bearing values, and
-  keep Drop impls panic-free (rules/02 §5) so the erasure path isn't skipped by
-  an abort. (ANSSI `LANG-DROP-SEC`; soundness corollary in rules/03.)
+  keep Drop impls panic-free ([rules/02](02-errors-and-panics.md) §5) so the erasure path isn't skipped by
+  an abort. (ANSSI `LANG-DROP-SEC`; soundness corollary in [rules/03](03-unsafe-discipline.md).)
 - **No `Debug`/`Display`/`Serialize` leaking secrets**: manual `Debug` impls
   redacting sensitive fields; never `#[derive(Debug)]` on a struct holding a
   raw key. Audit `tracing` events for token/password fields.
@@ -225,7 +234,7 @@ network:
   not; use `serde_stacker`/explicit depth caps for deeply-nested formats
   (stack overflow = abort = DoS).
 - Validate after parse: serde checks shape, not semantics. Lengths, ranges,
-  string charsets via `TryFrom` newtypes (rules/01 §3) or `validator`/`garde`
+  string charsets via `TryFrom` newtypes ([rules/01](01-ownership-and-api-design.md) §3) or `validator`/`garde`
   — the deserialized type should already be the validated type
   ("parse, don't validate").
 - `Vec` preallocation from attacker-controlled length prefixes
@@ -237,7 +246,12 @@ network:
 - Don't deserialize to `Box<dyn Trait>`/arbitrary types via
   `typetag`-style registries from untrusted sources without an allowlist.
 - Fuzz every parser of untrusted bytes: `cargo fuzz` target per format, in
-  scheduled CI. Combine with rules/03 sanitizers when the parser has unsafe.
+  scheduled CI. Combine with [rules/03](03-unsafe-discipline.md) sanitizers when the parser has unsafe.
+- **Security-critical parser whose input can be bounded** (a header, a fixed-size frame, a
+  length-prefixed record up to N bytes): add a Kani harness beside the fuzz target. Fuzzing
+  samples inputs; the harness proves panic-, overflow- and out-of-bounds-freedom over all of them
+  within the bound. When, and how to keep it from passing over nothing:
+  [rules/09](09-formal-verification.md) §1–§4.
 
 ## 7. Service-edge defaults
 
@@ -252,7 +266,7 @@ network:
   server, use `WebPkiClientVerifier` and authorise on a SAN, not on the subject CN.
   Verified against reqwest 0.13.5, native-tls 0.2.18 and rustls 0.23.45 sources.
 - **Outbound requests to a caller-influenced destination (SSRF)** — policy in
-  `sota-code-security` rules/01 §5; the reqwest idiom (read in reqwest 0.13.5, hyper-util 0.1.20):
+  [`sota-code-security` rules/01](../../sota-code-security/rules/01-input-injection.md) §5; the reqwest idiom (read in reqwest 0.13.5, hyper-util 0.1.20):
   - Take a host key or ID from the caller and build the `Url` from your own allowlist
     entry; relaying a caller-supplied URL is the pattern to design out.
   - **The check belongs on the address being dialled.** Implement `reqwest::dns::Resolve`,
@@ -281,7 +295,7 @@ network:
   `regex` 1.13.1 and `fancy-regex` 0.19.2 sources, behaviour measured on rustc 1.97.1:
   - **Escaping.** Untrusted text spliced into a pattern goes through `regex::escape(&s)`
     (`fancy_regex::escape` for that crate); raw `Regex::new(&format!(..))` lets the caller
-    write `.*`. Propagate the build `Err`, never `unwrap()` it (rules/02 §4).
+    write `.*`. Propagate the build `Err`, never `unwrap()` it ([rules/02](02-errors-and-panics.md) §4).
   - **Anchoring.** Every search, `is_match` included, is unanchored (the crate prepends an
     implicit `(?s:.)*?`), so `[a-z]+` accepts `abc;rm`. Group before anchoring:
     `^(?:a|b)$` — measured, `^a|b$` accepts `axxx`. Without multi-line mode `$` is end of
@@ -302,7 +316,7 @@ network:
     `Err` as a reject, lower the limit on request paths, and prefer staying in `regex`.
   OWASP: Input Validation cheat sheet; Proactive Controls 2024 C3; ASVS 5.0 V1.2.9;
   OWASP Go-SCP (validation, regular expressions).
-- **Cookies the app sets itself** (the session cookie is `sota-code-security` rules/17).
+- **Cookies the app sets itself** (the session cookie is [`sota-code-security` rules/17](../../sota-code-security/rules/17-sessions-and-tokens.md)).
   Measured with cookie 0.18.2, axum-extra 0.12.6, actix-web 4.15.0 and rocket 0.5.1:
   - `Cookie::new("a", "b")` and `Cookie::build(("a", "b")).build()` serialise as a bare
     `a=b`. There is no Secure, HttpOnly, SameSite or Path. axum-extra's `CookieJar::add` and
@@ -340,7 +354,7 @@ network:
   OWASP: Error Handling cheat sheet; Secure Headers Project; ASVS 5.0 V13.4.
 - Timeouts on **everything**: connect, read, write, total-request, idle
   (`TimeoutLayer`, `tower` middleware). Missing timeouts = slowloris.
-- Error responses: generic client text, full chain only into logs (rules/02
+- Error responses: generic client text, full chain only into logs ([rules/02](02-errors-and-panics.md)
   §9); no `Debug`-formatted internals in HTTP bodies.
 - Path handling on user input: reject `..` traversal — canonicalize then
   verify prefix (`path.canonicalize()?.starts_with(root)`), never just join.
@@ -377,20 +391,20 @@ network:
   operator-actionable events.
 
 Running external programs (formerly section 9) moved to
-[rules/08](08-external-programs.md) §1 on 2026-09-25.
+[rules/08](08-external-programs.md) §1 on 2026-09-25; its Audit checklist (R9.6 and R9.7 included) is the full set.
 
 ## Audit checklist
 
-- [ ] CI has `cargo deny check` (or `cargo audit`) on PRs **and** a scheduled
+- [ ] CI has `cargo deny check` (or `cargo audit`) on PRs **and** a scheduled (§1)
       run; every `deny.toml` ignore entry has a reason naming a review date,
       and a scheduled job fails once that date passes (no `expire` key — cargo-deny
       rejects it and the config fails to load). Missing = High for deployed services.
-- [ ] `Cargo.lock` committed; `rg 'git = "' Cargo.toml */Cargo.toml` — git
+- [ ] `Cargo.lock` committed (§1); `rg 'git = "' Cargo.toml */Cargo.toml` — git
       deps without `rev =` pin = Medium; wildcard versions = Medium.
-- [ ] `cargo vet` (or documented dep-review process) for new dependencies;
+- [ ] `cargo vet` (or documented dep-review process) for new dependencies (§2);
       build.rs / proc-macro deps enumerated and reviewed.
 - [ ] **Build-time code (build.rs / proc-macro) is inventoried, owned and isolated (§2) —
-      High** — `cargo metadata --format-version 1 --locked | jq -r '.packages[] | select(any(.targets[]; any(.kind[]; . == "custom-build" or . == "proc-macro"))) | "\(.name) \(.version)"'`
+      High** — in isolation, since this resolves dependencies and so runs any registry credential provider the checkout configures ([rules/07](07-tooling-ci.md) §4a): `export RUSTUP_TOOLCHAIN="$(rustup default | cut -d' ' -f1)"; RUSTC="$(rustup which rustc)" RUSTC_WRAPPER= cargo metadata --format-version 1 --locked | jq -r '.packages[] | select(any(.targets[]; any(.kind[]; . == "custom-build" or . == "proc-macro"))) | "\(.name) \(.version)"'`
       (every line is code that runs on `cargo check`: each needs a review record, e.g. a
       `cargo vet` audit). Then `rg -n --no-messages 'build\.rs|Cargo\.(toml|lock)|\.cargo/' .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS`
       — no line means your own build-executing files merge without an owner. A CI job that
@@ -432,23 +446,23 @@ Running external programs (formerly section 9) moved to
       cannot reach production: a dev-only route, a console behind a feature that is off, no
       `ROCKET_PROFILE=debug`, and images built with `--release`. Also confirm the startup
       check that refuses a debug build.
-- [ ] Arithmetic on input: `rg '(len|size|count|offset|idx)\s*[+*-]' -t rust`
+- [ ] Arithmetic on input (§3): `rg '(len|size|count|offset|idx)\s*[+*-]' -t rust`
       near parsing code — wrapped math on untrusted values = High;
       `rg 'as u(8|16|32)|as usize' -t rust` in protocol code for truncating
       casts; release profile `overflow-checks` decision documented.
-- [ ] Panic surface in handlers: run rules/02 checklist scoped to
+- [ ] Panic surface in handlers (§4): run [rules/02](02-errors-and-panics.md) checklist scoped to
       request-reachable code; `rg 'with_capacity\(' -t rust` where the arg
       derives from input = High.
 - [ ] `rg '#\[derive\(.*Debug' -t rust` on structs with `password|secret|key|
       token` fields; `rg '==' -t rust` comparing MACs/tokens (want `ct_eq`);
-      secrets not in `SecretString`/`Zeroizing` = Medium-High.
+      secrets not in `SecretString`/`Zeroizing` = Medium-High (§5).
 - [ ] `rg 'thread_rng|rand::rng\(|SmallRng|StdRng::seed|seed_from_u64' -t rust` in
       key/nonce/token generation paths → require the OS RNG (`SysRng` in rand
-      ≥ 0.10, `OsRng` earlier) or `getrandom`.
+      ≥ 0.10, `OsRng` earlier) or `getrandom`; `strings target/release/app | rg -i secret` clean (§5).
 - [ ] `rg 'bincode' -g 'Cargo.toml' -g 'Cargo.lock' .` — unmaintained (RUSTSEC-2025-0141):
       new use = Low (pick a maintained format); decoding untrusted bytes without
       `.with_limit` = High (§2, §6).
-- [ ] `rg 'untagged' -t rust` on network-facing types = review for DoS;
+- [ ] `rg 'untagged' -t rust` (§6) on network-facing types = review for DoS;
       `rg 'deny_unknown_fields'` absent on auth/config types = Low-Medium;
       body-size limits present at every ingest (axum `DefaultBodyLimit`,
       manual caps) — absent = High.
@@ -462,20 +476,22 @@ Running external programs (formerly section 9) moved to
       (`QueryBuilder::push` of a non-literal — must be `push_bind`, or an allowlisted
       identifier; `Vec::push` in the same file is noise to read past). Macros
       (`query!`) and `.query(` (e.g. reqwest's URL query) are excluded by design.
-- [ ] `rg 'format!\(.*(SELECT|INSERT|UPDATE|DELETE|WHERE)' -t rust -i` = High;
+- [ ] `rg 'format!\(.*(SELECT|INSERT|UPDATE|DELETE|WHERE)' -t rust -i` (§7) = High;
       `rg '\.join\(' -t rust` on user-supplied path segments without
       canonicalize+prefix check = High.
 - [ ] Fuzz targets exist for each untrusted-input parser; absent on a
-      network-facing parser = Medium.
-- [ ] Release CI uses `--locked`; binaries built from tags in CI;
+      network-facing parser = Medium. Count both kinds of evidence in one run:
+      `printf 'fuzz_targets=%s kani_harness_files=%s\n' "$(rg -l 'fuzz_target!' -g '*.rs' . | wc -l | tr -d ' ')" "$(rg -l '#\[kani::proof' -g '*.rs' . | wc -l | tr -d ' ')"`
+      — both 0 (§6): severity per the [rules/09](09-formal-verification.md) Audit checklist;
+      harnesses present: audit them there, a vacuous proof is not evidence.
+- [ ] **Unlocked tool installs (§1) — HIGH in CI, an image build or a deploy, MEDIUM on a developer-only path** —
+      `find . \( -path '*/.github/*' -o -name '.gitlab-ci.yml' -o -name Makefile -o -name justfile -o -name Dockerfile \) -type f -not -path '*/target/*' -exec grep -nE 'cargo[[:space:]]+install' /dev/null {} + | grep -v -e '--locked'`
+- [ ] Release CI uses `--locked` (§8); binaries built from tags in CI;
       `cargo auditable` (or SBOM) for deployed artifacts = recommended.
 - [ ] Logs: `rg 'info!|warn!|error!|debug!' -t rust` near auth/headers — no
       `Authorization`/`Cookie`/body logging; user strings as structured
-      fields, not message interpolation.
-- [ ] `rg 'output\(\)|wait_with_output' -t rust` where the child's output size is
-      not bounded by the caller = Medium (R9.6); `rg 'pre_exec' -t rust` — the
-      closure must be async-signal-safe (R9.7).
-- [ ] Severity calibration: RCE/memory corruption = Critical; authn/authz
+      fields, not message interpolation; no `error!` on client 4xx (§8).
+- [ ] Severity calibration (§1, §4, §6, §7): RCE/memory corruption = Critical; authn/authz
       bypass, SQLi, traversal = Critical/High; attacker-reachable panic or
       unbounded allocation = High; missing CI audit gates = Medium-High;
       hygiene (locks, lints) = Low-Medium.

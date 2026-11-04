@@ -2,10 +2,10 @@
 
 User rights (access, export, rectification, deletion, objection, consent
 withdrawal) are product features with APIs, SLAs, state machines, and tests. Most
-regimes give you ~30–45 days to fulfill them (GDPR: one month, extensible;
-CCPA/CPRA: 45 days) — verify the active SLA for your regimes (rules/04). The
+regimes give you ~30–45 days to fulfill them (GDPR Art. 12(3): one month, +2 if complex;
+CCPA/CPRA: 45 days) — verify the active SLA for your regimes ([rules/04](04-regulatory-landscape.md)). The
 hard part is never the endpoint; it is propagation through every copy of the data
-(which is why rules/01 §5's derivative graph must exist first).
+(which is why [rules/01](01-data-inventory-classification.md) §5's derivative graph must exist first).
 
 ## 1. Consent is a state machine, not a boolean
 
@@ -70,14 +70,17 @@ def send_campaign(campaign, recipients):
 
 **Don't use consent as the lawful basis for everything.** Necessary-for-service
 processing (auth, billing, fraud) typically rests on contract/legitimate-interest
-bases (rules/04 §1); flooding users with consent prompts for essential processing
+bases ([rules/04](04-regulatory-landscape.md) §1); flooding users with consent prompts for essential processing
 trains them to click yes and makes real consent meaningless. Map basis per purpose
 in the catalog; reserve consent for genuinely optional processing.
 
 ## 2. Cookie & tracker governance
 
 **Rule:** No non-essential tag, SDK, or cookie executes before consent for its
-category, in jurisdictions requiring opt-in (EU/UK ePrivacy). Technical
+category, in jurisdictions requiring opt-in (EU ePrivacy; UK PECR, where since
+5 Feb 2026 first-party statistical/analytics storage may instead run with clear
+information and a free, simple objection — PECR Sch. A1 para 5, inserted by the Data
+(Use and Access) Act 2025). Technical
 enforcement, not banner theater:
 
 - Tag manager / CMP integration gates script injection by consent category;
@@ -85,9 +88,9 @@ enforcement, not banner theater:
   pre/post consent. Trackers firing pre-consent = HIGH finding.
 - Server-side tagging doesn't exempt you — consent state must gate server-side
   forwarding too.
-- Maintain a tracker inventory (it's part of rules/01 §4's processor map): each
+- Maintain a tracker inventory (it's part of [rules/01](01-data-inventory-classification.md) §4's processor map): each
   tag → category, vendor, consent purpose, data sent. Anti-bot and anti-fraud
-  fingerprinting scripts belong in it too (rules/02 §1).
+  fingerprinting scripts belong in it too ([rules/02](02-privacy-by-design.md) §1).
 - **Honor Global Privacy Control:** CCPA/CPRA regulations require treating GPC as
   a valid opt-out of sale/share; wire the header/JS signal into the same consent
   state machine as the banner. GPC (`Sec-GPC: 1`) is one of several opt-out
@@ -104,7 +107,7 @@ enforcement, not banner theater:
 
 ## 3. DSAR — access & export engineering
 
-**Rule:** Build one export pipeline that walks the data inventory (rules/01), not
+**Rule:** Build one export pipeline that walks the data inventory ([rules/01](01-data-inventory-classification.md)), not
 N hand-written queries that drift from the schema.
 
 **Identity verification first.** A DSAR is an attack vector: an attacker who can
@@ -142,7 +145,7 @@ attachment); record fulfillment proof.
 | **Hard delete** | Row/object physically removed | Primary stores, object storage | FK cascades; ensure replicas/indexes follow; DB may retain in WAL/vacuum lag (acceptable, bounded) |
 | **Soft delete → purge** | Flag now, hard-delete via scheduled purge after grace period | Need short undo/fraud window | Soft delete WITHOUT a running purge job is retention-forever wearing a costume — always pair flag with purge automation and monitoring |
 | **Crypto-shredding** | Per-subject (or per-tenant) encryption key; destroy the key, all ciphertext becomes noise | Immutable/append-only stores (event logs, Kafka with long retention), backups, archives where physical deletion is impractical | Key management is the whole game; every copy must actually be encrypted under that key — one plaintext side-channel defeats it; key destruction must be provable and itself logged |
-| **Anonymization in place** | Strip/overwrite identifying fields, keep skeleton row | Referential integrity or aggregate stats require the row (orders for accounting) | Must pass rules/02 §3's bar — overwriting name with 'DELETED' while keeping address and device ID is not anonymization |
+| **Anonymization in place** | Strip/overwrite identifying fields, keep skeleton row | Referential integrity or aggregate stats require the row (orders for accounting) | Must pass [rules/02](02-privacy-by-design.md) §3's bar — overwriting name with 'DELETED' while keeping address and device ID is not anonymization |
 
 **Legal holds and retention duties override deletion** (tax records, fraud
 evidence, litigation hold): model as explicit, reviewable exemptions per data
@@ -151,7 +154,7 @@ category in the deletion engine — not as "we keep everything just in case."
 ## 5. Deletion propagation — the graph is the architecture
 
 **Rule:** Deletion executes against the system of record and propagates along the
-recorded derivative graph (rules/01 §5) to ALL of:
+recorded derivative graph ([rules/01](01-data-inventory-classification.md) §5) to ALL of:
 
 1. **Primary DB + replicas** (replication handles it; verify lag-bounded).
 2. **Caches** — Redis/memcached keys, CDN-cached responses keyed to the user:
@@ -160,23 +163,27 @@ recorded derivative graph (rules/01 §5) to ALL of:
    resurrect from a stale source snapshot.
 4. **Analytics/warehouse** — delete or null user rows in warehouse + downstream
    marts; modern lakehouse formats (Iceberg/Delta) support targeted deletes;
-   schedule compaction so deleted data physically leaves storage.
+   schedule compaction so deleted data physically leaves storage; old snapshots keep the bytes
+   until snapshot expiry runs ([`sota-data-engineering` rules/06](../../sota-data-engineering/rules/06-operations-and-governance.md) §4).
 5. **Logs** — bounded retention (e.g., 30–90 d) usually suffices instead of
    per-user log scrubbing — acceptable and defensible IF retention is short,
    enforced, and documented; long-retention logs containing PII make per-user
-   deletion intractable (that's the finding: fix the logs, per sota-observability).
+   deletion intractable (that's the finding: fix the logs, per [sota-observability](../../sota-observability/SKILL.md)).
 6. **Backups** — industry-standard approach: backups expire on schedule; deleted
    data dies with the backup cycle; document the max window (e.g., "fully purged
    within retention period + cycle = 35 days") AND ensure restore procedure
    re-applies deletions (replay tombstones after restore) so restoring a backup
-   doesn't resurrect deleted users. Crypto-shredding makes backups immediate
-   instead.
+   doesn't resurrect deleted users. Where strict erasure from backups is required,
+   crypto-shredding (per-user key; destroy it and every copy, backups included, is
+   unreadable at once) makes backups immediate instead.
 7. **Third-party processors** — call their deletion APIs (most major processors
    have them) or ticket per DPA; record confirmation.
 8. **ML training data & derived models** — remove from training sets and feature
    stores; for models already trained, document the position (retrain cadence
    within which the data washes out; vector-store entries deleted immediately).
-   An ML pipeline with no answer here is a HIGH finding as of 2026.
+   An ML pipeline with no answer here is a HIGH finding as of 2026. An LLM feature adds
+   prompt/completion trace stores, eval sets sampled from production, and agent memory
+   ([`sota-llm-engineering` rules/06](../../sota-llm-engineering/rules/06-data-lifecycle.md) §5).
 9. **Derived materializations on consent withdrawal** — the same fan-out runs
    for a withdrawn purpose, not only for erasure: audience segments, lookalike
    and propensity scores, cached embeddings, LLM KV/prefix caches and warm
@@ -247,7 +254,7 @@ Mechanisms by store (set at creation time — IaC templates should require them)
   prefer crypto-shred keys.
 - **Search/cache:** index ILM policies / TTLs.
 - **Warehouse:** retention-partitioned raw layer; aggregate-then-drop pattern
-  (rules/02 §4 ladder).
+  ([rules/02](02-privacy-by-design.md) §4 ladder).
 - **Backups/logs:** retention policies per rules above.
 
 **Monitor enforcement:** a scheduled check that samples each store for
@@ -290,23 +297,23 @@ module "bucket" {
 - **Automated-decision review (Art. 22; state profiling rules):** where fully
   automated decisions have significant effects (credit, hiring, pricing), build
   the human-review path and decision-input logging now — it is also an EU AI Act
-  high-risk overlap (rules/04 §5).
+  high-risk overlap ([rules/04](04-regulatory-landscape.md) §5).
 
 ## Audit checklist
 
-- [ ] Consent stored as versioned, append-only, per-purpose records with policy version and mechanism; no boolean consent columns; no default-on consent
-- [ ] Consent checked at point of use (read the sender/tracker/training-job code), withdrawal ≤ grant effort, propagation to processors automated and lag-monitored
+- [ ] Consent stored as versioned, append-only, per-purpose records (§1) with policy version and mechanism; no boolean consent columns; no default-on consent
+- [ ] Consent checked at point of use (§1) (read the sender/tracker/training-job code), withdrawal ≤ grant effort, propagation to processors automated and lag-monitored
 - [ ] Profiling consent is checked before the feature fetch and model call, never passed as a model feature; the identifier join and the model call are gated separately (§1). HIGH where a non-consented request reaches the model. Probe for consent in a feature vector: `grep -rnE "(features|feature_vector|model_input)[^#]*[\"'](has_|is_)?consent[a-z_]*[\"']" .`
 - [ ] No non-essential trackers fire pre-consent (verify with fresh-session network diff); GPC honored where CCPA/CPRA applies; GPP, ATT status and Android ad-ID deletion/reset also read at feature-fetch time (§2) — MEDIUM
-- [ ] Consent withdrawal invalidates derived segments, scores, embeddings and model caches; a withdraw-and-replay regression test exists (§5 item 9). HIGH if derived artefacts survive withdrawal. Probe for memoized derived artefacts keyed without consent: `grep -rnE -A1 '@(functools\.)?(lru_cache|cache)' . | grep -E 'def [a-z_]*(segment|lookalike|embed|audience)'`
-- [ ] DSAR export is inventory-driven with CI completeness test; identity verification precedes disclosure and is logged; output machine-readable; other subjects' data excluded
-- [ ] Deletion request flow exists as a state machine with deadline tracking; end-to-end deletion test (fixture user → delete → catalog residue scan) in CI
-- [ ] Soft deletes paired with running, monitored purge jobs
-- [ ] Propagation covers caches, search, warehouse, logs (or bounded log retention), third-party processors, ML datasets; backup window documented; restore replays tombstones
-- [ ] Crypto-shredding used (or justified absent) for immutable/long-retention stores; key destruction provable
-- [ ] Tombstones prevent re-ingestion and contain no deleted data; per-system proof-of-deletion records produced
-- [ ] Every PII store has cataloged retention + running enforcement (partition drops, lifecycle rules, TTLs) + oldest-record monitoring; "indefinite" only with signed justification
-- [ ] Legal holds modeled as explicit exemptions, not blanket non-deletion
-- [ ] Rectification propagates along the derivative graph (test: correct a fixture user's email, verify downstream copies)
-- [ ] Objection/profiling opt-outs implemented per purpose; direct-marketing objection suppresses unconditionally
-- [ ] Storage modules require retention + classification parameters at creation (IaC-level enforcement)
+- [ ] Consent withdrawal invalidates derived segments, scores, embeddings and model caches; a withdraw-and-replay regression test exists (§5 item 9). HIGH if derived artefacts survive withdrawal. Probe for memoized derived artefacts keyed without consent: `grep -rnE -A1 '@(functools\.)?(lru_cache|cache)' . | grep -E 'def [a-z_]*(segment|lookalike|embed|audience)' | grep -v consent`
+- [ ] DSAR export is inventory-driven with CI completeness test; identity verification precedes disclosure and is logged; output machine-readable; other subjects' data excluded; each request is ticketed with a deadline clock, delivered through an authenticated expiring link (not an email attachment), with fulfillment proof recorded (§3)
+- [ ] Deletion request flow exists as a state machine with deadline tracking (§5); end-to-end deletion test (fixture user → delete → catalog residue scan) in CI
+- [ ] Soft deletes paired with running, monitored purge jobs; each datastore's deletion mechanism (hard, soft→purge, crypto-shred, anonymize-in-place) is chosen and recorded, and anonymize-in-place overwrites every identifying field, not only the name (§4)
+- [ ] Propagation (§5) covers caches, search, warehouse, logs (or bounded log retention), third-party processors, ML datasets; backup window documented; restore replays tombstones
+- [ ] Crypto-shredding used (or justified absent) for immutable/long-retention stores; key destruction provable and logged (§4)
+- [ ] Tombstones prevent re-ingestion and contain no deleted data (§5); per-system proof-of-deletion records produced
+- [ ] Every PII store has cataloged retention + running enforcement (partition drops, lifecycle rules, TTLs) + oldest-record monitoring; "indefinite" only with signed justification (§6) — HIGH for an unbounded-retention PII store
+- [ ] Legal holds modeled as explicit exemptions, not blanket non-deletion (§4)
+- [ ] Rectification propagates along the derivative graph (test: correct a fixture user's email, verify downstream copies) (§7)
+- [ ] Objection/profiling opt-outs implemented per purpose; direct-marketing objection suppresses unconditionally; fully automated decisions with significant effects have a human-review path and decision-input logging (§7)
+- [ ] Storage modules require retention + classification parameters at creation (IaC-level enforcement) (§6)

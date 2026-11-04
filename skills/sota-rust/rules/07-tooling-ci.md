@@ -27,12 +27,43 @@ unwrap_used = "deny"               # production crates (rules/02)
 dbg_macro = "deny"
 todo = "deny"
 undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"   # one SAFETY comment per obligation (rules/03 §2)
 await_holding_lock = "deny"
+let_underscore_must_use = "deny"   # `let _ = fallible()` bypasses unused_must_use
+allow_attributes = "deny"          # suppress with #[expect], which reports itself when stale
+allow_attributes_without_reason = "deny"
+# security-critical / untrusted-input crates add (noisy on existing code — triage first):
+# arithmetic_side_effects = "deny"  # rules/05 §3
+# indexing_slicing = "deny"         # rules/02
+# string_slice = "deny"             # indexing_slicing does not check &str[a..b]
 # nursery opt-ins (the group is not enabled above):
 redundant_clone = "warn"           # rules/01, rules/06
 
 # member crates: [lints] workspace = true
 ```
+
+```toml
+# clippy.toml (workspace root) — rules/02 allows these in tests; without this file the
+# template fails `--all-targets -D warnings` on the first `.unwrap()` in a #[test]
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-dbg-in-tests = true
+```
+
+**The test keys stop at `#[test]` and `#[cfg(test)]`.** Measured 2026-10-24 on clippy 1.97.1 and
+1.99.0 with this template as written, `--all-targets -D warnings`: without `clippy.toml` the build
+failed on a `#[cfg(test)]` unwrap (rc 101); with it, that passed, while an unwrap in a `tests/`
+helper outside a `#[test]` function, in `examples/` and in `benches/` still failed, each on
+`unwrap_used` (`scripts/check-claims.sh` claim 21 re-runs the first half). The mechanism:
+`--all-targets` builds `examples/` **without** `cfg(test)`; `tests/` and `benches/` build with it,
+but the keys exempt only `#[test]` functions and `#[cfg(test)]` items, so a bench body or a test
+helper `fn` is linted as production code. Use `expect` with
+an invariant message there, or a `Result`-returning helper. There is **no** test key for
+`arithmetic_side_effects` (it is absent from clippy's own key list), so a crate that denies it
+scopes test code with `#![cfg_attr(test, allow(clippy::arithmetic_side_effects, reason = "…"))]`.
+`allow-print-in-tests` exists for a crate that denies `print_stdout`.
 
 - **Pedantic triage**, not pedantic-blanket: enable the group, then `allow`
   specific lints with a comment — this catches new pedantic lints on toolchain
@@ -44,8 +75,27 @@ redundant_clone = "warn"           # rules/01, rules/06
   environment, not in committed config, so local builds stay on warn.
   Hardcoding `#![deny(warnings)]` in source breaks builds on every new rustc
   lint — don't.
-- Per-site `#[allow(clippy::xyz, reason = "...")]` (lint reasons are stable)
-  over module-level allows; an allow without a reason is a finding.
+- Per-site `#[expect(clippy::xyz, reason = "...")]` over module-level allows; a
+  suppression without a reason is a finding. The general suppression contract belongs with CI analysis-gate controls. **`#[expect]`, not `#[allow]`**: when the code it
+  covers is refactored away it raises `unfulfilled_lint_expectations` (warn by default, so
+  `-D warnings` fails), so a stale exception surfaces instead of accumulating. Two traps,
+  both measured 2026-10-24 on clippy 1.99.0:
+  - **An expectation met under only some features fails under `--all-features`.** A plain
+    `#[expect(dead_code)]` on code used only with feature `x` came back unfulfilled. Write
+    `#[cfg_attr(not(feature = "x"), expect(dead_code, reason = "…"))]`, naming the
+    configuration in which the lint *fires*.
+  - **`allow_attributes` checks outer `#[allow]` only.** An inner `#![allow(…, reason = "…")]`
+    inside a `mod` passed both lints, so it is the bypass to probe for (checklist). So did a
+    crate-level `#![cfg_attr(test, allow(…, reason = "…"))]`, the form recommended above for
+    `arithmetic_side_effects`, while an outer `#[cfg_attr(…, allow(…))]` was caught (clippy 0.1.97).
+    `allow_attributes_without_reason` still rejects an inner allow with no reason. Neither lint
+    fired on `#[allow]` emitted by a derive or another crate's `macro_rules!`.
+- **`deny`, never `forbid`, for `unused_must_use` and `unsafe_op_in_unsafe_fn`.** `forbid` also
+  rejects `#[allow]` that macros emit: measured for both lints, a proc-macro derive's and another
+  crate's `macro_rules!` `#[allow(…)]` failed with E0453 under `forbid` and compiled under `deny`. `unsafe_code = "forbid"` is still right in crates that need no unsafe (rules/03 §5);
+  check that its derives compile.
+- **A lint level that names a lint the toolchain does not know is only a warning (E0602)**, so the control is inert at exit 0: measured 2026-11-01 on clippy 0.1.97, a misspelled `-F clippy::float_compare`, `[lints.clippy] float_compare = "forbid"` and `#![forbid(clippy::float_compare)]` each exited 0, and adding `unknown_lints = "deny"` (or `-D unknown_lints`, or `#![deny(unknown_lints)]`) in the same place made each exit 101. Set it beside every lint list. Diagnostics print lint names hyphenated (`-F clippy::float-cmp`, `-F dead-code`), so a count of which lints fired matches `[a-z_-]`, never `[a-z_]` (field-reported 2026-11-01: 4 of 16 counted, all 16 had fired).
+  Of the inner allows above, `#![allow(dead_code)]` is the one that hides an uncalled function, a cleanup or drop path included, so read what it covers before rating it.
 - Run clippy on the same pinned toolchain as the build (lint sets drift across
   versions).
 
@@ -92,7 +142,7 @@ Rules:
   naming the constraint, so the rest of the group keeps working.
 - **Only a gate that loads or runs the artifact can catch this** — `fmt`, `clippy`
   and lint passes all stop at the compiled object and were green on the broken one.
-  CI and supply-chain controls
+  (see CI and supply-chain controls).
 
 ### 1b. Source shape is not a proxy for compiled behaviour
 
@@ -113,7 +163,7 @@ $ rustc -C opt-level=0 --emit asm t.rs && grep -c fill t.s   # 2  — the bounda
 $ rustc -C opt-level=3 --emit asm t.rs && grep -c fill t.s   # 0  — it does not
 ```
 
-Field-reported consequence: a helper was extracted from an eBPF program specifically so each
+A real consequence: a helper was extracted from an eBPF program specifically so each
 transport would own one large stack local instead of two, and that reasoning was written into
 a commit message as fact. The verifier's own numbers before and after were **identical** —
 `stack depth 136+0+344+0` both times. The refactor was sound; the justification was fiction.
@@ -125,7 +175,7 @@ a commit message as fact. The verifier's own numbers before and after were **ide
   two lifetimes not to overlap, you need something the compiler cannot inline through — a
   separate program, an explicit `#[inline(never)]`, or a different data flow.
 - **The numbers to compare are before and after on the same toolchain**, not one reading and
-  an argument. `sota-code-security` rules/15 §2a: a *pass* is not a number.
+  an argument. [`sota-code-security` rules/15](../../sota-code-security/rules/15-instruments-and-guards.md) §2a: a *pass* is not a number.
 
 ## 2. rustfmt — zero-config by default
 
@@ -149,9 +199,12 @@ a commit message as fact. The verifier's own numbers before and after were **ide
   link time sane), doctests on every public API example (they're the only
   examples guaranteed to compile).
 - Property tests (`proptest`) for parsers/serializers/invariant-heavy code;
-  snapshot tests (`insta`) for rendered output; `loom` for atomics (rules/03);
-  fuzz for untrusted-input parsers (rules/05).
-- Coverage: `cargo llvm-cov nextest` — track trend, don't worship the number.
+  snapshot tests (`insta`) for rendered output; `loom` for atomics ([rules/03](03-unsafe-discipline.md));
+  fuzz for untrusted-input parsers ([rules/05](05-security-supply-chain.md)). A constrained
+  property test must show it reached its target ([`sota-testing` rules/06](../../sota-testing/rules/06-property-fuzzing-mutation.md) §6.6): proptest
+  aborts past `max_global_rejects` (default 1024) for `prop_assume!`, `max_local_rejects` (65536) for `prop_filter`.
+- Coverage: `cargo llvm-cov nextest` — track trend, don't worship the number. Mutation testing
+  (`cargo-mutants`): its gate and its missing boundary mutant are in [`sota-testing` rules/06](../../sota-testing/rules/06-property-fuzzing-mutation.md) §6.3.
 
 ## 4. MSRV policy
 
@@ -185,19 +238,30 @@ The profile a reviewer reads in `Cargo.toml` is not the whole build. Measured on
   **parent directory** of the crate. Cargo reads `.cargo/config.toml` from the working
   directory and every ancestor, then `$CARGO_HOME` (cargo reference, "Hierarchical
   structure"). Nothing in the repository changed.
-- **`rustc-wrapper` runs a program on every compile.** A `[build] rustc-wrapper` in any of
-  those files ran on `cargo check` (not on `cargo metadata`). That is build-time code
-  execution with `build.rs`'s trust (rules/05 §2), except it can come from outside the
-  repository. A legitimate wrapper (e.g. a compiler cache) is named, pinned and documented.
+- **`rustc-wrapper` and `[build] rustc` run a program on every compile, and on commands that
+  only read metadata.** Measured on cargo 1.97.1 and 1.94.0, each command in a fresh crate with no
+  cache: a `[build] rustc-wrapper` in any of those files ran on `cargo metadata` (2 calls), with
+  `--filter-platform` (3), `cargo tree` (2), `cargo fetch` and `fetch --locked` (2), and `cargo
+  check` (4). A `[build] rustc = "…"` replacement ran on the same commands. Cargo queries the
+  target through them (`rustc -vV`, `--print=cfg`). Only `cargo metadata --no-deps` ran neither.
+  So **any cargo command in an untrusted checkout runs that
+  checkout's config.** To read one, pin the toolchain first, then both: `export RUSTUP_TOOLCHAIN="$(rustup default | cut -d' ' -f1)"; RUSTC="$(rustup which rustc)" RUSTC_WRAPPER= cargo metadata --format-version 1 --no-deps`
+  made 0 calls. An empty `RUSTC_WRAPPER` alone left the replaced `rustc` running. **The toolchain comes first because the checkout picks it** (measured 2026-10-27, cargo 1.99.1, rustup 1.29.2): a
+  `rust-toolchain.toml` with `path = "<dir>"` ran that directory's `cargo` with `RUSTC` and `RUSTC_WRAPPER` both pinned, and `rustup which rustc` run inside the checkout **returned the checkout's
+  `rustc`**, so the pin itself pointed at it; `RUSTUP_TOOLCHAIN` from `rustup default` stopped both (0 calls). **A registry `credential-provider` from the checkout's config runs past every pin**: `cargo
+  metadata` executed it as soon as a dependency named an auth-required registry. `--no-deps` stopped it (0 runs, exit 0), and so did `--offline`, which then fails resolution without a cached index. So
+  read an untrusted workspace with `--no-deps`, and run anything that resolves dependencies in isolation, not behind the pin. This is build-time code execution with `build.rs`'s trust ([rules/05](05-security-supply-chain.md) §2), except it
+  can come from outside the repository. A legitimate wrapper (e.g. a compiler cache) is named,
+  pinned and documented.
 - **Dev and test profiles keep their checks.** `overflow-checks` and `debug-assertions` are
   on by default in `dev`/`test`. Turning them off there — in `Cargo.toml` or in a config
   file's `[profile.*]` — made an overflow test and a `debug_assert!` test pass that had
   failed. The suite then stops catching the wrapping arithmetic that release ships silently
-  (rules/05 §3). (ANSSI DENV-CARGO-OPTS, DENV-CARGO-ENVVARS)
+  ([rules/05](05-security-supply-chain.md) §3). (ANSSI DENV-CARGO-OPTS, DENV-CARGO-ENVVARS)
 - **Ship from stable.** `#![feature(..)]` fails on stable (E0554) until `RUSTC_BOOTSTRAP=1`
   is set; with it, the same crate built on the stable toolchain. Treat `RUSTC_BOOTSTRAP`
   anywhere in a release build as a nightly build. Nightly jobs for Miri, sanitizers and
-  fuzzing (rules/03 §4) are tooling; they do not build what ships. (DENV-STABLE)
+  fuzzing ([rules/03](03-unsafe-discipline.md) §4) are tooling; they do not build what ships. (DENV-STABLE)
 - **A deploy target is a tier decision.** Per the rustc platform-support page, tier 1 is
   "guaranteed to work" (built and tested on every change), tier 2 "guaranteed to build"
   (tests not always run), and tier 3 has no official builds. Tiers move:
@@ -229,7 +293,7 @@ full = ["serde", "metrics"]            # convenience aggregate, still additive
   consumers opting in.
 - **Test the matrix**: `cargo hack check --feature-powerset --depth 2` (or at
   minimum: `--no-default-features`, default, `--all-features`) in CI — feature
-  combinations nobody compiles are broken combinations.
+  combinations nobody compiles are broken combinations. **So is code under a `cfg` for another OS**: `cfg(target_os = …)`, `cfg(unix)`/`cfg(windows)` or `target_arch` code is compiled only on that target, so a clippy, test or doc run on any other host neither lints nor type-checks it and still exits 0 (`--all-targets` means lib, bins, tests, examples and benches, not operating systems). Measured 2026-11-03, clippy 0.1.97: the same `useless_conversion` in a Linux-only and in a non-Linux function, and `cargo clippy --all-targets` on macOS reported only the non-Linux one (field-reported: the Linux one failed CI twice after a green host run). Run clippy and the tests once per OS the code is gated for, as a CI OS matrix (or `cargo clippy --target <triple>` once that target's std is installed; not measured here), and never report "clippy clean" from a host the gated code does not build on.
 - Don't gate public API breaking-ly (a feature that changes a type's layout or
   a function's signature = non-additive = ecosystem breakage).
 - Keep default features lean; heavyweight integrations (TLS stacks, runtimes)
@@ -243,7 +307,7 @@ full = ["serde", "metrics"]            # convenience aggregate, still additive
   First line = one-sentence summary (it's the item's listing line); then
   details, then `# Examples` (doctested), `# Errors` (when `Result`),
   `# Panics` (every documented panic path — clippy `missing_panics_doc`),
-  `# Safety` (every `unsafe fn` — rules/03).
+  `# Safety` (every `unsafe fn` — [rules/03](03-unsafe-discipline.md)).
 - Crate root (`lib.rs`) gets the long-form intro: what/why/quickstart —
   `#![doc = include_str!("../README.md")]` keeps README and docs in sync
   (and doctests the README's examples).
@@ -274,9 +338,9 @@ Migration: `cargo fix --edition` then review. Key changes that affect rules in
 this skill:
 
 - `unsafe_op_in_unsafe_fn`: unsafe fns need explicit inner `unsafe {}` blocks
-  (rules/03 §2 — good: per-obligation SAFETY comments).
+  ([rules/03](03-unsafe-discipline.md) §2 — good: per-obligation SAFETY comments).
 - `static_mut_refs` denied: references to `static mut` rejected — migrate to
-  atomics/`OnceLock`/`Mutex` (rules/03 §3).
+  atomics/`OnceLock`/`Mutex` ([rules/03](03-unsafe-discipline.md) §3).
 - **RPIT lifetime capture**: return-position `impl Trait` now captures *all*
   in-scope lifetimes by default (was: only named ones) — use
   `+ use<'a, T>` precise-capture syntax to opt out; check existing APIs whose
@@ -340,7 +404,7 @@ this skill:
 
 ```yaml
 jobs:
-  check:   # fmt + clippy + doc, pinned stable toolchain
+  check:   # fmt + clippy + doc, pinned stable toolchain; once per OS the crate has cfg(target_os) code for (§5)
     - cargo fmt --check
     - cargo clippy --workspace --all-targets --all-features -- -D warnings
     - RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
@@ -360,13 +424,24 @@ jobs:
 ```
 
 Plus scheduled: `cargo audit` (new advisories), fuzz jobs, bench regression
-gate (rules/06). Cache with `Swatinem/rust-cache`; pin action SHAs (rules/05).
+gate ([rules/06](06-performance.md)). Cache with `Swatinem/rust-cache`, keyed so a cache hit cannot hide a stale result; pin action SHAs ([rules/05](05-security-supply-chain.md)).
 
 ## Audit checklist
 
-- [ ] `[lints]` table present and workspace-inherited; `rg '#!\[allow' -t rust`
-      — blanket crate-level allows without reasons = Low each, pattern = Medium.
-- [ ] CI runs clippy with `-D warnings` on `--all-targets --all-features`;
+- [ ] `[lints]` table present and workspace-inherited;
+      `rg -n '#!\[[[:space:]]*(cfg_attr\(.*)?allow[[:space:]]*\(' -t rust .`
+      — blanket crate-level allows without reasons = Low each, pattern = Medium. Where
+      `allow_attributes` is denied, every inner `#![allow(` or `#![cfg_attr(…, allow(` is the form
+      it does not see (§1): each needs a reason and a reviewer, or it is an unreviewed suppression = Low.
+- [ ] **Template denies a panic lint, CI lints tests, nothing tells clippy about tests** (§1):
+      `rg -n -g 'Cargo.toml' '(unwrap_used|expect_used|indexing_slicing|panic)\s*=\s*"(deny|forbid)"' .; rg -n 'allow-(unwrap|expect|indexing-slicing|panic)-in-tests' clippy.toml .clippy.toml 2>&1`
+      — hits in the first and none in the second, with CI on `--all-targets`, means CI fails
+      on test code or the floor was quietly lowered = Low. Remember the keys stop at
+      `#[test]`/`#[cfg(test)]`: `examples/`, `benches/` and `tests/` helpers are still linted.
+- [ ] **Suppression convention** (§1): `rg -c '#\[allow\(' -t rust .` beside `rg -c '#\[expect\(' -t rust .`
+      — `#[allow]` with no `allow_attributes` floor = Low (stale exceptions accumulate); `unfulfilled_lint_expectations` not `deny` in `[lints.rust]` (`rg -n 'unfulfilled_lint_expectations' Cargo.toml`) = Low — an unused `#[expect]` is then only a warning that CI ignores;
+      `forbid` on `unused_must_use`/`unsafe_op_in_unsafe_fn` breaks on macro-emitted allows.
+- [ ] CI runs clippy with `-D warnings` (§1) on `--all-targets --all-features`;
       source does NOT hardcode `#![deny(warnings)]`.
 - [ ] **Constrained crates (eBPF, `no_std`, embedded, WASM, kernel) — is any lint
       suggestion taken on a false premise?** (§1a) For each accepted style fix in such a
@@ -381,15 +456,16 @@ gate (rules/06). Cache with `Swatinem/rust-cache`; pin action SHAs (rules/05).
 - [ ] **Does any gate load or run the artifact?** (§1a) `fmt`, `clippy` and lint passes
       all stop at the compiled object; a crate whose failures appear at load or verify
       time is ungated until one gate executes it on the real target.
-- [ ] `cargo fmt --check` green and in CI; `rustfmt.toml` deviations are
+- [ ] `cargo fmt --check` green and in CI (§2); `rustfmt.toml` deviations are
       deliberate and few.
-- [ ] Tests: nextest in CI + separate doctest step; per-test timeout
-      configured; `rg '#\[ignore\]' -t rust` — ignored tests have reasons.
-- [ ] `rust-version` declared AND exercised by a CI job; binaries have
+- [ ] Tests (§3): nextest in CI + separate doctest step; per-test timeout
+      configured; `rg '#\[ignore\]' -t rust .` — ignored tests have reasons; a proptest that
+      raises `max_global_rejects`/`max_local_rejects` or early-returns has no reach evidence = Low.
+- [ ] `rust-version` declared AND exercised by a CI job (§4); binaries have
       `rust-toolchain.toml`. `cargo msrv verify` passes.
 - [ ] **Profile overrides** (§4a): `find . \( -name Cargo.toml -o -path '*/.cargo/config' -o -path '*/.cargo/config.toml' \) -type f -not -path '*/target/*' -exec grep -nE '^[[:space:]]*(overflow-checks|debug-assertions)[[:space:]]*=[[:space:]]*false' /dev/null {} +`
       — a hit under `[profile.dev]`/`[profile.test]`, or a profile inheriting them, =
-      Medium. `find`, not `grep -r .`: it enters `.cargo/`, which `rg` and `ugrep` skip by
+      Medium. `find`, not a recursive grep: it enters `.cargo/`, which `rg` and `ugrep` skip by
       default (measured for ugrep).
 - [ ] **Flag and wrapper overrides** (§4a): `find . \( -path '*/.cargo/config' -o -path '*/.cargo/config.toml' -o -path '*/.github/*' -o -name '.gitlab-ci.yml' -o -name Makefile -o -name justfile -o -name Dockerfile \) -type f -not -path '*/target/*' -exec grep -nE 'rustflags|rustc-wrapper|rustc[[:space:]]*=|RUSTFLAGS|RUSTC_WRAPPER|RUSTC_BOOTSTRAP|CARGO_(BUILD|ENCODED)_RUSTFLAGS' /dev/null {} +`
       — `-C overflow-checks`/`-C debug-assertions` in any hit overrides the profile =
@@ -401,19 +477,19 @@ gate (rules/06). Cache with `Swatinem/rust-cache`; pin action SHAs (rules/05).
 - [ ] Channel and target (§4a): `grep -rnE '#!\[feature\(' --include='*.rs' .` in a shipped
       crate = Medium (a nightly-only build); the release build's toolchain is stable; each
       deploy target triple is tier 1, or tier 2 by a recorded decision.
-- [ ] Features: `rg 'no[-_](std|default)' Cargo.toml` style negative features
+- [ ] Features (§5): `rg 'no[-_](std|default)' Cargo.toml` style negative features
       = Medium (non-additive); optional deps using `dep:`; feature matrix job
-      (`cargo hack`) present; `--no-default-features` builds.
-- [ ] Docs: `missing_docs` on lib crates; `# Errors`/`# Panics`/`# Safety`
+      (`cargo hack`) present; `--no-default-features` builds; clippy and tests run on every OS the code has `cfg(target_os)` arms for, not only the host's.
+- [ ] Docs (§6): `missing_docs` on lib crates; `# Errors`/`# Panics`/`# Safety`
       sections present (`clippy::missing_errors_doc`, `missing_panics_doc`,
       `missing_safety_doc`); docs.rs metadata for feature-gated crates;
       doc job with `-D warnings`.
-- [ ] Edition: new crates on 2024; pre-2024 crates have a migration note or
+- [ ] Edition (§7): new crates on 2024; pre-2024 crates have a migration note or
       reason; post-migration, re-audit `static mut` and RPIT capture changes,
       locks/borrows in `if let` vs `match` scrutinees, and every
       `unsafe { env::set_var | remove_var }` — `rg 'set_var|remove_var' -t rust`
       (each must run before any thread or runtime starts, with a SAFETY comment).
-- [ ] Published libraries: `cargo semver-checks` in release CI; publishing
+- [ ] Published libraries (§8): `cargo semver-checks` in release CI; publishing
       automated (`release-plz`/`cargo-release`) with `--locked`, not from
       laptops; publish job uses Trusted Publishing (`id-token: write`,
       `crates-io-auth-action`, environment-gated) or else a scoped token —
@@ -421,7 +497,8 @@ gate (rules/06). Cache with `Swatinem/rust-cache`; pin action SHAs (rules/05).
       beside it = Low; on GitLab.com,
       `rg -q 'aud:[[:space:]]*crates\.io' .gitlab-ci.yml || rg -n 'CARGO_REGISTRY_TOKEN' .gitlab-ci.yml`
       printing anything (a stored token, no crates.io id-token) = Low; CHANGELOG maintained.
-- [ ] Reproducibility: `Cargo.lock` committed, toolchain pinned, CI action
-      SHAs pinned, `rust-cache` keyed correctly (not caching stale clippy).
-- [ ] Quick greps: `rg 'dbg!|println!' -t rust -g '!*test*' -g '!*/bin/*'`
+- [ ] Reproducibility and CI shape (§9): `Cargo.lock` committed, toolchain pinned, CI action
+      SHAs pinned, `rust-cache` keyed correctly (not caching stale clippy); each job of the §9
+      baseline present or deliberately absent, plus scheduled `cargo audit`, fuzz and bench jobs.
+- [ ] Quick greps: `rg 'dbg!|println!' -t rust -g '!*test*' -g '!*/bin/*'` (§1)
       (debug leftovers in libs); `rg 'FIXME|HACK|XXX' -t rust` triaged.

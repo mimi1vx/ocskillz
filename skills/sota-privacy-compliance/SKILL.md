@@ -3,11 +3,18 @@ name: sota-privacy-compliance
 description: State-of-the-art privacy and compliance engineering guidance for building privacy-respecting systems and auditing existing code for privacy/compliance gaps. Use when work involves privacy, GDPR, PII, personal data, consent, data retention, deletion, DSAR (data subject access requests), SOC 2, ISO 27001, HIPAA, PCI DSS, compliance evidence, data residency/sovereignty, data classification, anonymization/pseudonymization, breach notification, or EU AI Act obligations — whether designing new data flows, implementing user-rights features (export/delete), preparing for an audit, or reviewing a codebase for places personal data is over-collected, under-protected, retained forever, or impossible to delete.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@a02c19971ad39254846890f87300a46b19e3e82e
+  source: martinholovsky/SOTA-skills@4c4837e3f891b4194623e467fec6294df4ff8d0a
   adapted-for: opencode
 ---
 
 # SOTA Privacy & Compliance Engineering
+
+Read repository instructions first. This skill owns personal-data inventory,
+privacy-by-design, user-rights machinery, and compliance evidence;
+`sota-code-security` owns technical security controls and `sota-observability`
+owns telemetry pipelines.
+
+## Purpose
 
 Engineering-facing privacy and compliance architecture: how to design, build, and
 audit systems so that data protection is a property of the code and infrastructure,
@@ -26,43 +33,45 @@ lives in wiki pages does not.
 **Related skills — reference, don't duplicate:**
 - `sota-observability` — log redaction and PII-safe telemetry pipelines
 - `sota-code-security` — vulnerability management and technical security controls
-- Optional upstream skills not installed locally cover database mechanics,
-  secrets management, threat modeling, and DevSecOps in more depth.
+- Database mechanics, secrets management, threat modeling, and DevSecOps are
+  covered in more depth by dedicated guidance outside this skill.
 
 ## BUILD mode
 
 When designing or implementing systems that touch personal data:
 
 1. **Inventory first.** Before writing a schema or integrating a vendor, classify
-   every field you intend to collect and record where it flows (rules/01). The
+   every field you intend to collect and record where it flows ([rules/01](rules/01-data-inventory-classification.md)). The
    cheapest control is the field you never store.
 2. **Annotate at the source.** Schemas, structs, and API contracts carry
    classification and purpose annotations; tooling derives the data map from code,
-   not the other way around (rules/01, rules/02).
+   not the other way around ([rules/01](rules/01-data-inventory-classification.md), [rules/02](rules/02-privacy-by-design.md)).
 3. **Build user rights as features, not afterthoughts.** Export, deletion, and
    consent are product capabilities with APIs, state machines, and tests — design
    them with the first table, because retrofitting deletion into a 200-table
-   schema with denormalized copies is a quarter-long project (rules/03).
+   schema with denormalized copies is a quarter-long project ([rules/03](rules/03-consent-and-user-rights.md)).
 4. **Automate retention.** Every datastore gets a TTL, lifecycle rule, or
    partition-drop schedule at creation time. "We'll clean it up later" is how
-   seven-year-old PII ends up in a breach disclosure (rules/03).
+   seven-year-old PII ends up in a breach disclosure ([rules/03](rules/03-consent-and-user-rights.md)).
 5. **Emit evidence as a byproduct.** Access reviews, change approvals, and config
    baselines should fall out of normal engineering workflow (PRs, IaC, IdP logs)
-   so audits are queries, not scrambles (rules/05).
-6. **Know your regimes.** Check rules/04 for which regulations the system triggers
+   so audits are queries, not scrambles ([rules/05](rules/05-audit-ready-engineering.md)).
+6. **Know your regimes.** Check [rules/04](rules/04-regulatory-landscape.md) for which regulations the system triggers
    (data types × subjects' locations × sector) before architecture freezes — data
    residency and breach-clock requirements shape topology.
 
 ## AUDIT mode
 
+**Coverage:** every `rules/` file's Audit checklist applies in AUDIT mode. Mark one *not applicable* only with its reason in the report — never skip a file because the thing it checks for is absent, since that absence may be the finding.
+
 When reviewing an existing codebase/infrastructure for privacy and compliance gaps:
 
 **Process:** (1) Build or obtain the data inventory — grep schemas, API payloads,
-log statements, analytics events, object storage for personal data (rules/01 has
+log statements, analytics events, object storage for personal data ([rules/01](rules/01-data-inventory-classification.md) has
 discovery patterns). (2) Trace lifecycle per data category: collection → purpose →
 storage → sharing → retention → deletion. (3) Test user rights paths end-to-end
 (does deletion actually propagate?). (4) Check evidence trails for auditable
-controls. (5) Map findings to applicable regimes (rules/04).
+controls. (5) Map findings to applicable regimes ([rules/04](rules/04-regulatory-landscape.md)).
 
 **Severity conventions:**
 
@@ -96,7 +105,7 @@ retention / deletion), not by file — that is how regulators and auditors think
 | [rules/01-data-inventory-classification.md](rules/01-data-inventory-classification.md) | Starting any privacy work; building/auditing a data map; defining classification tiers; hunting PII in schemas, logs, buckets, backups, analytics; mapping flows to processors |
 | [rules/02-privacy-by-design.md](rules/02-privacy-by-design.md) | Designing schemas/APIs that touch personal data; minimization and purpose limitation in code; choosing pseudonymization vs anonymization vs tokenization; exposing aggregate stats; evaluating re-identification risk; anti-bot fingerprinting; blocking remote content (IP leakage, HTML email); duress/panic mode for at-risk users |
 | [rules/03-consent-and-user-rights.md](rules/03-consent-and-user-rights.md) | Building consent management, cookie/tracker governance, DSAR export, deletion (hard/soft/crypto-shred + propagation), or retention automation; auditing whether user rights actually work |
-| [rules/04-regulatory-landscape.md](rules/04-regulatory-landscape.md) | Determining which regimes apply; GDPR engineering mechanics (lawful basis, transfers, DPIA, 72h); US state laws; HIPAA; PCI DSS 4.x scoping; EU AI Act timeline; DORA/NIS2; data residency architecture |
+| [rules/04-regulatory-landscape.md](rules/04-regulatory-landscape.md) | Determining which regimes apply; GDPR engineering mechanics (lawful basis, transfers, DPIA, 72h); US state laws; HIPAA; PCI DSS 4.x scoping; EU AI Act timeline; DORA/NIS2; data residency architecture; children's and minors' data (COPPA, age signals) |
 | [rules/05-audit-ready-engineering.md](rules/05-audit-ready-engineering.md) | Preparing for SOC 2 / ISO 27001; automating evidence; mapping controls to engineering practice; vendor/subprocessor management; policy-as-code; avoiding common audit findings |
 | [rules/06-incident-breach-readiness.md](rules/06-incident-breach-readiness.md) | Building breach response capability; classification (is it reportable?); notification clocks per regime; forensics-friendly logging without privacy violations; post-incident obligations |
 
@@ -119,7 +128,7 @@ retention / deletion), not by file — that is how regulators and auditors think
    policy version, and scope; checked at point of use; revocation propagates to
    processors. Never inferred, never a boolean column named `gdpr_ok`.
 6. **No PII in logs, URLs, or analytics events** unless explicitly classified,
-   redaction-tested, and retention-bounded (see sota-observability for pipeline
+   redaction-tested, and retention-bounded (see [sota-observability](../sota-observability/SKILL.md) for pipeline
    mechanics). Logs are the most common shadow copy of personal data.
 7. **Pseudonymized ≠ anonymous.** Data that can be re-linked (hashed emails,
    "anonymized" user IDs, quasi-identifier combinations) is still personal data.

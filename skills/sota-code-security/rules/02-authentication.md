@@ -3,6 +3,8 @@
 Scope: password storage, MFA, session management, JWT, OAuth2/OIDC, passkeys, LDAP bind as login.
 Maps to OWASP A07:2025 (Authentication Failures), CWE-287 family.
 
+## 0. Core principle: never design your own authentication protocol
+
 Core principle: **never design your own authentication protocol.** Compose vetted
 primitives (argon2id, OIDC, WebAuthn) and framework session machinery. Every
 hand-rolled "remember me" token, password reset scheme, or HMAC login dance is a
@@ -103,6 +105,9 @@ if ph.check_needs_rehash(hash): store(ph.hash(attempt))
 - **Measure each defence**: detected and mitigated counts, filterable by address, so a
   defence that fails (a CAPTCHA pass rate that climbs) shows. OWASP: Credential Stuffing
   Prevention, Bot Management and Anti-Automation, Authentication cheat sheets.
+- **Emit the events the detective half runs on**: failed and locked logins per account
+  and per source, requests presenting an unknown session ID (a truncated hash, never the
+  ID), and failures per target role — security-monitoring guidance.
 
 Sessions and JWT (formerly §2 and §3) moved to [rules/17](17-sessions-and-tokens.md) on
 2026-09-25, section numbers kept.
@@ -147,13 +152,10 @@ Sessions and JWT (formerly §2 and §3) moved to [rules/17](17-sessions-and-toke
   NameID (truncation bypasses).
 - Validate `Recipient`, `Audience`, `InResponseTo`, `NotOnOrAfter` (clock-skew
   bounded), enforce single-use assertion IDs (replay cache). XXE hardening from
-  rules/01 §6 applies to the SAML parser itself.
-- **Verify against the key you configured, never the one in the message.** Use the IdP
-  certificate from pinned metadata, for the `Issuer` you expect, and ignore `KeyInfo` and
-  embedded certificates. A validator that trusts the certificate the response carries
-  accepts anyone's self-signed assertion. Allowlist `SignatureMethod` and `DigestMethod`
-  (RSA-SHA256 or stronger) and reject the SHA-1 family: `xmldsig#rsa-sha1`, `#dsa-sha1`,
-  `#hmac-sha1` and `#sha1`.
+  [rules/01](01-input-injection.md) §6 applies to the SAML parser itself.
+- **Verify against the key you configured, never the one in the message**: the IdP's
+  pinned metadata key for the expected `Issuer`, with a SHA-256+ `SignatureMethod`/`DigestMethod`
+  allowlist — identity and access-management guidance.
 - Check `Conditions` `NotBefore` as well as `NotOnOrAfter`. Require the assertion's `Issuer`
   (equal to the configured IdP entity ID) and a `Subject` whose bearer
   `SubjectConfirmationData` carries `Recipient`, `NotOnOrAfter` and `InResponseTo`. A
@@ -210,7 +212,7 @@ Sessions and JWT (formerly §2 and §3) moved to [rules/17](17-sessions-and-toke
 - **Password change must exist, and must ask for the current password** before it accepts
   a new one (a fresh re-authentication or MFA for passwordless or federated accounts).
   Without that check, a borrowed unlocked session becomes a permanent takeover. Afterwards,
-  revoke the other sessions (rules/17 §2) and notify the user (below).
+  revoke the other sessions ([rules/17](17-sessions-and-tokens.md) §2) and notify the user (below).
   OWASP: ASVS 5.0 V6.2.2, V6.2.3; Authentication cheat sheet.
 - **Account recovery must be as strong as login** — a password reset email that
   bypasses MFA nullifies MFA (CWE-640). Reset tokens: ≥ 128-bit random,
@@ -226,7 +228,7 @@ Sessions and JWT (formerly §2 and §3) moved to [rules/17](17-sessions-and-toke
 - **Where the reset link or code goes.** Send it only to the email address or phone
   already registered *and verified* on the account, never to one supplied in the request
   (a second `email` field, an array of addresses, a link built from the `Host` header:
-  rules/01 §11). The message carries the link or code and nothing else: no password (not
+  [rules/01](01-input-injection.md) §11). The message carries the link or code and nothing else: no password (not
   even a temporary one), no personal data, no account details.
   OWASP: Code Review Guide v2; Secure Coding Practices QRG.
 - Recovery codes: one-time, hashed at rest, regenerable, shown once. Other lost-factor
@@ -316,7 +318,7 @@ Authorising a payment, a payee change or another high-value operation is not a s
   address (revocable notice) and the new (verification link); re-auth + MFA
   step-up first; keep the old address as recovery for a grace window.
 - Phone verification: rate-limit sends per number AND per requester (SMS
-  pumping fraud, see rules/06 denial-of-wallet), expire codes ≤10 min,
+  pumping fraud, see [rules/06](06-memory-resource-safety.md) denial-of-wallet), expire codes ≤10 min,
   rate-limit attempts (§5 TOTP rules apply).
 - Signup anti-automation: proof-of-work/CAPTCHA escalation under abuse,
   disposable-email policy per product needs, and uniform "if an account
@@ -406,17 +408,17 @@ The Node row lists *files*, because `.bind(` is also `Function.prototype.bind`: 
 
 ## Audit checklist
 
-- [ ] Are passwords hashed with argon2id (or scrypt/bcrypt) at current-policy parameters, with rehash-on-login?
+- [ ] Are passwords hashed with argon2id (or scrypt/bcrypt) at current-policy parameters, with rehash-on-login (§1)?
 - [ ] Are login, registration, and reset endpoints rate-limited with uniform errors/timing across "user exists" states, including each step of a multi-step login (§1)?
-- [ ] Do all OAuth flows use Authorization Code + PKCE(S256), with `state`/`nonce` verified and exact-match redirect URIs?
+- [ ] Do all OAuth flows use Authorization Code + PKCE(S256), with `state`/`nonce` verified and exact-match redirect URIs (§4)? `state` bound to the session and checked on the callback **before** the code is exchanged — PKCE does not cover CSRF on the authorization response.
 - [ ] Is account recovery MFA-equivalent strength, with single-use hashed short-lived reset tokens, and a lost-factor route no caller can talk around (§5)?
 - [ ] Is TOTP (RFC 6238, server clock) rate-limited and code reuse blocked; are out-of-band codes single-use, bound to their request, hashed, and voided on resend (§5)?
-- [ ] Do WebAuthn ceremonies verify challenge, origin, rpId, and UV flags via a maintained library?
-- [ ] Are SAML responses signature-validated structurally (wrapping-resistant), with audience/recipient/replay checks?
-- [ ] Are API keys hashed at rest, scoped, expiring, revocable, and verified constant-time; webhooks HMAC-verified over the raw body with replay windows?
-- [ ] Does social-login linking require verified email on both sides (or explicit re-auth), with session revocation and notification on link?
-- [ ] Does email change require step-up auth plus confirmation via old and new addresses?
-- [ ] Are there zero hand-rolled token schemes, password hashes, or login protocols?
+- [ ] Do WebAuthn ceremonies verify a random, single-use, server-stored challenge, exact origin, rpId hash, and UV flags via a maintained library (no hand-parsed CBOR or attestation), check and update the signature counter with a regression logged or stepped up, store several credentials per user (ID, public key, counter, transports) bound atomically at registration, and enforce an attestation allowlist only where certified hardware is required (§6)?
+- [ ] Are SAML responses signature-validated structurally (wrapping-resistant), with audience/recipient/replay checks (§4)?
+- [ ] Are API keys hashed at rest, scoped, expiring, revocable, and verified constant-time; webhooks HMAC-verified over the raw body with replay windows (§8)?
+- [ ] Does social-login linking require verified email on both sides (or explicit re-auth), with session revocation and notification on link (§7)?
+- [ ] Does email change require step-up auth plus confirmation via old and new addresses (§7)?
+- [ ] Are there zero hand-rolled token schemes, password hashes, or login protocols? (§0)
 - [ ] **Are legacy fast password hashes wrapped now and expired by a deadline (§1)? HIGH** —
       `grep -rniE '(md5|sha1|sha256|sha512|messagedigest|createhash)[^;]{0,40}(passw|pwd)' .`
 - [ ] Are lockout threshold, window and duration written down, with a recovery path that

@@ -23,9 +23,17 @@ uvx ruff check .               # ephemeral tool run (pipx replacement)
 Rules:
 - **Commit `uv.lock`.** Applications MUST commit it. Libraries commit it for dev reproducibility
   even though it isn't published.
-- **CI installs with `uv sync --locked`** (or `--frozen`). Never bare `pip install -r requirements.txt`
-  in new projects; if a legacy `requirements.txt` must exist, generate it:
-  `uv export --format requirements-txt --output-file requirements.txt`.
+- **CI installs with `uv sync --locked`, never `--frozen`.** `--frozen` (and `UV_FROZEN=1`)
+  installs `uv.lock` without checking that it still matches `pyproject.toml`; `--locked`
+  fails instead. Measured (uv 0.12.0), a dependency added to `pyproject.toml` after `uv lock`:
+  `--frozen` and `UV_FROZEN=1` exited 0 without installing it, `--locked` exited 1. Never bare
+  `pip install -r requirements.txt` in new projects; if a legacy `requirements.txt` must exist,
+  generate it: `uv export --format requirements-txt --output-file requirements.txt`.
+- **What else unfreezes a frozen install.** A later `pip install <tool>` / `uv pip install` /
+  unversioned `uvx <tool>` step in the same job resolves whatever is newest, outside the lock:
+  put tools in a dependency group, or pin them (`uvx ruff@<version>`). On Poetry,
+  `poetry install --no-root` fails on a stale lock but with no lock resolves fresh and exits 0;
+  gate it with `poetry check --lock` first.
 - **A tool that is not uv gets `pylock.toml`, not a requirements file.** PEP 751 (Final,
   March 2025) is the standard, tool-neutral lock: every package with its artifact URLs, sizes
   and hashes, installable with no resolution at install time.
@@ -108,13 +116,30 @@ select = [
   "PTH",              # pathlib over os.path
   "T20",              # stray print()
   "PERF", "G",        # perf antipatterns, logging format
+  "PGH",              # PGH003/PGH004: no bare `# type: ignore` / `# noqa`
 ]
 ignore = ["E501"]      # formatter owns line length
 
-[tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]  # assert is fine in tests
+[tool.ruff.lint.per-file-ignores]  # assert and fixture tokens are fine in tests
+"tests/**" = ["S101", "S105", "S106"]
+"**/test_*.py" = ["S101", "S105", "S106"]    # co-located tests: `tests/**` misses them
+"**/*_test.py" = ["S101", "S105", "S106"]
+"**/conftest.py" = ["S101", "S105", "S106"]
 ```
 
+- **Suppressions name a rule, carry a reason, and expire.** `# noqa: S603  # argv list, no
+  shell` and `# type: ignore[assignment]  # legacy fixture`: `PGH004`/`PGH003` reject the bare
+  forms, and `RUF100` (in `RUF`) reports a `noqa` whose rule no longer fires, so a stale one
+  fails `ruff check`. No tool requires the reason; that is a review rule with a grep probe
+  below. Run one-off RUF100 checks with `--extend-select`, never a narrowed `--select`:
+  measured (ruff 0.16.2), `--select RUF100` reported every `# noqa: S101` as "non-enabled",
+  and `--fix` would delete them all.
+- **Test code is exempted by path in config, not by weakening the rule.** A rule that tests
+  legitimately trip (`S101` assert, `S105`/`S106` fixture passwords) goes in
+  `per-file-ignores` for test paths; moving it to the global `ignore` because the test job
+  went red disables it for production code too. Measured (ruff 0.16.2): with only
+  `"tests/**"`, an `assert` in `src/pkg/test_util.py` still failed, and the four globs above
+  exempted it while `assert` in `src/pkg/core.py` stayed an error.
 - New projects use Ruff instead of adding Black, Flake8, isort, or Pylint.
 - In established projects, mixed formatters are a finding only when they produce conflicting
   output or CI churn; do not migrate a working toolchain unasked.
@@ -131,9 +156,22 @@ contradictory suppressions, so one should be authoritative.
 ```toml
 [tool.ty.environment]
 python-version = "3.12"
+
+[tool.ty.rules]
+unused-ignore-comment = "error"
+unused-type-ignore-comment = "error"
+blanket-ignore-comment = "error"
 ```
 
 - Every `# type: ignore` MUST carry a code: `# type: ignore[arg-type]`. Bare ignores rot.
+  An ignore that no longer suppresses anything must fail too: ty reports stale
+  `# type: ignore` / `# ty: ignore` comments as `unused-type-ignore-comment` /
+  `unused-ignore-comment` (default `warn`) and bare `# ty: ignore` as `blanket-ignore-comment`
+  (default `ignore`) — set all three to `"error"` under `[tool.ty.rules]`. When an established
+  repo gates another checker: mypy `strict = true` already enables `warn_unused_ignores`
+  (reported as `[unused-ignore]`; set it explicitly without `strict`); pyright's
+  `reportUnnecessaryTypeIgnoreComment` defaults to `"none"`, so set it to `"error"`. Requiring
+  a rule on pyright's own ignores (`reportIgnoreCommentWithoutRule`) is basedpyright-only.
 - The checker runs in CI and fails the build. A local-only checker is not an enforced gate.
 
 ## 5. src/ layout
@@ -151,7 +189,8 @@ mypkg/
 Why: with flat layout, `import mypkg` silently picks up the working-copy directory instead of
 the installed package — tests pass against uninstalled code, broken wheels ship. `src/` forces
 an editable install (`uv sync` handles it) and catches packaging bugs. Tests live **outside**
-the package; they aren't shipped.
+the package by default, so they aren't shipped; pytest also supports in-package tests, and a
+repo that co-locates them needs §3's test-path lint exemptions.
 
 Ship `py.typed` in any annotated library, or downstream checkers see your package as `Any`.
 
@@ -169,7 +208,7 @@ repos:
 
 Do not hand-type the revs: run `pre-commit autoupdate --freeze`, which resolves each hook repo's
 latest tag and stores its commit SHA with the tag as a comment. A hook repo is third-party code
-that runs on every commit, so it is pinned by SHA for the same reason Actions are (rules/08 §1)
+that runs on every commit, so it is pinned by SHA for the same reason Actions are ([rules/08](08-supply-chain.md) §1)
 — a tag can be moved. Re-run it on a schedule so the pins do not rot.
 
 Keep hooks under ~5s; ty and pytest belong in CI, not pre-commit. CI must re-run the same
@@ -189,18 +228,18 @@ checks (`pre-commit run --all-files`) — local hooks are convenience, not enfor
 - **`match` statements — judiciously.** Use for structural destructuring (AST nodes, parsed
   messages, tagged unions with a `kind` field, sum types). Do NOT use as a fancy if/elif on a
   single scalar — `if x == "a": ... elif x == "b":` is clearer and faster. Always end with
-  `case _:` that raises or `assert_never(...)` for exhaustiveness (see rules/02).
+  `case _:` that raises or `assert_never(...)` for exhaustiveness (see [rules/02](02-typing-correctness.md)).
 - **f-string improvements (3.12, PEP 701):** nested quotes `f"{d["key"]}"`, multi-line
   expressions and comments inside `{}` are legal. Use; don't contort.
 - **`itertools.batched(iterable, n)`** (3.12) — replaces hand-rolled chunking.
 - **3.13:** improved REPL, clearer error messages, `warnings.deprecated` decorator,
   `copy.replace()`.
 - **3.14 — deferred annotations (PEP 649/749):** forward references work without quotes or
-  `from __future__ import annotations`; pydantic/FastAPI keep working (see rules/02 §10).
+  `from __future__ import annotations`; pydantic/FastAPI keep working (see [rules/02](02-typing-correctness.md) §10).
 - **3.14 — template strings (PEP 750):** `t"..."` returns a `Template` of static parts +
   `Interpolation` objects instead of a string — for t-string-aware APIs that escape or
   parameterize values (HTML, SQL). Not a drop-in f-string; use only with a consuming library.
-  The escaping lives in that consumer, not in the literal: reviewing one is rules/05 §3a.
+  The escaping lives in that consumer, not in the literal: reviewing one is [rules/05](05-security.md) §3a.
 - **3.14 — `compression.zstd`** (PEP 784): stdlib Zstandard, also wired into
   `tarfile`/`zipfile`/`shutil`. Drops the third-party `zstandard` dep on a 3.14+ floor.
 
@@ -234,7 +273,7 @@ grep -rnE '\b(import|from)\s+(telnetlib|cgi|cgitb|crypt|nntplib|smtpd|pipes|asyn
   --include='*.py' . 
 ```
 
-Two of these have security weight beyond the bump and are called out again in rules/05:
+Two of these have security weight beyond the bump and are called out again in [rules/05](05-security.md):
 `telnetlib` (plaintext credentials) and `crypt` (weak, platform-dependent hashing). Their
 replacements are not drop-in — `cgi.parse_header` has no stdlib successor, and `crypt` users
 want a password-hashing library, not another stdlib module.
@@ -262,12 +301,12 @@ suffix (`uv python install 3.14t`). Implications:
   and publish `cp314t` wheels.
 - Don't rewrite multiprocessing pools to threads "because no-GIL" until you've profiled on the
   free-threaded build; single-thread perf differs.
-- Decision table for concurrency model is in rules/06.
+- Decision table for concurrency model is in [rules/06](06-performance.md).
 
 ## 9. Docker packaging with uv
 
 ```dockerfile
-FROM ghcr.io/astral-sh/uv:python3.14-trixie-slim AS builder
+FROM ghcr.io/astral-sh/uv:python3.14-trixie-slim@sha256:<digest> AS builder
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 # Layer-cache deps separately from source: lockfile changes rarely, code changes often
@@ -276,17 +315,17 @@ RUN --mount=type=cache,target=/root/.cache/uv uv sync --locked --no-dev --no-ins
 COPY src/ src/
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --locked --no-dev
 
-FROM python:3.14-slim-trixie
+FROM python:3.14-slim-trixie@sha256:<digest>
 RUN useradd --create-home app
 USER app
 COPY --from=builder --chown=app /app /app
-ENV PATH="/app/.venv/bin:$PATH"
+ENV PATH="/app/.venv/bin:$PATH" PYTHON_DISABLE_REMOTE_DEBUG=1
 CMD ["python", "-m", "mypkg"]
 ```
 
 Key points: deps installed from the lockfile *before* copying source (cache hit on code-only
-changes), `--no-dev` in images, non-root user, no uv/compilers in the final stage. Pin base
-images by digest for reproducible rebuilds in regulated environments.
+changes), `--no-dev` in images, non-root user, no uv/compilers in the final stage. Pin every base
+image by digest, not only in regulated environments.
 
 ## 10. Repo hygiene quick list
 
@@ -295,6 +334,7 @@ images by digest for reproducible rebuilds in regulated environments.
 - No committed `.venv/`, `__pycache__/`, or checker caches — `.gitignore` covers them.
 - Version in exactly one place (`pyproject.toml` or `__init__.py` via dynamic) — not both.
 - Entry points via `[project.scripts]`, not instructions to run `python src/mypkg/cli.py`.
+  The command's own design (flags, exit codes, stdout vs stderr, `--json`) belongs with CLI UX guidance.
 - Declared-but-unreached dependencies: `deptry .` reports DEP002 (unused), DEP003
   (imported but only a transitive dep), DEP005 (stdlib shadowed). Treat its output as
   candidates — `importlib`/entry-point/plugin loads read as unused — and prove each by
@@ -312,22 +352,72 @@ Run from repo root. Severity guidance in brackets.
       `grep -rn "pip install" --include="*.yml" --include="*.yaml" --include="Dockerfile*" . | grep -v "uv pip"`
       (unlocked installs in CI/images [MEDIUM]); `grep -n "sudo pip" -r .` (system-interpreter
       installs [HIGH])
-- [ ] **Competing lint/format config — verify actual conflict before reporting** —
+- [ ] **Competing lint/format config — verify actual conflict before reporting** (§3) —
       `ls .flake8 .isort.cfg .pylintrc 2>/dev/null; grep -n "\[tool.black\]\|\[tool.isort\]" pyproject.toml`
-- [ ] **Type checking actually enforced? Use the configured checker; ty is the new-project default.** —
-      `grep -n "mypy\|pyright\|basedpyright\| ty " .github/workflows/*.yml .gitlab-ci.yml 2>/dev/null`
-      ; `grep -rn "type: ignore$\|type: ignore " --include="*.py" src/ | grep -v "ignore\["`
+- [ ] **Type checking actually enforced? Use the configured checker; ty is the new-project default.** (§4) —
+      `grep -qE 'mypy|pyright|basedpyright| ty ' .github/workflows/*.yml .gitlab-ci.yml || echo "no type checker in CI"`
+      ; `grep -rnE 'type: ignore([[:space:]]|$)' --include="*.py" src/ | grep -v "ignore\["`
       (bare ignores [LOW])
-- [ ] **requires-python vs syntax reality** — `grep -n "requires-python" pyproject.toml` ;
+- [ ] **Suppressions that never expire (§3, §4) [LOW each, MEDIUM in aggregate or where they silence `S` rules]** —
+      `uvx ruff check --extend-select PGH003,PGH004,RUF100 --statistics .` (bare and stale
+      `noqa`/`type: ignore`; `--extend-select` keeps the project's rules, §3) ;
+      `grep -qE 'unused-(type-)?ignore-comment|reportUnnecessaryTypeIgnoreComment|warn_unused_ignores|strict[[:space:]]*=' pyproject.toml ty.toml pyrightconfig.json || echo "no unused-ignore gate configured"`
+      (the message = an unused ignore never fails; silence still needs the setting to belong to
+      the checker that gates CI, not the other one) ;
+      `grep -rnE '#[[:space:]]*(noqa(:[[:space:]]*[A-Z]+[0-9]+([[:space:]]*,[[:space:]]*[A-Z]+[0-9]+)*)?|type:[[:space:]]*ignore(\[[^]]*\])?|pyright:[[:space:]]*ignore(\[[^]]*\])?)[[:space:]]*$' --include='*.py' .`
+      (each hit is a suppression with no reason after it)
+- [ ] **Test-only rules disabled globally, or co-located tests not exempted (§3) [MEDIUM for
+      `S101`/`S105`/`S106` in the global ignore]** —
+      `grep -HnE '^[[:space:]]*(extend-)?ignore[[:space:]]*=.*"(S101|S105|S106)"' /dev/null $(ls pyproject.toml ruff.toml .ruff.toml 2>/dev/null)`
+      (each hit turns the rule off for production code) ;
+      `find . -path ./tests -prune -o -path ./.venv -prune -o \( -name 'test_*.py' -o -name '*_test.py' \) -print | head -3`
+      (any hit while `per-file-ignores` keys only `"tests/**"` = those tests fail the lint, or
+      someone widened the global ignore)
+- [ ] **Frozen install that is not checked (§1) [HIGH in CI, an image build or a deploy, MEDIUM on a developer-only path]** —
+      `grep -rnE 'uv[[:space:]]+(sync|run|export)[^#]*--frozen|UV_FROZEN' --include='*.y*ml' --include='Dockerfile*' --include='*.sh' .`
+      (each hit installs a lock nobody compared with `pyproject.toml`: use `--locked`) ;
+      `grep -rlE 'poetry[[:space:]]+install' --include='*.y*ml' . | while IFS= read -r f; do grep -qE 'poetry[[:space:]]+check[[:space:]]+--lock' "$f" || echo "$f: poetry install with no poetry check --lock"; done`
+- [ ] **requires-python vs syntax reality; `pyproject.toml` as the single source (§2)** —
+      `grep -n "requires-python" pyproject.toml` (prints the declared floor; it is read against
+      the syntax hits below, not a finding) ;
       `grep -rln "match \|type [A-Z].* = \|def .*\[T" --include="*.py" src/ | head` (3.12 syntax
-      w/ old floor?)
-- [ ] **Layout** — `ls -d src/ 2>/dev/null | grep -q . || echo "flat layout"` (flat layout in a
+      w/ old floor? [HIGH: release-blocking]) ;
+      `find . -maxdepth 1 \( -name setup.py -o -name setup.cfg -o -name pytest.ini -o -name mypy.ini -o -name .flake8 \) -print`
+      (config outside `pyproject.toml` [LOW]) ;
+      `find . -maxdepth 1 -name pyproject.toml -exec grep -nA8 '^\[project\.optional-dependencies\]' {} + | grep -E '"(pytest|ruff|ty|mypy|coverage)'`
+      (dev tooling published as a user extra, not a `[dependency-groups]` group [LOW]) ;
+      `find . -maxdepth 1 -name pyproject.toml -exec grep -nE '"[A-Za-z0-9_.-]+[^"]*<[0-9][^"]*"' {} +`
+      (an upper-bound cap: justified only for a dep with a history of breaking [LOW])
+- [ ] **Layout (§5)** — `ls -d src/ 2>/dev/null | grep -q . || echo "flat layout"` (flat layout in a
       library [LOW]); `find src -name py.typed | head -1` (annotated lib without py.typed
-      [MEDIUM])
-- [ ] **Ruff coverage** — `uvx ruff check --statistics .` (what's currently violated);
-      `grep -n "select" pyproject.toml` (B/S/ASYNC missing from select [LOW])
-- [ ] **Hygiene** — `git ls-files | grep -E "\.venv/|__pycache__|\.pyc$"` (committed artifacts
-      [LOW])
+      [MEDIUM]) ; `find . -path ./.venv -prune -o -path ./tests -prune -o \( -name 'test_*.py' -o -name '*_test.py' -o -name conftest.py \) -print | head -3`
+      (tests inside the package ship with it [LOW])
+- [ ] **Ruff coverage** (§3) — `uvx ruff check --statistics .` (what's currently violated);
+      `grep -nE '^[[:space:]]*(extend-)?select[[:space:]]*=' pyproject.toml | awk '!/"ALL"/ && !(/"B"/ && /"S"/ && /"ASYNC"/)'`
+      (a select line missing one of B/S/ASYNC [LOW]; a multi-line array prints its opening line: read it) ;
+      `uvx ruff check --select PERF,C4,SIM --statistics .` (the perf rules)
+- [ ] **Hygiene (§10)** — `git ls-files | grep -E "\.venv/|__pycache__|\.pyc$"` (committed artifacts
+      [LOW]) ; `git ls-files .python-version | grep -q . || echo "no .python-version committed"` [LOW] ;
+      `git ls-files | grep -E '(^|/)requirements[^/]*\.txt$'` (each must be a generated `uv export`,
+      marked as such [LOW]) ;
+      `v=$(grep -rlE '^__version__[[:space:]]*=' --include='__init__.py' --exclude-dir=.venv . | wc -l); p=$(find . -maxdepth 1 -name pyproject.toml -exec grep -cE '^version[[:space:]]*=' {} +); [ "$v" -gt 0 ] && [ "${p:-0}" -gt 0 ] && echo "version in pyproject.toml and $v __init__.py"`
+      (the version in two places [LOW]) ;
+      `grep -rnE 'python3? src/[A-Za-z0-9_/]+\.py' --include='*.md' --include='*.rst' --exclude-dir=.venv .` (run-by-path
+      instructions instead of `[project.scripts]` [LOW]) ; `uvx deptry .` (DEP002/DEP003/DEP005 are
+      candidates: prove each removal as §10 says)
+- [ ] **Pre-PEP 695 generics and aliases on a 3.12+ floor (§7) [LOW]** —
+      `uvx ruff check --select UP040,UP046,UP047 --statistics .` (`TypeAlias`, `Generic[T]` and
+      `TypeVar` boilerplate where PEP 695 syntax is the default; measured, ruff 0.16.2, the three
+      fire only when `target-version` is `py312` or later) ; a `match` with no closing `case _`
+      is [rules/02](02-typing-correctness.md)'s exhaustiveness item, and hand-rolled chunking is
+      [rules/03](03-idioms-pitfalls.md)'s itertools item
+- [ ] **Python image built with dev dependencies, or source copied before the lock (§9) [MEDIUM
+      for dev deps in the image; LOW for layer order]** —
+      `grep -rnE 'uv[[:space:]]+sync' --include='Dockerfile*' --include='Containerfile*' . | grep -v -- '--no-dev'`
+      (the dev group shipped in the image) ;
+      `find . \( -name 'Dockerfile*' -o -name 'Containerfile*' \) -not -path '*/.venv/*' -exec awk 'FNR==1{s=0} /^(COPY|ADD)[[:space:]]+(\.|\.\/|src\/?)[[:space:]]/ && !s {print FILENAME":"FNR": source copied before the first uv sync"} /uv[[:space:]]+sync/{s=1}' {} +`
+      (every code change rebuilds the dependency layer) ; non-root `USER`, a minimal final
+      stage and digest-pinned `FROM` belong to the container-build checklist of CI and supply-chain controls
 - [ ] **pre-commit hooks pinned by tag, not SHA (§6) [LOW]** —
       `grep -nE '^[[:space:]]*rev:[[:space:]]*[^[:space:]#]' .pre-commit-config.yaml | grep -vE 'rev:[[:space:]]*[0-9a-f]{40}([[:space:]]|$)'`
       (each hit is a movable tag: `pre-commit autoupdate --freeze`)
@@ -344,7 +434,7 @@ Run from repo root. Severity guidance in brackets.
       on a shared dict or set: a finding only where a thread reaches it with no `threading.Lock`
       held)
 - [ ] **GIL silently re-enabled on a free-threaded target (§8) [MEDIUM where a `t` build is
-      the deployment target]** — `grep -rn '_is_gil_enabled' --include='*.py' .` (no hit = nothing
-      notices an undeclared extension turning the GIL back on) ;
+      the deployment target]** — `grep -rq '_is_gil_enabled' --include='*.py' . || echo "no _is_gil_enabled() check"`
+      (the message = nothing notices an undeclared extension turning the GIL back on) ;
       `grep -rnE 'PYTHON_GIL=0|-X ?gil=0' --include='*.y*ml' --include='Dockerfile*' --include='*.sh' .`
       (the testing override shipped to production)

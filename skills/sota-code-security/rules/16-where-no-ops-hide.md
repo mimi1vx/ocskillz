@@ -1,6 +1,6 @@
 # 16 — Where silent no-ops hide: the catalogue
 
-Split out of `rules/10` on 2026-09-12. `rules/10` holds the *method* — the
+Split out of [`rules/10`](10-silent-control-failure.md) on 2026-09-12. [`rules/10`](10-silent-control-failure.md) holds the *method* — the
 falsification question, making degradation loud, the evidence rules — and had reached
 484 of its 500 lines with two more classes queued behind it. This file is the **catalogue**
 it was carrying: sixteen shapes a control takes when it is present, looks enabled, and
@@ -9,10 +9,10 @@ enforces nothing. Catalogues are what grow, which is why this is the half that m
 **The section numbers are deliberately unchanged.** They read oddly in a file that starts at
 §2, and that is the price of making every inbound citation a pure path substitution
 (`rules/10 §2.7` → `rules/16 §2.7`) rather than a renumbering that has to be checked one
-reference at a time. The last split in this repo chose its seam by citations and broke zero
+reference at a time. The previous split of these rules chose its seam by citations and broke zero
 references; this follows it.
 
-**Read `rules/10` first** — it is the method, and this is what the method finds.
+**Read [`rules/10`](10-silent-control-failure.md) first** — it is the method, and this is what the method finds.
 
 ## 2. Where silent no-ops hide
 
@@ -85,7 +85,7 @@ Rules:
 ### 2.4 Swallowed exceptions on the enforcement path
 
 The classic: a broad `except` around a policy lookup that returns the permissive
-value. Covered in depth in rules/03 (authorization must fail closed); the
+value. Covered in depth in [rules/03](03-authorization.md) (authorization must fail closed); the
 addition here is the *silence*, not just the direction.
 
 ```python
@@ -96,7 +96,7 @@ except Exception:
 ```
 
 Rules:
-- Enforcement errors **deny** (rules/03) **and** emit a distinguishable signal —
+- Enforcement errors **deny** ([rules/03](03-authorization.md)) **and** emit a distinguishable signal —
   a `policy_check_error` counter, not a swallowed exception.
 - A deliberate, documented fail-open (availability outranks the control for this
   specific component) is legitimate; it must be **named in code and docs, rate-
@@ -141,8 +141,8 @@ scan(payload[:8192])          # pad the head, hide the payload in the tail
 Rule: never truncate on the path *into* an inspection step. Truncate for
 **display and logging** only, after the decision. If the inspector genuinely
 cannot handle unbounded input, cap the input at the **boundary** and reject
-what exceeds the cap — do not inspect a prefix and pass the whole. See rules/06
-for the numeric analogue (width truncation defeating size checks) and rules/04
+what exceeds the cap — do not inspect a prefix and pass the whole. See [rules/06](06-memory-resource-safety.md)
+for the numeric analogue (width truncation defeating size checks) and [rules/04](04-cryptography.md)
 for signature-chain truncation.
 
 **The mirror — a cap on a generator's *output*, then parsed.** Same family,
@@ -153,7 +153,7 @@ then either fails to parse, where §2.4's swallowed handler turns it into an
 empty-but-valid result (§2.3), or — line-oriented output — parses clean as a
 *prefix* nothing downstream can tell from the whole. Rule: bound the producer's
 **scope** (a page, a narrowed query), never its output, and compare produced
-size against the cap before parsing (rules/11 §2.2).
+size against the cap before parsing ([rules/11](11-dead-path-diagnostics.md) §2.2).
 
 ### 2.8 Config keys in the wrong section, silently ignored
 
@@ -173,7 +173,7 @@ Rules:
 - **Config and policy schemas reject unknown keys** (`extra="forbid"`, strict
   decoding, `DisallowUnknownFields`). This is the inverse of the wire-protocol
   convention — API *responses* must tolerate unknown fields for evolvability
-  (API design guidance), but a local config file has no such compatibility
+  ([`sota-api-design` rules/02](../../sota-api-design/rules/02-versioning-evolution.md)), but a local config file has no such compatibility
   requirement, and ignoring is the dangerous choice.
 - Test the reference config **structurally**: every key in it must resolve to a
   real field of its section. This catches the class, not one instance.
@@ -209,7 +209,7 @@ features — Go `-tags`, Rust feature flags, `./configure` options, optional sha
 parses, the docs list it, and it fails only when it reaches the hardware or library that is
 not there.
 
-Field-reported: Homebrew's `cosign` v3.1.2 lists `--sk` and `--slot` in `--help` because it
+Observed: Homebrew's `cosign` v3.1.2 lists `--sk` and `--slot` in `--help` because it
 is built without the `pivkey` tag. `cosign public-key --sk` returns
 `Error: opening piv token: unimplemented`. (`cosign piv-tool` is more honest and says
 "not built with piv-tool support", but `--sk` gives no warning until it meets real hardware.)
@@ -220,12 +220,12 @@ against a release deadline with decisions already built on top.
 and keep the output.** The cheapest form is usually a read-only call — `public-key`,
 `--version`, a dry run — that still traverses the gated code path. Package managers are the
 usual source: distribution builds drop optional tags to avoid a CGO or driver dependency.
-Same family as the compiled-out `assert` in `rules/11` §4 — the interface survives the
+Same family as the compiled-out `assert` in [`rules/11`](11-dead-path-diagnostics.md) §4 — the interface survives the
 build, the behaviour does not.
 
 **Checking each precondition is not checking the operation.** The tempting substitute for
 that one real call is a chain of availability checks: the helper exists in the toolchain,
-the platform permits it here, the build emits what the platform requires. Field-reported: all
+the platform permits it here, the build emits what the platform requires. Observed: all
 three passed from primary sources for an eBPF helper, and the program was still rejected at
 load (`R1 is of type file but path is expected`), because the blocker was **how the helper
 is called**, which no availability check names. Preconditions do not compose into the
@@ -235,7 +235,7 @@ that gets designed on. Run it first.
 
 ### 2.16 The aggregate that masks the detection
 
-`rules/10` §1's question, asked of a *field* rather than a control. A positive control
+[`rules/10`](10-silent-control-failure.md) §1's question, asked of a *field* rather than a control. A positive control
 asserted that an analysis engine had "fired" by summing every list on its result
 object:
 
@@ -260,15 +260,15 @@ class Result:
 
 The inputs outnumber the outputs and outlive them: preprocessing populates
 `assumptions` on any real graph, so the aggregate is non-empty whether or not
-detection works. Field-reported 2026-09-05, measured across 11 languages:
+detection works. Observed 2026-09-05, measured across 11 languages:
 `breaks` was empty on **all nine** cells where this engine was registered as
 having a positive control, a sibling engine had zero `violations` on three of its
 ten, and **12 of 35 controls were green on a result containing no detections** —
 and would have stayed green if detection stopped entirely.
 
-Two neighbouring diagnostics miss it. `rules/11` §2.2 is about the *denominator*,
+Two neighbouring diagnostics miss it. [`rules/11`](11-dead-path-diagnostics.md) §2.2 is about the *denominator*,
 and here the denominator was healthy: the engines ran over a real graph and
-returned rows. `rules/15` §2.1's "instrument that cannot fail" is about a scorer
+returned rows. [`rules/15`](15-instruments-and-guards.md) §2.1's "instrument that cannot fail" is about a scorer
 returning a plausible number whatever it is handed; this instrument *could* fail,
 just never for the reason it existed. The distinct defect is that **the assertion
 aggregates over a heterogeneous result in which the inputs outnumber and outlive
@@ -284,7 +284,7 @@ with no evidence of a regression — nothing had ever measured `breaks` — that
 manufactures a red build out of a measurement gap. Assert semantically on what
 the engine *does* produce, and give the empty field **its own test recording the
 measured fact**, so it has an owner and gets tightened the day the field becomes
-non-empty. `rules/11` §2.6's metamorphic relation is the tool for that second
+non-empty. [`rules/11`](11-dead-path-diagnostics.md) §2.6's metamorphic relation is the tool for that second
 half.
 
 ## Audit checklist
@@ -294,10 +294,33 @@ half.
       placeholder data treated as real (§2.3), swallowed exceptions on the enforcement path
       (§2.4), overloaded flags (§2.5), early returns that skip it (§2.6), truncation into an
       inspector (§2.7), config keys in the wrong section (§2.8), doc/code drift (§2.9)
-- [ ] **The control that is not in force** (the 2.10–2.14 group) — installed, configured, and not
+- [ ] **The control that is not in force** (§2) (the 2.10–2.14 group) — installed, configured, and not
       actually applied to the path it is credited with
 - [ ] **A flag that parses is not a feature that works** (§2.15) — the parser accepting it
       proves the parser, not the behaviour; and a chain of green availability checks proves
-      the preconditions, not the operation. Was the real call run once before designing on it?
-- [ ] **No aggregate masking a detection** (§2.16) — a mean, a rollup or a "worst case" that
-      makes a real signal disappear into the total
+      the preconditions, not the operation. Was the real call run once before designing on it,
+      and its output kept? Build-tag-gated flags parse and stub out. High when the capability is
+      the load-bearing half of a security control.
+- [ ] **No aggregate masking a detection** (§2.16) — an "it produced something" assertion that
+      sums or counts a result mixing derived inputs with findings proves only that the input stage
+      ran: name the field that would be empty if the detector were deleted, and assert on that
+- [ ] Presence/enablement decided by real loaded artifacts (non-zero rule count,
+      required files present), not by `exists()`/`is_dir()`/truthiness (§2.1)?
+- [ ] No `except ImportError` (or equivalent) silently disabling a control (§2.2); every
+      optional dependency backing a control present in the **shipped** artifact?
+- [ ] Does a loader that yields zero rules/policies fail closed and loudly (§2.3)? Do
+      shipped example/reference configs load to a non-empty, safe state?
+- [ ] Broad `except` on an enforcement path returning the permissive value (§2.4)?
+      Grep: `except Exception`/`catch (...)`/`rescue =>`/`recover()` near authz,
+      verify, validate, scan → each is fail-open, silent, or both.
+- [ ] Any flag used more broadly than its own definition claims (§2.5) (debug/dev_mode
+      also disabling a security check)?
+- [ ] Early-return guards on empty/oversized/unparseable input that an attacker
+      can deliberately trigger to skip inspection (§2.6)?
+- [ ] Any truncation (`[:N]`, byte caps, `LIMIT`) on the path *into* a scan (§2.7),
+      validation, or signature check — or a cap on a **generator's output**
+      (unset `max_tokens`, `--max-results`) whose fragment is then parsed?
+- [ ] Config/policy schemas reject unknown keys (§2.8), and every key in the reference
+      config resolves to a real field of its section (tested structurally)?
+- [ ] Security/privacy/cost-relevant defaults verified in **both** docs and code (§2.9),
+      with a test pinning the documented default to the parsed one?

@@ -41,6 +41,11 @@ Requires OpenCode V2. V1 is no longer supported — see [Installation](#installa
 | [sota-data-engineering](./skills/sota-data-engineering/SKILL.md) | Batch, streaming, warehouse, or lakehouse work | Pipelines, CDC, contracts, storage, quality, and governance. |
 | [sota-async-concurrency](./skills/sota-async-concurrency/SKILL.md) | Async, threads, races, deadlocks, or backpressure | Cross-language concurrency design, correctness, bug catalog, and audit severity. |
 | [sota-architecture](./skills/sota-architecture/SKILL.md) | Architecture, boundaries, DDD, events, or resilience | System architecture styles, boundaries, distributed systems, and resilience design. |
+| [sota-golang](./skills/sota-golang/SKILL.md) | Go code, modules, goroutines, or audits | Errors, package design, concurrency, net/http hardening, security, performance, and CI. |
+| [sota-swift](./skills/sota-swift/SKILL.md) | Swift code on any target, or audits | Swift 6 idioms, API design, strict concurrency, memory safety, server-side, security, and tooling. |
+| [sota-shell-scripting](./skills/sota-shell-scripting/SKILL.md) | bash/PowerShell scripts, CI scripts, or trusting ad-hoc command output | Defensive shell, quoting and error handling, security, cleanup, and verifying what a command's output really proves. |
+| [sota-api-design](./skills/sota-api-design/SKILL.md) | REST, gRPC, GraphQL, webhooks, or API reviews | Resource modeling, errors, pagination, versioning, compatibility, and API security contracts. |
+| [sota-skill-security](./skills/sota-skill-security/SKILL.md) | Installing, authoring, or auditing agent skills, plugins, or MCP servers | Provenance, trust boundaries, capability scoping, and skill authoring/auditing. |
 | [apple-container](./skills/apple-container/SKILL.md) | Apple `container` CLI on macOS, arm64 pinning | Command reference plus forcing `linux/arm64`, catching silent amd64 fallback, and verifying image architecture. |
 | [binscout-re](./skills/binscout-re/SKILL.md) | "reverse engineer", binary analysis, disassembly, xrefs, binary diff | Static RE workflow over the binscout MCP/CLI: orient, anchor on strings/imports/bytes, read functions cheapest-first, record renames and comments, plus known binscout gaps. |
 | [deep-performance-audit](./skills/deep-performance-audit/SKILL.md) | "performance audit", "optimize codebase" | Measure-first audit: baseline, profile, rank opportunities, and prove each optimization keeps outputs identical. |
@@ -100,9 +105,9 @@ ok   [changelog-generator]
 ok   [agent: planner]
 ok   [command: test]
 
-registration: 26 skills, 3 agents, 6 commands
+registration: 34 skills, 3 agents, 6 commands
 
-Checked: 33  Errors: 0
+Checked: 43  Errors: 0
 ```
 
 Three phases run:

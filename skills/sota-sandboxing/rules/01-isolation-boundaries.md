@@ -98,7 +98,7 @@ protocol decoders.
   `ObjectInputStream`, `unserialize`, `Marshal` of data that crossed a trust
   boundary) is this class with a worse failure mode: a gadget chain gives code
   execution, not just memory corruption. Until it is replaced with a data-only
-  format (`sota-code-security` rules/01 §8), decode in a throwaway,
+  format ([`sota-code-security` rules/01](../../sota-code-security/rules/01-input-injection.md) §8), decode in a throwaway,
   low-privilege worker whose inbound and outbound network is denied — or, where
   it must talk, restricted to named peers and logged — and hand back plain data
   only. OWASP: Proactive Controls 2024 C3.
@@ -106,7 +106,7 @@ protocol decoders.
   prompts) are a named workload here, not "just the app": the weights are
   untrusted input from wherever they came from, and every prompt is attacker
   data. A weights format that executes on load (`pickle`-based checkpoints,
-  `trust_remote_code`, custom ops; `sota-ml-engineering` rules/07 §2) makes it
+  `trust_remote_code`, custom ops; [`sota-ml-engineering` rules/07](../../sota-ml-engineering/rules/07-security-governance.md) §2) makes it
   **class A**. Give the runtime its own process and memory space — never
   in-process with the API tier holding sessions and credentials — a read-only
   model mount, a writable scratch area only, no credentials, and network only on
@@ -153,6 +153,8 @@ the correct amount for untrusted code is zero (broker pattern, `04`).
 ---
 
 ## 4. Reference stacks (known-good compositions)
+
+*(advisory)* — worked starting-point compositions; the rules they assemble are probed by the layer, boundary-floor and secrets items.
 
 Use these as starting points; each line is an independent layer per R1.2.
 
@@ -208,7 +210,7 @@ Add one arm that runs the **representative legitimate workload** to completion
 inside the same policy — the real parser on a real input, the real job on a real
 payload — and fail the build if *that* is refused, killed or truncated. Without it
 the probe cannot tell a working sandbox from a sandbox nobody can use, and the
-difference surfaces in production instead (`sota-code-security` rules/12 §1a).
+difference surfaces in production instead ([`sota-code-security` rules/12](../../sota-code-security/rules/12-verifying-the-verifier.md) §1a).
 
 **R5.2 — Test the failure mode, not just the policy:** kill the seccomp loader,
 point at a kernel without Landlock, make the proxy unreachable — the workload must
@@ -237,27 +239,33 @@ finding (Medium).
 ## Audit checklist
 
 - [ ] Workload classified (untrusted code / untrusted input / multi-tenant) and the
-      chosen boundary meets the floor in the decision table.
+      chosen boundary meets the floor in the decision table; an in-process isolate,
+      WASM engine or language jail (rank 7) is never the sole boundary for untrusted
+      code (§2).
 - [ ] Privileges derived from an explicit needs-list; allowlist, not blocklist, at
-      every layer (syscalls, files, network, capabilities).
+      every layer (syscalls, files, network, capabilities) (§1).
 - [ ] At least two *independent* layers between untrusted execution and the crown
-      jewels; documented "what does the attacker hold if layer N falls?"
+      jewels; documented "what does the attacker hold if layer N falls?" (§1)
 - [ ] All holes through the boundary inventoried: mounts, sockets, device nodes,
-      shared memory, env vars, tokens, metadata endpoints.
-- [ ] Sandbox setup fails closed (workload aborts if any layer can't be applied).
-- [ ] Sandboxes are per-trust-domain and ephemeral; no reuse across users/tenants.
-- [ ] No secrets, cloud credentials, or metadata service reachable from inside.
-- [ ] Untrusted workloads scheduled away from control-plane/secrets workloads.
+      shared memory, env vars, tokens, metadata endpoints (§1).
+- [ ] Sandbox setup fails closed (workload aborts if any layer can't be applied);
+      no design doc waives the sandbox because input is validated, or waives
+      validation because a sandbox exists (§1).
+- [ ] Sandboxes are per-trust-domain and ephemeral (§3); no reuse across users/tenants.
+- [ ] No secrets, cloud credentials, or metadata service reachable from inside (§3, §6).
+- [ ] Untrusted workloads scheduled away from control-plane/secrets workloads (§3).
 - [ ] No anti-pattern from §6 present; any boundary downgrade has a written,
       dated risk acceptance.
 - [ ] In-sandbox denial probe exists and runs in CI; fail-closed behavior
-      chaos-tested; runtime state matches the spec (CapEff/Seccomp/NoNewPrivs
-      inspected, not assumed).
-- [ ] The probe has an **allow arm** as well as its denial arms — the real
+      chaos-tested within the last year; runtime state matches the spec
+      (CapEff/Seccomp/NoNewPrivs inspected, not assumed) (§5).
+- [ ] The probe has an **allow arm** (§5) as well as its denial arms — the real
       workload completes inside the real policy, so a sandbox that denies
       everything cannot pass CI (R5.1b).
 - [ ] Side-channel posture documented for cross-tenant confidentiality (SMT,
-      core scheduling, memory dedup disabled where required).
+      core scheduling, memory dedup disabled where required); mutually distrusting
+      tenants with secrets on both sides sit on ranks 1–3 (dedicated hardware, VM,
+      microVM) unless a shared-kernel placement has a recorded risk acceptance (§2).
 - [ ] **High** — Model inference runs as its own isolated workload at the floor
       for its weights format: code-bearing loads put it in class A (§3 B):
       `grep -rnE 'trust_remote_code[[:space:]]*=[[:space:]]*True|weights_only[[:space:]]*=[[:space:]]*False|TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD' .`

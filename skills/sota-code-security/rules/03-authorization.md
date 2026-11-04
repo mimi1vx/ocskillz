@@ -102,15 +102,15 @@ if doc is None: abort(404)                # don't leak existence with 403 vs 404
   who can read an invoice must not be able to call `POST /invoices/{id}/refund`.
 - Don't trust client-supplied role/privilege fields — role comes from the
   server-side session/token claims validated against the DB, never from a request
-  body (`{"role": "admin"}` mass assignment, see rules/07) or a client-set header
+  body (`{"role": "admin"}` mass assignment, see [rules/07](07-data-exposure.md)) or a client-set header
   (`X-Admin: true`).
 - **Privilege copied into a session goes stale.** A role, permission set or tenant list stored
   in the session (or a token claim) at login is a snapshot. Re-read it from the authoritative
   store for sensitive decisions, or re-validate on an interval short enough for your revocation
   needs; keep a per-user permission version so a role change forces re-authentication or a
   session refresh. When privilege drops, remove every higher-privilege flag and cached datum
-  the session carries, not just the role field. Session-ID rotation on elevation is rules/17
-  §2; IdP-pushed revocation is identity and access-management guidance OWASP: Code Review Guide v2,
+  the session carries, not just the role field. Session-ID rotation on elevation is [rules/17](17-sessions-and-tokens.md)
+  §2; IdP-pushed revocation is identity and access-management guidance. OWASP: Code Review Guide v2,
   Go-SCP (access control).
 - State-machine authorization: actions valid only in certain states (approve own
   expense report, re-trigger completed payment) need state checks server-side —
@@ -122,7 +122,7 @@ if doc is None: abort(404)                # don't leak existence with 403 vs 404
   writable field** — keep it server-side keyed to the session/resource. A rejected out-of-order
   step is also a **security event**: log it at high severity with the user and the step (the
   OWASP Logging Vocabulary names it `sequence_fail` at CRITICAL), because a legitimate UI rarely
-  produces one and detection can key on it (rules/07 §2). OWASP: Logging Vocabulary cheat sheet.
+  produces one and detection can key on it ([rules/07](07-data-exposure.md) §2). OWASP: Logging Vocabulary cheat sheet.
 - **Transaction authorization binds to the data it approved.** A step-up, OTP, signature or
   approval covers the exact values the user confirmed (amount, payee, account), stored
   server-side with it. Any change to those values after entry voids it and restarts the flow;
@@ -133,7 +133,7 @@ if doc is None: abort(404)                # don't leak existence with 403 vs 404
   Authorization cheat sheet, ASVS 5.0 V2.3.5.
 - **Payment results come from the gateway, never the browser.** The user's return from a
   hosted payment page carries parameters the user can edit. Fulfil only on a verified
-  server-to-server notification (rules/02 §8) or a server-side status query, and only when the
+  server-to-server notification ([rules/02](02-authentication.md) §8) or a server-side status query, and only when the
   gateway's amount, currency and order id equal what you created; fulfil each payment once, so
   a replayed callback does nothing. OWASP: Third Party Payment Gateway Integration cheat sheet.
 
@@ -145,7 +145,8 @@ if doc is None: abort(404)                # don't leak existence with 403 vs 404
   changes (recompute, don't append); admin roles audited and minimal.
 - **ABAC**: policy over attributes (user dept, resource classification, time,
   device). Use when context matters; keep policies in one engine (OPA/Rego,
-  Cedar, Casbin), versioned and tested like code:
+  Cedar, Casbin), versioned and tested like code (choosing an engine, and its pitfalls:
+  identity and access-management guidance):
 
 ```cedar
 // Cedar: explicit, testable, deny-by-default (no permit -> deny)
@@ -239,7 +240,7 @@ SET LOCAL app.tenant_id = '...';
   Security cheat sheet.
 - CSRF and SSRF are confused-deputy instances: the browser and your server,
   respectively, wield ambient authority on an attacker's behalf — same mental
-  model, fixes in rules/05 and rules/01.
+  model, fixes in [rules/05](05-web-security.md) and [rules/01](01-input-injection.md).
 - Capability URLs / signed URLs: scope them narrowly (object, verb, expiry),
   treat as bearer credentials (no logging, short TTL), and ensure the signer
   checks authorization *before* signing.
@@ -262,7 +263,7 @@ SET LOCAL app.tenant_id = '...';
   tool means staff know a credential they could later use as that user. OWASP: ASVS 5.0 V6.4.6.
 - Every admin mutation needs an immutable audit trail (actor, target, before/
   after, reason) — both a compliance requirement and your insider-threat and
-  incident-forensics control (pairs with rules/07 §2 security logging).
+  incident-forensics control (pairs with [rules/07](07-data-exposure.md) §2 security logging; integrity against a writer of the store: [rules/18](18-tamper-evident-logs.md) §1).
 - Break-glass paths (emergency access) must alert loudly and expire; a
   permanent quiet backdoor "for ops" is indistinguishable from a compromise.
 
@@ -275,7 +276,7 @@ SET LOCAL app.tenant_id = '...';
 - Scheduled/cron jobs that touch tenant data iterate with per-tenant scoping
   (RLS context set per tenant inside the loop) — a cross-tenant batch bug is a
   Critical with no request log to find it by.
-- Inbound webhooks authenticate the **sender** (HMAC, rules/02 §8) and then
+- Inbound webhooks authenticate the **sender** (HMAC, [rules/02](02-authentication.md) §8) and then
   still authorize the *claimed subject*: a valid Stripe signature on an event
   naming `customer_X` doesn't mean your handler should mutate `customer_Y`
   from a spoofable field — map external IDs to internal rows through owned
@@ -302,23 +303,23 @@ SET LOCAL app.tenant_id = '...';
 
 ## Audit checklist
 
-- [ ] Is there a single default-deny enforcement layer covering REST, GraphQL resolvers, WebSocket, gRPC, and admin routes?
-- [ ] Does every object lookup by client-supplied ID include an ownership/tenant predicate in the query itself?
-- [ ] Are nested IDs, batch arrays, exports, downloads, and background-job parameters object-level checked too?
-- [ ] Are operation-level (function-level) checks distinct from visibility checks?
-- [ ] Do roles/privileges come exclusively from server-side state — never request bodies or client headers?
-- [ ] Can no user grant themselves elevated roles, group memberships, or modify their own tenant binding?
-- [ ] Is tenant filtering enforced structurally (RLS or mandatory ORM scopes) with tenant_id sourced from the session only?
-- [ ] Are caches, search indexes, signed URLs, and uniqueness errors tenant-scoped?
-- [ ] Do internal services require both service identity (mTLS) and propagated end-user authorization?
-- [ ] Do policy-engine failures and exceptions deny (fail closed)?
-- [ ] Is there an automated cross-tenant / cross-user access test suite asserting the deny matrix?
-- [ ] Are 404 (not 403) returned for objects the caller cannot see, consistently?
-- [ ] Do admin tools have tiered roles, MFA/step-up, and immutable audit trails for every mutation?
-- [ ] Is impersonation time-boxed, logged, visible, and blocked from sensitive account changes?
-- [ ] Is RLS `FORCE`d with a non-bypass app role where Postgres tenancy is used?
-- [ ] Do background workers re-authorize the carried principal at execution time, and do webhook handlers map external subjects to internally-owned rows?
-- [ ] Are hard policy ceilings encoded as forbids/deny rules that override grants?
+- [ ] Is there a single default-deny enforcement layer covering REST, GraphQL resolvers, WebSocket, gRPC, and admin routes (§1)?
+- [ ] Does every object lookup by client-supplied ID include an ownership/tenant predicate in the query itself (§2)?
+- [ ] Are nested IDs, batch arrays, exports, downloads, and background-job parameters object-level checked too (§2)?
+- [ ] Are operation-level (function-level) checks distinct from visibility checks (§3)?
+- [ ] Do roles/privileges come exclusively from server-side state — never request bodies or client headers (§3)?
+- [ ] Can no user grant themselves elevated roles, group memberships, or modify their own tenant binding (§4)?
+- [ ] Is tenant filtering enforced structurally (RLS or mandatory ORM scopes) with tenant_id sourced from the session only (§5)?
+- [ ] Are caches, search indexes, signed URLs, and uniqueness errors tenant-scoped (§5)?
+- [ ] Do internal services require both service identity (mTLS) and propagated end-user authorization (§6)?
+- [ ] Do policy-engine failures and exceptions deny (fail closed) (§9)?
+- [ ] Is there an automated cross-tenant / cross-user access test suite asserting the deny matrix (§4, §5)?
+- [ ] Are 404 (not 403) returned for objects the caller cannot see, consistently (§2)?
+- [ ] Do admin tools have tiered roles, MFA/step-up, and immutable audit trails for every mutation (§7)?
+- [ ] Is impersonation time-boxed, logged, visible, and blocked from sensitive account changes (§7)?
+- [ ] Is RLS `FORCE`d with a non-bypass app role where Postgres tenancy is used (§5)?
+- [ ] Do background workers re-authorize the carried principal at execution time and validate job arguments like request input, do scheduled jobs touching tenant data set the tenant scope (RLS context) per tenant inside the loop, do webhook handlers authenticate the sender and then map external subjects to internally-owned rows, and do scheduler- or mesh-triggered internal endpoints require service identity rather than trusting a port (§8)?
+- [ ] Are hard policy ceilings encoded as forbids/deny rules that override grants (§4)?
 - [ ] **Denial halts (§1, §9)**: does every failed authentication or authorization check end the handler (`return`/`exit` after the redirect or 401/403), and do checks run before the body is processed? HIGH when code after the denial reads or changes data. Read each hit of `grep -rnE '(^|[;{)])[[:space:]]*res\.(redirect|sendStatus|status\(40[13]\))' --include='*.js' --include='*.ts' .` and of `grep -rnE "header\([[:space:]]*['\"]Location:" --include='*.php' . | grep -vE 'exit|die|return'`
 - [ ] **Stale session privilege (§3)**: are roles or permissions cached in the session re-read or re-validated for sensitive actions, and flushed with their privileged data when privilege drops? MEDIUM, HIGH on admin paths; each hit of `grep -rnE "session(\[['\"]|\.get\(['\"]|\.)(role|roles|is_?[aA]dmin|permissions|privileges|scopes)" --include='*.py' --include='*.js' --include='*.ts' --include='*.php' --include='*.rb' .` is a decision on a snapshot
 - [ ] **Transaction authorization (§3)**: is each step-up/OTP/approval bound to the exact transaction data, voided by any change, re-compared at execution, single-use, and is a second approver available for high-value flows? HIGH on money movement; design review, no reliable grep

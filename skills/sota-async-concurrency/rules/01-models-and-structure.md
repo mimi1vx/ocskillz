@@ -1,6 +1,6 @@
 # 01 — Concurrency Models & Structured Concurrency
 
-## Choosing a model
+## 1. Choosing a model
 
 There are four models. Pick by workload shape, not by familiarity.
 
@@ -58,7 +58,7 @@ classic failures: blocked loops (rule 04) and 10,000 threads.
   the main hazard on JDK ≤23 (use `ReentrantLock` instead in hot paths) —
   fixed in JDK 24+ (JEP 491), but JDK 21 LTS deployments still hit it.
 
-## Structured concurrency is the default
+## 2. Structured concurrency is the default
 
 A task whose lifetime exceeds the scope that created it is an **orphan**: its
 exceptions vanish, its resources leak, and nothing cancels it on shutdown.
@@ -184,7 +184,7 @@ Use this instead of a mutex when: state has invariants spanning multiple
 fields; operations must serialize anyway; or you need to bound the request
 rate to the state (mailbox = built-in backpressure).
 
-## Sizing rules
+## 3. Sizing rules
 
 - Thread/process pool for CPU: `n_cores` (maybe `n_cores ± 1`); more adds
   context-switch overhead, not throughput.
@@ -210,21 +210,29 @@ async with asyncio.TaskGroup() as tg:
 ## Audit checklist
 
 - [ ] Workload classified? CPU-bound code on an event loop or I/O fan-out on
-      a thread-per-request model is an architecture-level finding.
-- [ ] Grep for orphan spawns: `create_task(`/`ensure_future(` with unused
+      a thread-per-request model is an architecture-level finding (§1). Also:
+      rayon work run on tokio runtime threads; JVM virtual threads pinned by
+      `synchronized` around blocking calls on JDK ≤23; CPU thread pools on
+      free-threaded Python whose C extensions have not declared support.
+- [ ] Grep for orphan spawns (§2): `create_task(`/`ensure_future(` with unused
       result, bare `go func(`, `tokio::spawn` with dropped handle, async calls
       and `.then(` chains with no await/`.catch`.
 - [ ] For every spawn: who joins it? Who sees its exception? Who cancels it on
       shutdown? Three answers or it's a finding (HIGH if it does I/O or holds
-      resources).
-- [ ] `asyncio.create_task` results stored in a strong reference (or
+      resources); a deliberately detached spawn also needs a comment saying
+      why (§2).
+- [ ] `asyncio.create_task` results stored in a strong reference (§2) (or
       TaskGroup)? Weak-ref GC of running tasks is a real CPython footgun.
-- [ ] Fan-out loops bounded by semaphore/errgroup limit/pool size?
+- [ ] Fan-out loops bounded by semaphore/errgroup limit/pool size (§3)?
 - [ ] `gather`/`Promise.all` failure mode considered — does first failure
       strand or leak the siblings? (Plain `asyncio.gather` does not cancel
-      siblings on error unless they're in a TaskGroup.)
-- [ ] Background daemons registered for shutdown cancellation?
-- [ ] Pools sized with a stated rationale, not defaults-by-accident?
-- [ ] Shared mutable state: could it be owned by one task + mailbox instead of
+      siblings on error unless they're in a TaskGroup.) Collect-all results
+      (`allSettled`, `return_exceptions=True`) actually inspected for
+      failures (§2)?
+- [ ] Background daemons registered for shutdown cancellation (§2)?
+- [ ] Pools sized with a stated rationale, not defaults-by-accident (§3)? CPU
+      pools ≈ cores; blocking-I/O pools capped with a semaphore in front, never
+      an unbounded cached pool; async fan-out never `gather` over all items.
+- [ ] Shared mutable state (§2): could it be owned by one task + mailbox instead of
       a lock? (Not mandatory, but flag invariant-spanning state guarded by
       multiple separate locks.)

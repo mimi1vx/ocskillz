@@ -4,7 +4,7 @@ asyncio's failure modes are silent: lost exceptions, garbage-collected tasks, a 
 that "works" until production load. The cure is structured concurrency plus a hard ban on
 synchronous work inside coroutines.
 
-Cross-runtime design and the audit bug catalog live in `sota-async-concurrency`.
+The cross-runtime model — structured concurrency, cancellation and timeouts, backpressure, the race and deadlock catalogue — is [`sota-async-concurrency`](../../sota-async-concurrency/SKILL.md); this file is the Python half.
 
 ## 1. TaskGroup is the default; gather is legacy
 
@@ -23,7 +23,7 @@ results = await asyncio.gather(*coros)
 
 - New code uses `asyncio.TaskGroup` (3.11+). `gather` survives only for "collect results
   including failures" reporting — and then every element MUST be isinstance-checked.
-- Handle TaskGroup failures with `except*` (exception groups, see rules/03 §10).
+- Handle TaskGroup failures with `except*` (exception groups, see [rules/03](03-idioms-pitfalls.md) §10).
 - A coroutine should not outlive the scope that created it. If you can't say which `async with`
   owns a task, the design is wrong.
 
@@ -35,7 +35,8 @@ The event loop holds only **weak** references to tasks:
 # Bad — task may be garbage-collected mid-flight; exceptions vanish
 asyncio.create_task(send_email(user))
 
-# Acceptable when truly detached work is required — keep a strong ref + done callback
+# Acceptable only when truly detached (say why in a comment): strong ref + done callback,
+# and cancel + await `_background` at shutdown (sota-async-concurrency rules/01 §2)
 _background: set[asyncio.Task[None]] = set()
 
 def _reap(t: asyncio.Task[None]) -> None:
@@ -159,7 +160,7 @@ async with aclosing(stream_rows()) as rows:
 - **Forgotten `await`:** `client.get(url)` returns an un-awaited coroutine that never runs;
   the only symptom may be a `RuntimeWarning: coroutine ... was never awaited` on stderr.
   Strict type checking flags this (`Coroutine` where `Response` expected) — another reason
-  rules/01 mandates a checker. Enable `-W error::RuntimeWarning` in tests.
+  [rules/01](01-tooling-project-setup.md) mandates a checker. Enable `-W error::RuntimeWarning` in tests.
 - **`async def` that never awaits** — either it shouldn't be async (caller pays scheduling
   cost, pretends concurrency) or it's missing the await.
 - **Blocking ORM in async views — and the two frameworks fail *differently*:**
@@ -170,7 +171,7 @@ async with aclosing(stream_rows()) as rows:
   2026-09-16). So "works in dev, dies in prod" is the wrong symptom to hunt for in Django —
   hunt for the exception, or for the env var that disabled the guard. A sync SQLAlchemy
   `Session` on a FastAPI async path **does** block silently, because nothing is watching.
-  Django: `await Model.objects.aget(...)` / `sync_to_async`; FastAPI: see rules/07.
+  Django: `await Model.objects.aget(...)` / `sync_to_async`; FastAPI: see [rules/07](07-frameworks-testing.md).
 - **Lock-free check-then-act across awaits:** state can change at every `await`. Guard
   multi-step invariants with `asyncio.Lock`, or design single-writer.
 - **`time.monotonic` vs loop time** for timing inside coroutines; never `time.time()` deltas.
@@ -243,42 +244,55 @@ async def pipeline(items: AsyncIterator[Item]) -> None:
 
 ## Audit checklist
 
-- [ ] **Ruff async rules first — blocking calls, sync sleep, etc.** —
+- [ ] **Ruff async rules first — blocking calls, sync sleep, etc.** (§3) —
       `uvx ruff check --select ASYNC --statistics .`
-- [ ] **Blocking calls inside async defs [HIGH in servers]** —
+- [ ] **Blocking calls inside async defs (§3) [HIGH in servers]** —
       `grep -rn "time\.sleep" --include="*.py" src/` (cross-check: inside async def?);
       `grep -rn "requests\.\(get\|post\|put\|delete\|Session\)" --include="*.py" src/` ;
       `grep -rn "subprocess\.\(run\|check_output\|call\)" --include="*.py" src/` (in async
       modules?)
-- [ ] **Fire-and-forget tasks [MEDIUM-HIGH]** —
+- [ ] **Django async-safety guard disabled (§7) [HIGH on a production path]** —
+      `grep -rn 'DJANGO_ALLOW_ASYNC_UNSAFE' .` (settings, CI, Dockerfiles, env files) plus the
+      deployed environment's variables; any hit turns `SynchronousOnlyOperation` into a silent
+      block, which Django's docs warn risks data loss
+- [ ] **Fire-and-forget tasks (§2) [MEDIUM-HIGH]** —
       `grep -rn "asyncio.create_task" --include="*.py" src/` (is the return value kept +
       callback added?); `grep -rn "ensure_future" --include="*.py" src/` (legacy spelling, same
       issue)
-- [ ] **gather usage [review each]** — `grep -rn "asyncio.gather" --include="*.py" src/` ;
+- [ ] **gather usage (§1) [review each]** — `grep -rn "asyncio.gather" --include="*.py" src/` ;
       `grep -rn "return_exceptions=True" --include="*.py" src/` (are results isinstance-checked
       after?)
-- [ ] **Swallowed cancellation [HIGH]** —
+- [ ] **Swallowed cancellation (§4) [HIGH]** —
       `grep -rn -A3 "except asyncio.CancelledError" --include="*.py" src/ | grep -L raise` ;
       `grep -rn "except BaseException" --include="*.py" src/`
-- [ ] **Timeouts** — `grep -rn "asyncio.timeout\|wait_for" --include="*.py" src/ | wc -l` (zero
+- [ ] **Timeouts** (§4, §6) — `grep -rn "asyncio.timeout\|wait_for" --include="*.py" src/ | wc -l` (zero
       in a network service = finding); `grep -rn "AsyncClient()" --include="*.py" src/`
       (per-request client construction? [MEDIUM])
-- [ ] **Loop-bound objects at import time [MEDIUM]** —
+- [ ] **Loop-bound objects at import time [MEDIUM]** (§6) —
       `grep -rn "^[a-zA-Z_]* = asyncio.\(Queue\|Lock\|Event\)" --include="*.py" src/` ;
       `grep -rn "get_event_loop" --include="*.py" src/` (legacy API [LOW-MEDIUM])
-- [ ] **Async generators holding resources without aclosing** —
-      `grep -rln "async def.*->.*AsyncIterator\|AsyncGenerator" --include="*.py" src/` ;
-      `grep -rn "aclosing" --include="*.py" src/` (compare counts)
-- [ ] **Forgotten awaits — runtime + type checker** —
-      `grep -rn "asyncio_mode" pyproject.toml setup.cfg 2>/dev/null` ;
+- [ ] **Async generators holding resources without aclosing (§5)** —
+      `grep -rlE 'AsyncIterator|AsyncGenerator' --include='*.py' src/ | xargs -r grep -L 'aclosing'`
+      (each file listed declares an async generator and never uses `aclosing`; a consumer in
+      another file may still close it, so read the call sites)
+- [ ] **Forgotten awaits — runtime + type checker; async test setup (§10)** —
+      `grep -rqsE 'asyncio[_-]mode[[:space:]]*=[[:space:]]*.?auto|anyio' --include=pyproject.toml --include=setup.cfg --include=pytest.ini --include=tox.ini --exclude-dir=.venv . || grep -rlE '^[[:space:]]*async def test' --include='*.py' --exclude-dir=.venv .`
+      (each file listed holds async tests while no config sets `asyncio_mode = "auto"` or
+      names anyio [LOW]) ;
+      `grep -rnE 'await[[:space:]]+asyncio\.sleep\([[:space:]]*([1-9]|0?\.[0-9]*[1-9])' --include='test_*.py' --include='*_test.py' --include='conftest.py' --exclude-dir=.venv .`
+      (a real-time sleep in a test: inject a clock [MEDIUM]) ;
+      `grep -rlE '\.cancel\(\)' --include='test_*.py' --include='*_test.py' --exclude-dir=.venv . | grep -q . || echo "no test cancels a task"` [LOW] ;
       `python -W error::RuntimeWarning -m pytest -x 2>&1 | grep "never awaited"`
+- [ ] **anyio and asyncio structured APIs mixed in one codebase (§8) [LOW]** —
+      `a=$(grep -rlE '^[[:space:]]*(import anyio|from anyio)' --include='*.py' --exclude-dir=.venv . | wc -l); b=$(grep -rlE 'asyncio\.(TaskGroup|timeout)\(' --include='*.py' --exclude-dir=.venv . | wc -l); [ "$a" -gt 0 ] && [ "$b" -gt 0 ] && echo "both idioms: $a anyio files, $b asyncio files"`
+      (pick one idiom)
 - [ ] **Unbounded queue or fan-out (§9) — MEDIUM, HIGH when the producer is user traffic** —
       `grep -rnE 'asyncio\.Queue(\[[^]]*\])?\((maxsize[[:space:]]*=[[:space:]]*0)?\)' --include='*.py' src/`
       (measured on 3.14: `asyncio.Queue().maxsize` is `0`, and 10,000 `put_nowait` calls never
       made it `full()`) ;
-      `grep -rlE 'create_task\(|TaskGroup\(' --include='*.py' src/` against
-      `grep -rlE 'Semaphore\(' --include='*.py' src/` (a file that spawns tasks and holds no
-      semaphore: read each loop that spawns one task per item)
+      `grep -rlE 'create_task\(|TaskGroup\(' --include='*.py' src/ | xargs -r grep -LE 'Semaphore\('`
+      (each file listed spawns tasks and holds no semaphore: read each loop that spawns one task
+      per item)
 - [ ] **--- Request-scoped ambient state: ContextVar / thread-local not reset (§6) --- [HIGH
       where it carries a tenant or user id; MEDIUM for log context]** —
       `grep -rnE 'threading\.local\(|^[[:space:]]*[[:alnum:]_.]+\.set\([^)]|bind_contextvars\(' --include='*.py' src/`

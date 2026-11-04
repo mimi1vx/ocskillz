@@ -4,7 +4,7 @@ description: >-
   State-of-the-art LLM application engineering rules for BUILDING and AUDITING LLM-powered features. Use whenever building, modifying, or reviewing anything that calls a language model — chat features, RAG pipelines, agents and tool use, structured extraction, classification, summarization, embeddings/vector search, evals and regression gates, prompt or context engineering, model selection/routing, fine-tuning decisions, or LLM cost/latency/observability work. Trigger keywords: LLM, AI feature, prompt, system prompt, context window, RAG, retrieval, embeddings, vector DB, rerank, chunking, agent, tool use, MCP, multi-agent, evals, golden set, LLM-as-judge, fine-tuning, model selection, routing, structured output, JSON schema, prompt caching, token budget, counting tokens, instruction file size, tokenizer, hallucination, grounding. Covers build-quality only — for prompt-injection/agent-security use sota-code-security rules/08 and sota-sandboxing rules/05.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@a02c19971ad39254846890f87300a46b19e3e82e
+  source: martinholovsky/SOTA-skills@4c4837e3f891b4194623e467fec6294df4ff8d0a
   adapted-for: opencode
 ---
 
@@ -34,9 +34,9 @@ stop (budgets), and you don't deploy what you can't trace (observability).
 
 **Scope boundary:** this skill owns build quality. Prompt injection, the
 lethal trifecta, tool-call authorization, and model-output-as-untrusted-data
-live in `sota-code-security` rules/08; agent sandboxing/isolation lives in
-`sota-sandboxing` rules/05; PII/regulatory handling lives in
-`sota-privacy-compliance`. Reference them; don't re-derive them.
+live in [`sota-code-security` rules/08](../sota-code-security/rules/08-llm-ai-security.md); agent sandboxing/isolation lives in
+[`sota-sandboxing` rules/05](../sota-sandboxing/rules/05-ai-agent-sandboxing.md); PII/regulatory handling lives in
+[`sota-privacy-compliance`](../sota-privacy-compliance/SKILL.md). Reference them; don't re-derive them.
 
 **Freshness rule:** model names, prices, context limits, and spec revisions in
 these files were verified June 2026 and rot fast. When a decision hinges on a
@@ -47,17 +47,17 @@ version-agnostically: model IDs and parameters in config, never inline.
 ## BUILD mode — eval-first by default
 
 1. **Write the eval before the feature.** Before any prompt or pipeline work,
-   produce a 20+ case golden set with graded criteria (rules/01). A feature
+   produce a 20+ case golden set with graded criteria ([rules/01](rules/01-evals.md)). A feature
    without an eval is a prototype; treat requests to "just add an LLM call"
    as a request for an eval + a call.
 2. **Start at the simplest tier.** Single call → structured output → workflow
    (code-orchestrated, deterministic) → agent. Escalate only when the eval
-   shows the simpler tier failing (rules/04 has the decision gates).
+   shows the simpler tier failing ([rules/04](rules/04-agents-tools.md) has the decision gates).
 3. **Defaults, not options.** Schema-constrained output with validation +
-   bounded repair (rules/02); hybrid retrieval with a golden retrieval set
-   when RAG is needed (rules/03); stop conditions + token/cost budgets on
-   every loop (rules/04); retries with jittered backoff, model IDs in config,
-   per-call tracing (rules/05).
+   bounded repair ([rules/02](rules/02-prompt-context-engineering.md)); hybrid retrieval with a golden retrieval set
+   when RAG is needed ([rules/03](rules/03-rag-retrieval.md)); stop conditions + token/cost budgets on
+   every loop ([rules/04](rules/04-agents-tools.md)); retries with jittered backoff, model IDs in config,
+   per-call tracing ([rules/05](rules/05-production-engineering.md)).
 4. **Structural over disciplinary.** Prefer designs where the bad variant
    can't be written: typed prompt templates instead of f-string soup,
    versioned prompts in repo, a single gateway module for all model calls
@@ -70,6 +70,8 @@ version-agnostically: model IDs and parameters in config, never inline.
 
 ## AUDIT mode — hunting quality violations
 
+**Coverage:** every `rules/` file's Audit checklist applies in AUDIT mode. Mark one *not applicable* only with its reason in the report — never skip a file because the thing it checks for is absent, since that absence may be the finding.
+
 Process:
 
 1. **Map the LLM surface**: every call site (grep `messages.create`,
@@ -79,7 +81,8 @@ Process:
    absence), and the config/env that selects models.
 2. **Sweep by rules file, prioritized**: 01 (evals — absence is the #1
    systemic finding), 04 (unbounded agents), 05 (cost/reliability), 02
-   (prompt/output hygiene), 03 (RAG), 06 (data lifecycle).
+   (prompt/output hygiene), 03 (RAG), 06 (data lifecycle), 07 (any harness
+   that scores generated code).
 3. **Check the negatives.** Missing controls are findings: no eval suite, no
    regression gate in CI, no `max_tokens`/iteration cap, no timeout, no
    fallback, no trace of prompt/completion/tokens, no schema on extraction,
@@ -129,6 +132,7 @@ systemic themes — "no evals anywhere" is one systemic finding, not twenty).
 | [rules/04-agents-tools.md](rules/04-agents-tools.md) | Workflow vs agent decision, tool design (descriptions, scope, idempotency, model-actionable errors), context management across turns (compaction, memory), MCP integration & spec status, multi-agent costs, human-in-the-loop gates, stopping conditions & budgets | ...anything with tool calls or loops, designing tool schemas, MCP servers/clients, multi-agent proposals, runaway-cost or stuck-agent debugging |
 | [rules/05-production-engineering.md](rules/05-production-engineering.md) | Model selection & routing, capability tiers, fallbacks, provider abstraction caution, latency (streaming, parallel calls, caching), cost engineering (budgets, batch APIs, right-sizing), 429/529 + jittered backoff, LLM observability (trace every call), graceful degradation and an inference kill switch, versioning & rollout (shadow, A/B, pinning vs auto-upgrade), generated-media provenance (C2PA) and likeness consent | ...shipping to production, picking models, cost/latency complaints, retry/fallback design, rollout of a new model or prompt, building dashboards |
 | [rules/06-data-lifecycle.md](rules/06-data-lifecycle.md) | Fine-tune vs prompt vs RAG decision, dataset curation hygiene, training-side safety (content filtering, reward hacking, feedback poisoning, label logs), feedback loops (thumbs → eval sets), embedding/index migration, PII in prompts/logs, provider data-retention settings | ...someone proposes fine-tuning, designing feedback capture, migrating embedding models, setting up logging/retention for an LLM app |
+| [rules/07-code-generation-evals.md](rules/07-code-generation-evals.md) | Scoring generated code: the harness as a target (candidate code attacks the grader — a nine-line `conftest.py`), unbiased pass@k from n ≥ k samples, visible vs held-out suites and suite validation, oracles and bounded equivalence checks, reward hacking of the grader as a hard zero, correct-and-unexploitable security scoring, dependency and API resolution before the run, deterministic constraint checks over judges, mergeability and harness effects in agentic runs, contamination controls, paired intervals and no weighted composite | ...building or auditing a harness that scores code from a model or agent, comparing models/prompts/scaffolds on coding tasks, reading a coding-benchmark claim |
 
 ## Top-10 non-negotiables
 
@@ -136,28 +140,28 @@ Violations are findings regardless of context; in BUILD mode they are never
 acceptable shortcuts:
 
 1. **No LLM feature ships without an eval.** Minimum: a versioned golden set
-   with graded criteria, runnable by one command, gating CI. (rules/01)
+   with graded criteria, runnable by one command, gating CI. ([rules/01](rules/01-evals.md))
 2. **Every prompt/model/parameter change runs the evals before merge.**
-   "It looked better on three examples" is not evidence. (rules/01)
+   "It looked better on three examples" is not evidence. ([rules/01](rules/01-evals.md))
 3. **LLM-as-judge is itself validated** against human labels (agreement
-   measured, bias checked) before its scores are trusted. (rules/01)
+   measured, bias checked) before its scores are trusted. ([rules/01](rules/01-evals.md))
 4. **Machine-consumed output is schema-constrained** (structured output API /
    tool call), validated, with a bounded repair-or-reject path — never
-   regex/parse-and-pray on free text. (rules/02)
+   regex/parse-and-pray on free text. ([rules/02](rules/02-prompt-context-engineering.md))
 5. **User/retrieved content is data, not instructions**: typed template slots,
    delimited and labeled as untrusted; never f-string-concatenated into the
-   instruction stream. (rules/02 + sota-code-security rules/08)
+   instruction stream. ([rules/02](rules/02-prompt-context-engineering.md) + [sota-code-security rules/08](../sota-code-security/rules/08-llm-ai-security.md))
 6. **Every agent loop has explicit stopping conditions**: max iterations, max
    tokens/cost, wall-clock timeout — and human gates on consequential
-   actions. (rules/04)
+   actions. ([rules/04](rules/04-agents-tools.md))
 7. **RAG answers are grounded or refused**: retrieval quality measured
    (golden retrieval set, recall@k), answers cite sources, and "not in the
-   corpus" is an honored outcome. (rules/03)
+   corpus" is an honored outcome. ([rules/03](rules/03-rag-retrieval.md))
 8. **Every model call is traced**: prompt/completion (with redaction), token
    counts, latency, model ID, cache hits, cost — linked to eval/run IDs.
-   (rules/05)
+   ([rules/05](rules/05-production-engineering.md))
 9. **Production model versions are pinned and rolled out deliberately**
-   (shadow or A/B with eval gates) — never silent auto-upgrade. (rules/05)
+   (shadow or A/B with eval gates) — never silent auto-upgrade. ([rules/05](rules/05-production-engineering.md))
 10. **429/529/timeout handling is explicit**: jittered exponential backoff
-    honoring `retry-after`, idempotency on retried writes, a degradation
-    path when the provider is down. (rules/05)
+    honoring `retry-after` inside a retry budget, idempotency on retried writes, a degradation
+    path when the provider is down. ([rules/05](rules/05-production-engineering.md))

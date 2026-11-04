@@ -39,8 +39,11 @@ async fn load(path: PathBuf) -> Result<Config> {
   `tokio_unstable` task dumps; in review, grep for sync APIs inside `async fn`
   (checklist below). A p99 latency cliff under load with idle CPU is the
   classic blocked-worker signature.
-- `block_on` inside an async context panics or deadlocks
-  (`Handle::block_on` on the current runtime, nested `Runtime::block_on`).
+- `block_on` inside an async context panics or deadlocks: tokio's
+  `Handle::block_on` and a nested `Runtime::block_on` panic ("Cannot start a
+  runtime from within a runtime", `tokio/src/runtime/context/runtime.rs`), while
+  `futures::executor::block_on` deadlocks a current-thread runtime and parks a
+  worker otherwise.
   Bridging sync→async from a blocking thread: `Handle::current().block_on`
   from `spawn_blocking` is legal; document why.
 
@@ -150,7 +153,7 @@ impl Drop for InFlightGuard<'_> { fn drop(&mut self) { self.0.dec(); } }
   its tasks.
 
 **Cancelling a `timeout` around a child process does not kill the process.** The
-future is dropped, the OS process is not — rules/08 §1 (R9.5) has the measured
+future is dropped, the OS process is not — [rules/08](08-external-programs.md) §1 (R9.5) has the measured
 behaviour and `.kill_on_drop(true)`. A spawned process is owned state exactly like a
 spawned task, and cancellation is where that ownership is usually dropped.
 
@@ -255,10 +258,14 @@ The canonical service shape:
 let token = CancellationToken::new();
 let tracker = TaskTracker::new();
 
-// signal handling
+// signal handling: SIGTERM is what an orchestrator sends, and ctrl_c() never sees it (Unix)
 let t = token.clone();
+let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 tokio::spawn(async move {
-    tokio::signal::ctrl_c().await.expect("ctrl_c handler installed");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = term.recv() => {}
+    }
     t.cancel();
 });
 
@@ -281,6 +288,11 @@ tokio::select! {
 }
 ```
 
+- **Trap SIGTERM, not only Ctrl-C.** `tokio::signal::ctrl_c()` completes on a Ctrl-C
+  notification only. Measured 2026-10-31 (tokio 1.54.1, macOS): a service awaiting just
+  `ctrl_c()` exited with status 143 on SIGTERM and never ran its drain; with the `select!`
+  above it drained on both signals. This example once shipped the `ctrl_c()`-only form.
+  Other runtimes' primitives: [`sota-async-concurrency` rules/05](../../sota-async-concurrency/rules/05-cancellation-timeouts-shutdown.md) §4.
 - Order: stop intake → signal cancellation → drain with deadline → flush
   (logs, metrics, WAL) → exit. Dropping the `Runtime` mid-flight cancels
   everything abruptly — drain first.
@@ -290,17 +302,20 @@ tokio::select! {
 
 ## Audit checklist
 
-- [ ] Blocking in async: `rg -t rust 'async fn' -A30 | rg 'std::fs::|std::thread::sleep|reqwest::blocking|\.lock\(\)\s*$'`
+- [ ] Blocking in async (§1): `rg -t rust 'async fn' -A30 | rg 'std::fs::|std::thread::sleep|reqwest::blocking|\.lock\(\)\s*$'`
       — more reliably, grep each: `rg 'thread::sleep|std::fs::(read|write|File)|blocking::' -t rust`
       and check enclosing fn for `async`. High severity in request paths.
-- [ ] `rg 'block_on' -t rust` — any call reachable from async context =
-      Critical (deadlock/panic).
-- [ ] `rg 'unbounded_channel|UnboundedSender' -t rust` — each needs a written
-      backpressure argument; attacker-fed unbounded channel = High (DoS).
-- [ ] `rg 'tokio::spawn' -t rust` — orphaned handles (result never joined, no
-      JoinSet/TaskTracker, no error logging in task) = Medium; panic
-      observability gap.
-- [ ] `select!` loops: any branch future recreated per-iteration that buffers
+- [ ] `rg 'block_on' -t rust` (§1) — any call reachable from async context =
+      HIGH, CRITICAL when it waits on work scheduled on the same runtime
+      (self-deadlock) — the cross-runtime scale is [`sota-async-concurrency` rules/07](../../sota-async-concurrency/rules/07-audit-bug-catalog.md) §5.
+- [ ] `rg 'unbounded_channel|UnboundedSender' -t rust` (§6) — each needs a written
+      backpressure argument; attacker-fed unbounded channel = High (DoS). `broadcast`
+      receivers that never handle `RecvError::Lagged` = Low:
+      `grep -rlE 'broadcast::' --include='*.rs' . | while IFS= read -r f; do grep -q 'Lagged' "$f" || echo "$f"; done`.
+- [ ] `rg 'tokio::spawn' -t rust` (§4) — orphaned handles (result never joined, no
+      JoinSet/TaskTracker, no error logging in task) = HIGH: a panic or error in
+      the task is silently lost ([`sota-async-concurrency` rules/07](../../sota-async-concurrency/rules/07-audit-bug-catalog.md) §1).
+- [ ] `select!` loops (§3): any branch future recreated per-iteration that buffers
       internally (reads, `write_all`, custom combinators) → cancellation data
       loss = High. Check each `select!` arm against the cancel-safety table above —
       and **rate the two unsafe rows differently**: partial-I/O (`read_exact`,
@@ -309,23 +324,28 @@ tokio::select! {
       its place in the queue = starvation risk, **not** data loss, so reporting it
       as corruption is a false finding. `Notified` and `Mutex::lock` are the two most
       often assumed safe; both are on Tokio's unsafe list.
-- [ ] Locks: clippy `await_holding_lock`, `await_holding_refcell_ref`;
+- [ ] Locks (§5): clippy `await_holding_lock`, `await_holding_refcell_ref`;
       `rg 'tokio::sync::Mutex' -t rust` — verify each actually needs
-      hold-across-await, else downgrade to std/parking_lot.
-- [ ] `rg '\.abort\(\)' -t rust` — aborted tasks: is every shared invariant
+      hold-across-await, else downgrade to std/parking_lot. A lock held across
+      `.await` = HIGH, CRITICAL when deadlock-capable ([`sota-async-concurrency` rules/07](../../sota-async-concurrency/rules/07-audit-bug-catalog.md) §4).
+- [ ] `rg '\.abort\(\)' -t rust` (§3) — aborted tasks: is every shared invariant
       abort-safe (drop guards present)?
-- [ ] Fan-out: `rg 'buffer_unordered|buffered\(' -t rust` — bound derived from
+- [ ] Fan-out (§4): `rg 'buffer_unordered|buffered\(' -t rust` — bound derived from
       config, not unbounded or request-controlled; loops spawning per item of
-      untrusted-size collections.
+      untrusted-size collections = HIGH ([`sota-async-concurrency` rules/07](../../sota-async-concurrency/rules/07-audit-bug-catalog.md) §8).
 - [ ] **Request-scoped state in a thread-local (§4). High if it holds a tenant, user
       or permission, else Low.** Run
       `rg -n -t rust 'thread_local!|\b[A-Z][A-Z0-9_]*\.(set|replace|with_borrow_mut)\(' .`.
       Each hit set inside a handler or task leaks into the next request on that worker.
       Use `task_local!` + `.scope(..)` or an explicit argument. Check each
       `task_local!` read inside a `tokio::spawn` child, which sees none.
-- [ ] Shutdown path exists: signal handler, drain deadline, `tracker.close()`
-      before `wait()` (close-after-wait hangs forever).
-- [ ] `rg 'async fn' -t rust` + `clippy::unused_async`; public async traits:
-      dyn-compat and Send bounds checked for downstream spawnability.
-- [ ] CI lints: `clippy::await_holding_lock`, `clippy::unused_async`,
+- [ ] Shutdown path exists (§8): a SIGTERM handler (`ctrl_c()` alone misses it, Medium), drain deadline, `tracker.close()`
+      before `wait()` (close-after-wait hangs forever); long-running handlers observe
+      `token.cancelled()` or are cancel-safe end to end; a test exercises shutdown under load.
+- [ ] `rg 'async fn' -t rust` + `clippy::unused_async` (§7); public async traits:
+      dyn-compat and Send bounds checked for downstream spawnability (§2): a library whose
+      futures have no `assert_send`-style compile test can lose `Send` silently = Low. Tokio
+      types in a non-tokio-specific library's public API (§7):
+      `grep -rnE 'pub (async )?fn [^{;]*tokio::' --include='*.rs' .` = Low.
+- [ ] CI lints (§5, §7): `clippy::await_holding_lock`, `clippy::unused_async`,
       `clippy::large_futures` (oversized futures → stack/box them).

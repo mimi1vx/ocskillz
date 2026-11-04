@@ -4,6 +4,8 @@ Order of operations: **measure, fix the algorithm, fix the data structure, vecto
 to native, only then micro-optimize.** Every optimization PR cites a profile; "should be
 faster" without numbers is rejected.
 
+The language-neutral method — latency budgets, profiling discipline, regression gates — is `deep-performance-audit`; this file is the Python toolchain half.
+
 ## 1. Profile first — tool selection
 
 | Question | Tool |
@@ -15,8 +17,12 @@ faster" without numbers is rejected.
 | Micro-benchmarks of one expression | `python -m timeit`, `pytest-benchmark`, `pyperf` (statistically sound) |
 
 Rules:
-- py-spy is safe on production (samples out-of-process; add `--native` for C extensions,
-  `--gil` to see GIL contention). cProfile distorts hot loops — fine for *finding* hotspots,
+- py-spy is safe on production *for the workload* (samples out-of-process; add `--native` for
+  C extensions, `--gil` to see GIL contention) — but it reads the target's memory
+  (`py-spy dump --locals` prints local variables, secrets included) and needs root or
+  `SYS_PTRACE`, which Kubernetes drops by default (py-spy README, read 2026-10-26). Bring it in
+  for the session — an ephemeral debug container, a just-in-time grant — never ship it in the
+  image or grant `SYS_PTRACE` standing. cProfile distorts hot loops — fine for *finding* hotspots,
   not for before/after numbers; use pyperf/pytest-benchmark for comparisons.
 - Profile realistic data sizes. O(n²) is invisible at n=100.
 - Keep a benchmark in the repo for any code with a perf SLA (`pytest-benchmark` with
@@ -134,7 +140,7 @@ Caveats that bite:
 | Blocking-library I/O, moderate fan-out | **ThreadPoolExecutor** | GIL released during I/O; simplest retrofit |
 | CPU-bound pure Python | **ProcessPoolExecutor** / multiprocessing | GIL serializes threads; processes get real parallelism |
 | CPU-bound numpy/polars | often **none needed** | native code releases the GIL / is internally parallel |
-| CPU-bound on a free-threaded build (officially supported since 3.14, PEP 779) | threads become viable | measure first; see rules/01 §8 |
+| CPU-bound on a free-threaded build (officially supported since 3.14, PEP 779) | threads become viable | measure first; see [rules/01](01-tooling-project-setup.md) §8 |
 
 - GIL reality (default build): threads never speed up pure-Python CPU work; they *do* help
   I/O and GIL-releasing extensions. Don't "add threads" to a CPU loop and call it done.
@@ -146,7 +152,7 @@ Caveats that bite:
 - Subinterpreters shipped in 3.14 (PEP 734): `concurrent.interpreters` +
   `concurrent.futures.InterpreterPoolExecutor` — share a process, isolated GILs. A real
   middle ground now, but ecosystem support is young; benchmark before betting on it.
-- Mixing: asyncio app with CPU spikes → `loop.run_in_executor(process_pool, ...)` (rules/04 §3).
+- Mixing: asyncio app with CPU spikes → `loop.run_in_executor(process_pool, ...)` ([rules/04](04-async.md) §3).
 
 ## 6. Startup latency: lazy imports
 
@@ -167,7 +173,7 @@ def report_cmd(path: str) -> None:
 
 - Measure with `python -X importtime -c "import mypkg" 2>&1 | sort -t'|' -k2 -rn | head` or
   `tuna` for visualization.
-- Combine with `TYPE_CHECKING` imports for annotation-only deps (rules/02 §10).
+- Combine with `TYPE_CHECKING` imports for annotation-only deps ([rules/02](02-typing-correctness.md) §10).
 - PEP 810 explicit lazy imports (`lazy import x`, `-X lazy_imports`) are added in 3.15;
   until your floor is 3.15, function-local imports are the idiom.
   Don't lazy-import inside hot loops (lookup cost per call is small but real —
@@ -175,7 +181,7 @@ def report_cmd(path: str) -> None:
 
 ## 7. Memory
 
-- `slots=True` dataclasses (rules/03 §7) for objects allocated in volume.
+- `slots=True` dataclasses ([rules/03](03-idioms-pitfalls.md) §7) for objects allocated in volume.
 - Generators/streaming over materializing: read files with iteration, not `.read()` of
   multi-GB files; `json` → `ijson`/msgspec streaming for huge payloads.
 - `sys.intern()` for millions of repeated strings (parser tokens, column values).
@@ -187,9 +193,9 @@ def report_cmd(path: str) -> None:
 
 CPU profiles often blame the interpreter when the real cost is chatty I/O or slow codecs:
 
-- **Batch the round trips.** One query returning 1,000 rows beats 1,000 queries (rules/07
+- **Batch the round trips.** One query returning 1,000 rows beats 1,000 queries ([rules/07](07-frameworks-testing.md)
   N+1); one `executemany`/`COPY`/`bulk_create` beats row-at-a-time inserts; pipeline redis
-  commands; batch S3/HTTP calls behind a concurrency-bounded TaskGroup (rules/04 §9).
+  commands; batch S3/HTTP calls behind a concurrency-bounded TaskGroup ([rules/04](04-async.md) §9).
 - **JSON:** stdlib `json` is the slow path. For hot serialization use `msgspec` (fastest,
   typed decode in one step) or `orjson`. Typed `msgspec.Struct` decode replaces
   json.loads + pydantic validation at a fraction of the cost when the schema is fixed —
@@ -207,34 +213,52 @@ CPU profiles often blame the interpreter when the real cost is chatty I/O or slo
 ## 9. Don'ts
 
 - Don't micro-optimize cold code; don't trade clarity for unmeasured wins.
-- Don't catch the "optimization" of removing logging — fix lazy formatting instead (rules/03 §11).
+- Don't catch the "optimization" of removing logging — fix lazy formatting instead ([rules/03](03-idioms-pitfalls.md) §11).
 - Don't hand-roll C extensions before trying polars/numpy/numba/Rust-via-pyo3 — maintenance
   cost dwarfs the speedup.
 - Don't benchmark with `time.time()` — `time.perf_counter()` or pyperf.
 
+**Connection pool.** SQLAlchemy's `QueuePool` defaults to `pool_size` 5 plus `max_overflow` 10 and a 30 s `pool_timeout`, but `pool_recycle` -1 (connections are never recycled) and `pool_pre_ping` False. Other drivers' defaults belong with database guidance.
+
 ## Audit checklist
 
-- [ ] **Ruff perf rules** — `uvx ruff check --select PERF,C4,SIM --statistics .`
-- [ ] **String building & containers [hot-loop suspects]** —
+- [ ] **String building & containers (§2) [hot-loop suspects]** —
       `grep -rn "+= .*str(\|+= f\"\|+= \"" --include="*.py" src/` (concat in loops? check
       context); `grep -rn "\.pop(0)\|insert(0," --include="*.py" src/` (O(n) deque ops);
       `grep -rn "in \[" --include="*.py" src/ | head` (list membership in conditions)
-- [ ] **re.compile / invariant work inside loops [manual: confirm loop context]** —
+- [ ] **re.compile / invariant work inside loops [manual: confirm loop context]** (§2) —
       `grep -rn "re.compile\|re.match\|re.search" --include="*.py" src/ | head -30`
 - [ ] **DataFrame antipatterns [MEDIUM in data code]** —
       `grep -rn "iterrows\|itertuples\|\.apply(lambda" --include="*.py" src/` ;
-      `grep -rn "for .* in df\[" --include="*.py" src/`
-- [ ] **Cache hygiene** — `grep -rn "@cache$\|@functools.cache" --include="*.py" src/`
+      `grep -rn "for .* in df\[" --include="*.py" src/` ; `grep -rnE '(np|numpy)\.vectorize\(' --include='*.py' --exclude-dir=.venv .`
+      (not faster than a loop, §3)
+- [ ] **Cache hygiene (§4)** — `grep -rnE '@(functools\.)?cache[[:space:]]*$' --include="*.py" src/`
       (unbounded — user-controlled args? on methods?);
       `grep -rn "@lru_cache" --include="*.py" src/ -A2 | grep "def .*(self"` (instance leak
-      [MEDIUM]); `grep -rn "cache_clear" --include="*.py" tests/ src/` (invalidation/test
-      isolation present?)
-- [ ] **Concurrency model sanity** — `grep -rn "ThreadPoolExecutor" --include="*.py" src/` (used
+      [MEDIUM]); `grep -rq "cache_clear" --include="*.py" tests/ src/ || echo "no cache_clear in tests/ or src/"`
+      (the message = no invalidation or test isolation anywhere)
+- [ ] **Concurrency model sanity (§5)** — `grep -rn "ThreadPoolExecutor" --include="*.py" src/` (used
       for CPU-bound work? [MEDIUM]);
-      `grep -rn "multiprocessing\|ProcessPoolExecutor" --include="*.py" src/ | head` ;
-      `grep -rln "if __name__" $(grep -rln ProcessPoolExecutor --include="*.py" src/ 2>/dev/null)`
-- [ ] **Import-time cost (CLIs/lambdas)** —
+      `grep -rn "multiprocessing\|ProcessPoolExecutor" --include="*.py" src/ | head` (lists
+      process-pool use; each hit is read for CPU-bound work, not a finding) ;
+      `grep -rl ProcessPoolExecutor --include='*.py' src/ | xargs -r grep -L '__name__'`
+      (each file listed starts worker processes with no `__main__` guard)
+- [ ] **Import-time cost (CLIs/lambdas) (§6)** —
       `python -X importtime -c "import mypkg" 2>&1 | sort -t'|' -k2 -rn | head -15` ;
-      `grep -rn "^import pandas\|^import numpy\|^import torch" --include="*.py" src/*cli* src/*/cli* 2>/dev/null`
-- [ ] **Benchmarks exist for perf-critical code?** —
-      `grep -rln "pytest-benchmark\|pyperf" pyproject.toml tests/ 2>/dev/null`
+      `grep -rnE '^import (pandas|numpy|torch)' --include='*.py' src/ | grep -E '^[^:]*cli[^:]*:'`
+      (a module-level heavy import in a file or directory named for the CLI)
+- [ ] **Memory: whole inputs materialized, caches retaining frames (§7) [LOW; MEDIUM where
+      inputs reach GBs]** —
+      `grep -rnE '\.read\(\)\.splitlines\(\)|\.readlines\(\)' --include='*.py' --exclude-dir=.venv .` (iterate
+      the file instead) ;
+      `grep -rn -A3 -E '@(functools\.)?(cache|lru_cache)' --include='*.py' --exclude-dir=.venv . | grep -E 'DataFrame|ndarray'`
+      (an `lru_cache` on a function taking a DataFrame keeps it alive)
+- [ ] **A round trip or an open/close per loop iteration (§8) [MEDIUM]** —
+      `grep -rn -A2 -E '^[[:space:]]*for .+:[[:space:]]*$' --include='*.py' --exclude-dir=.venv . | grep -E -- '-[0-9]+-.*(\.(execute|save|insert_one|put_object)\(|[^.A-Za-z_]open\()'`
+      (batch with `executemany`/`COPY`/`bulk_create`, or hoist the file handle) ;
+      `grep -rnE '^[[:space:]]*(import gzip|from gzip import)' --include='*.py' --exclude-dir=.venv .`
+      (gzip on service-to-service payloads where zstd would do [LOW])
+- [ ] **Benchmarks exist for perf-critical code? (§1, §9)** —
+      `grep -rqE 'pytest-benchmark|pyperf' pyproject.toml tests/ || echo "no benchmark harness"` ;
+      `grep -rnE 'time\.time\(\)[[:space:]]*-[[:space:]]*[A-Za-z_]' --include='*.py' --exclude-dir=.venv .`
+      (a wall-clock delta used as a timer: `time.perf_counter()` [LOW])

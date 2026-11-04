@@ -1,6 +1,6 @@
 # 05 — Cancellation, Timeouts & Shutdown Sequencing
 
-## Every await needs a timeout policy
+## 1. Every await needs a timeout policy
 
 An await with no deadline is a promise to wait forever. Networks drop ACKs,
 peers hang half-open, pools exhaust, locks queue — and your task waits
@@ -46,7 +46,7 @@ Deadline design rules:
   use `asyncio.timeout` (which cancels the task); use ctx (the callee must
   honor it — verify it does).
 
-## Cancellation propagation — the mechanisms
+## 2. Cancellation propagation — the mechanisms
 
 | Runtime | Mechanism | Semantics |
 |---|---|---|
@@ -88,7 +88,7 @@ except asyncio.CancelledError:
     raise
 ```
 
-## Cleanup on cancel
+## 3. Cleanup on cancel
 
 Cancellation arrives at the worst time by definition. Guarantees you must
 preserve:
@@ -123,7 +123,7 @@ defer func() {
   requires a kill path wired to cancellation (`process.kill` on abort,
   `ctx`-aware job API).
 
-## Shutdown sequencing
+## 4. Shutdown sequencing
 
 Graceful shutdown is a protocol, not a `kill`. Canonical order:
 
@@ -176,7 +176,28 @@ Ordering pitfalls:
   consumer), closing the channel (Go: `for range` exits), or cancelling the
   getter task.
 
-## Retry interplay
+**The same sequence, per runtime.** Step 1 and steps 2–3 are what differ. Each entry below
+was checked against the runtime's own documentation on 2026-10-31 (the Ruby trap behaviour
+by running it), and nothing in this table sets a timeout for you: steps 3 and 4 still need
+your deadline.
+
+| Runtime | Step 1: trap the signal | Steps 2–3: stop accepting, drain | Detail |
+|---|---|---|---|
+| Go | `signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)` | `srv.Shutdown(ctx)` with a deadline context | [`sota-golang` rules/04](../../sota-golang/rules/04-http-services.md) §3 |
+| Node | `process.on('SIGTERM', …)` | `server.close()`, then `server.closeIdleConnections()` | `sota-typescript` |
+| Python asyncio | `loop.add_signal_handler(signal.SIGTERM, …)` | the skeleton above | — |
+| Rust (tokio) | `tokio::signal::unix::signal(SignalKind::terminate())?`, then `.recv().await`; `tokio::signal::ctrl_c()` is Ctrl-C only, **not** SIGTERM | axum: `axum::serve(listener, app).with_graceful_shutdown(fut)`; your own tasks: `tokio_util`'s `CancellationToken` to tell them, then `TaskTracker::close()` and `wait()`, which returns once the tracker is closed and empty. Wrap the wait in a deadline | [`sota-rust` rules/04](../../sota-rust/rules/04-async-tokio.md) §8 |
+| JVM | `Runtime.getRuntime().addShutdownHook(thread)`: hooks start when the shutdown sequence begins, which includes a signal from the operating system; `Runtime.halt` skips them | Spring Boot: graceful shutdown is on by default for embedded Jetty, Reactor Netty and Tomcat (`server.shutdown=immediate` turns it off); bound each phase with `spring.lifecycle.timeout-per-shutdown-phase` | — |
+| .NET | the generic host's default `ConsoleLifetime` handles SIGINT, SIGQUIT and SIGTERM (since .NET 6; before it, SIGTERM could not be handled gracefully) | `IHostApplicationLifetime.ApplicationStopping` fires while requests may still be in flight; every `BackgroundService.ExecuteAsync(stoppingToken)` must observe its token; `HostOptions.ShutdownTimeout` bounds `StopAsync` | — |
+| PHP (CLI workers) | `pcntl_async_signals(true)` (PHP 7.1+), then `pcntl_signal(SIGTERM, $handler)` | the handler only sets a flag; the worker loop checks it between jobs, finishes the current one and exits | — |
+| Ruby | `Signal.trap("TERM") { … }`. **Inside a trap, `Mutex#synchronize` raises `ThreadError: can't be called from trap context`** (measured, Ruby 4.0.6), so a logger or connection pool that locks fails there: push to a `Queue` and act on a normal thread | Sidekiq: TERM shuts down within the `-t` timeout (default 25 s) and pushes unfinished jobs back to Redis; Puma: on TERM a worker "will attempt to finish then exit" | — |
+| Swift | swift-service-lifecycle: `ServiceGroup(services:gracefulShutdownSignals: [.sigterm], logger:)`, then `try await serviceGroup.run()` | the group triggers a graceful shutdown on each service | — |
+| C/C++ | block the signal with `pthread_sigmask` in the main thread before starting any other (new threads inherit the mask), then read it synchronously with `sigwaitinfo` or, on Linux, `signalfd`. A classic handler may touch only `volatile sig_atomic_t` or lock-free atomics (SEI CERT SIG31-C) and call only async-safe functions (SIG30-C) | run steps 2–6 on an ordinary thread once the signal is read | [rules/02](02-correctness.md) §8 |
+
+**In a container the signal must reach your process at all.** A package-manager launcher as
+PID 1 does not forward it; container-build guidance in the CI and supply-chain controls covers the fix.
+
+## 5. Retry interplay
 
 Cancellation and timeout must beat retry logic: a retry loop that ignores
 ctx turns one cancelled request into N background attempts.
@@ -188,7 +209,7 @@ for attempt := 0; attempt < max; attempt++ {
         return err
     }
     select {
-    case <-time.After(backoff(attempt)):   // jittered
+    case <-time.After(backoff(attempt)):   // jittered; a bounded loop, not a hot one (sota-golang rules/03 §2)
     case <-ctx.Done():
         return ctx.Err()
     }
@@ -203,24 +224,30 @@ extend it.
 
 - [ ] Sweep external awaits (HTTP, DB, queue, lock acquire, recv, wait):
       timeout, inherited deadline, or justifying comment? Unbounded await on
-      a network peer is HIGH.
-- [ ] Timeouts: total-operation or just connect? Stacked timeouts that exceed
+      a network peer is HIGH (§1).
+- [ ] Timeouts (§1): total-operation or just connect? Stacked timeouts that exceed
       the caller's deadline?
-- [ ] Timeout firing actually cancels the work (AbortSignal wired, asyncio
+- [ ] Timeout firing actually cancels the work (§1) (AbortSignal wired, asyncio
       timeout context, ctx honored by callee) — or does the loser keep running?
 - [ ] Grep Go for `context.Background()`/`context.TODO()` outside main/tests —
-      each one severs the cancellation chain.
+      each one severs the cancellation chain; in JS, a signal-accepting call
+      in a cancellable chain made without the caller's `signal` (§2).
 - [ ] Grep Python for `except BaseException`, bare `except:`, or
       `except Exception` in retry/cleanup loops around awaits — does
-      CancelledError survive and re-raise?
+      CancelledError survive and re-raise (§2)?
 - [ ] Cleanup paths using the already-cancelled context/signal (rollback that
-      can never run)?
-- [ ] `finally` blocks with unbounded awaits (cancellable cleanup hanging
+      can never run)? Shared state mutated in steps across awaits instead of
+      at one commit point (cancel leaves it half-applied)? (§3)
+- [ ] `finally` blocks with unbounded awaits (§3) (cancellable cleanup hanging
       shutdown)? `shield` usage bounded?
 - [ ] Shutdown: readiness flipped before listener close? Drain deadline <
       orchestrator grace? Producers stopped before consumers? Sentinels/
       closure to wake blocked getters? Background daemons cancelled and
-      awaited?
+      awaited? Queue drained before it is closed? Tasks cancelled before the
+      pools they use close? Nonzero exit when the drain was forced? (§4)
+      Is SIGTERM trapped with the runtime's own primitive from §4's table (not Ctrl-C
+      alone, not a lock taken inside a Ruby trap or a C handler), and does it reach
+      the process in its container?
 - [ ] Retry loops: ctx/signal checked per attempt? Backoff sleep cancellable?
-      Retries within the deadline budget?
-- [ ] Subprocesses/remote jobs killed on cancellation?
+      Retries within the deadline budget? (§5)
+- [ ] Subprocesses/remote jobs killed on cancellation (§3)?

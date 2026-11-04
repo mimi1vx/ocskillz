@@ -111,11 +111,11 @@ Panic only for **bugs** — violated invariants, impossible states — never for
 bad input, missing files, network failure, or anything an attacker controls.
 
 - Servers: a panic in a handler must not kill the process, and a reachable
-  panic is a DoS primitive (rules/05 §4). Catch at the task boundary —
+  panic is a DoS primitive ([rules/05](05-security-supply-chain.md) §4). Catch at the task boundary —
   `tokio::spawn` already isolates panics into `JoinError`; check
   `JoinError::is_panic()` and log. Axum/tower: `CatchPanicLayer`. But treat
   every caught panic as a bug to fix, not a handled case.
-- `panic = "abort"` in release profiles (rules/06) means no unwinding: no
+- `panic = "abort"` in release profiles ([rules/06](06-performance.md)) means no unwinding: no
   `catch_unwind`, panics kill the process. Decide deliberately for servers —
   abort+supervisor-restart is a valid stance, but then panic-freedom of
   handlers is load-bearing.
@@ -137,7 +137,7 @@ bad input, missing files, network failure, or anything an attacker controls.
 - **`assert!` is a panic; `debug_assert!` is not a check.** `assert!`/`assert_eq!`
   on an input-derived condition is the same DoS as `panic!`. `debug_assert!`
   compiles out wherever `debug-assertions` is off: the release profile's default,
-  and any profile or `RUSTFLAGS` override that turns it off (rules/07 §4a).
+  and any profile or `RUSTFLAGS` override that turns it off ([rules/07](07-tooling-ci.md) §4a).
   Measured: a `debug_assert!` that fired under `cargo test` was silent under
   `cargo test --release`. Never make it the only guard of a condition an attacker
   can reach — return an error. (ANSSI `LANG-LIMIT-PANIC-SRC`)
@@ -145,7 +145,7 @@ bad input, missing files, network failure, or anything an attacker controls.
   it. Decide policy once: propagate (`lock().expect("not poisoned: …")`) or
   recover (`unwrap_or_else(PoisonError::into_inner)`) — document which.
 - Allocation failure aborts; for memory-bound parsing of untrusted sizes use
-  `try_reserve` (rules/05 §6).
+  `try_reserve` ([rules/05](05-security-supply-chain.md) §6).
 
 ## 6. Option/Result flow patterns
 
@@ -165,7 +165,7 @@ bad input, missing files, network failure, or anything an attacker controls.
 
 ### 6a. Don't unwrap an Option back into a sentinel
 
-Rust makes the in-band sentinel (`sota-architecture` rules/02 §8a) hard to write by
+Rust makes the in-band sentinel ([`sota-architecture` rules/02](../../sota-architecture/rules/02-domain-modeling-and-boundaries.md) §8a) hard to write by
 accident: `str::find` and `Iterator::position` return `Option<usize>`, not `-1`
 (verified, rustc 1.97.1). The way it gets reintroduced is at the *seam*:
 
@@ -211,7 +211,7 @@ impl FetchError {
   place (an `IntoResponse`/`From<Error> for Status` impl), not per-handler.
 - Idempotency: only auto-retry operations that are idempotent or carry an
   idempotency key — a retried non-idempotent POST is a correctness bug, not
-  resilience.
+  resilience. Designing the key: [`sota-api-design` rules/01](../../sota-api-design/rules/01-rest-http-design.md) §6.
 
 ## 8. Testing error paths
 
@@ -249,7 +249,7 @@ fn main() -> ExitCode {
 - Services: render error chain into structured logs
   (`tracing::error!(error = ?err)` or the `err` field shorthand), map to a
   client-safe status — never leak internal error text to HTTP responses
-  (info disclosure, rules/05).
+  (info disclosure, [rules/05](05-security-supply-chain.md)).
 - Install a panic hook that logs through your structured logger
   (`std::panic::set_hook`) so panics in production aren't lost to stderr.
 
@@ -259,10 +259,10 @@ fn main() -> ExitCode {
       on numeric `Option`s, and `#[serde(default)]` on numeric fields — each discards the
       absence the type system was carrying.
 
-- [ ] `rg '\.unwrap\(\)' -t rust -g '!*test*' -g '!benches/*' -g '!examples/*'`
+- [ ] `rg '\.unwrap\(\)' -t rust -g '!*test*' -g '!benches/*' -g '!examples/*'` (§4)
       — every hit in production paths is a finding; severity scales with input
       reachability (attacker-reachable unwrap = High).
-- [ ] `rg '\.expect\("' -t rust` — messages must state invariants ("valid
+- [ ] `rg '\.expect\("' -t rust` (§4) — messages must state invariants ("valid
       static regex"), not restate the failure ("failed to parse").
 - [ ] **Intervals timed on the wall clock (§4)** —
       `grep -rnE '\.(elapsed|duration_since)\([^)]*\)[[:space:]]*\.(unwrap|expect)\(' --include='*.rs' .`
@@ -271,36 +271,57 @@ fn main() -> ExitCode {
       use. A hit timing a timeout, latency or window panics on a clock step: High on a request
       path. Use `Instant`. A chain split across lines needs reading.
 - [ ] `rg '\.unwrap_or_default\(\)|filter_map\(Result::ok\)|\.ok\(\)[;)]' -t rust`
-      — silently swallowed errors; require a comment justifying each.
-- [ ] `rg 'panic!|unreachable!|todo!|unimplemented!' -t rust -g '!*test*'` —
+      — silently swallowed errors; require a comment justifying each (§6). Re-wrapping
+      `match`es that are `.map(f)` or `?`: `clippy::manual_map`, `question_mark`, `needless_match`.
+- [ ] `rg 'panic!|unreachable!|todo!|unimplemented!' -t rust -g '!*test*'` (§5) —
       `todo!`/`unimplemented!` in shipped code = High; `panic!` on
       input-derived conditions = High (DoS).
-- [ ] Indexing on untrusted data: `rg '\[[a-z_]+\]' -t rust` near
+- [ ] Indexing on untrusted data (§4): `rg '\[[a-z_]+\]' -t rust` near
       parse/decode code; string slicing `&s[`, plus `clippy::indexing_slicing`
       (restriction lint) on parser crates.
 - [ ] Library crates exporting `anyhow::Error`/`Box<dyn Error>` in public
-      signatures: `rg 'pub fn .*-> .*(anyhow|Box<dyn Error)' -t rust`.
-- [ ] thiserror enums: variants missing `#[source]`/`#[from]` on wrapped
+      signatures (§1): `rg 'pub fn .*-> .*(anyhow|Box<dyn Error)' -t rust`. Inversely, error
+      enums in a binary crate whose variants are only ever printed = Low (use `anyhow`).
+- [ ] thiserror enums (§2): variants missing `#[source]`/`#[from]` on wrapped
       errors (broken causality chains); public error enums missing
-      `#[non_exhaustive]`.
-- [ ] Double-logging: error logged at propagation site AND handler.
-- [ ] `?` chains with no `.context(...)` anywhere between syscall and `main` —
-      undebuggable errors.
-- [ ] FFI: `grep -rnE 'extern "C(-unwind)?" fn' --include='*.rs' .` — a body that
+      `#[non_exhaustive]`; one crate-wide enum every function returns; a `#[from] io::Error`
+      variant reached from several operations, so path and operation are lost; error types not
+      `Send + Sync + 'static`; stringly errors,
+      `grep -rnE 'impl From<[A-Za-z0-9_:]+> for String' --include='*.rs' .`; oversized `Err`
+      payloads (`clippy::result_large_err`).
+- [ ] Double-logging (§3): error logged at propagation site AND handler.
+- [ ] `?` chains with no `.context(...)` anywhere between syscall and `main` (§3) —
+      undebuggable errors. Eager context on the success path:
+      `grep -rnE '\.context\(format!' --include='*.rs' .` — want `with_context(|| format!(..))` = Low.
+- [ ] FFI (§5): `grep -rlE 'extern "C(-unwind)?" fn' --include='*.rs' . | xargs -r grep -L 'catch_unwind' | xargs -r grep -nE 'extern "C(-unwind)?" fn'` lists them in files with no `catch_unwind` (file-level: one call hides the rest) — a body that
       can panic without an inner `catch_unwind` aborts the process (since 1.81) =
       High (DoS); with a declared MSRV below 1.81 it is UB = Critical.
 - [ ] `grep -rnE '(debug_)?assert(_eq|_ne)?!\(' --include='*.rs' --exclude-dir=tests --exclude-dir=benches --exclude-dir=examples .`
       (then skip `#[cfg(test)]` modules) — `assert!` on an input-derived condition =
-      High (DoS); `debug_assert!` as the only guard of one = no check in release, High.
-- [ ] `Drop` impls that can panic: `rg -A15 'impl Drop' -t rust` then scan for
+      High (DoS); `debug_assert!` as the only guard of one = no check in release, High (§5).
+- [ ] `Drop` impls that can panic (§5): `rg -A15 'impl Drop' -t rust` then scan for
       `unwrap`/`expect`/`panic!`/indexing/`?` inside `fn drop` — double-panic
       aborts the process (DoS), High. `LANG-DROP-NO-PANIC`.
-- [ ] Retry loops: `rg 'retry|backoff' -t rust -i` — retries without
+- [ ] **Mutex poison policy undecided (§5) — Low** —
+      `grep -rnE '\.lock\(\)\.unwrap\(\)' --include='*.rs' .` — each hit neither states the
+      invariant (`expect("not poisoned: …")`) nor recovers
+      (`unwrap_or_else(PoisonError::into_inner)`); pick one policy and document it.
+- [ ] Retry loops (§7): `rg 'retry|backoff' -t rust -i` — retries without
       classification (retrying 4xx), without jitter/cap, or around
-      non-idempotent operations.
+      non-idempotent operations. Error-to-status mapping repeated per handler instead of one
+      `IntoResponse`/`From<Error> for Status` impl = Low.
 - [ ] Error tests assert variants (`matches!`), not just `.is_err()`; error
-      seams injectable (trait boundaries) for fault testing.
-- [ ] Lints to enforce in CI: `clippy::unwrap_used`, `clippy::panic` (servers),
+      seams injectable (trait boundaries) for fault testing (§8):
+      `grep -rnE '#\[should_panic\]|assert!\(.*\.is_err\(\)\)' --include='*.rs' .` — a bare
+      `should_panic` with no `expected =`, or an `is_err()` assert a wrong variant passes = Low;
+      user-facing `Display` output has a snapshot test.
+- [ ] Lints to enforce in CI (§4, §2): `clippy::unwrap_used`, `clippy::panic` (servers),
       `clippy::result_large_err`, `clippy::or_fun_call`,
       `clippy::manual_let_else`; consider `#![deny(clippy::unwrap_used)]` at
       crate roots of network-facing crates.
+- [ ] **Error reporting at the top (§9) — Low; Medium when internal error text reaches a
+      client** — `grep -rnE '(eprintln|error|warn)!\(.*\{(e|err|error)\}' --include='*.rs' .`
+      (a plain `{e}` renders the outermost message only: want `{e:#}` or `error = ?err`);
+      `grep -rlE 'panic::set_hook' --include='*.rs' .` printing nothing in a service means no
+      panic hook into the structured logger; read the error-to-response mapping for the internal
+      error's `to_string()` or `{:?}` in a response body.

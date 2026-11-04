@@ -164,7 +164,7 @@ deprecates that spelling**, `DEP0190`, because args are concatenated unescaped);
 `exec.Command` (fine; never wrap in
 `sh -c`); Rust `Command` (fine — measured 2026-08-19, **neither `.arg` nor `.args`
 splits on whitespace**, so the argv guarantee holds; the documented exception is
-Windows `.bat`/`.cmd`, `sota-rust` rules/08 §1); Java `ProcessBuilder` with a
+Windows `.bat`/`.cmd`, [`sota-rust` rules/08](../../sota-rust/rules/08-external-programs.md) §1); Java `ProcessBuilder` with a
 **list** (measured 2026-08-20 on Temurin 25.0.3: it does *not* split on whitespace and
 no shell is involved — `ProcessBuilder("echo", "$HOME")` prints `$HOME` literally).
 Java's footgun is the *other* API: **`Runtime.getRuntime().exec(String)` tokenizes the
@@ -202,7 +202,8 @@ under the same test. Go's `Wait` blocks past context cancellation until
 `cmd.WaitDelay` is set; Python's raises on schedule; **Rust/tokio's `timeout` fires
 on schedule but leaves the child and its grandchild running**, because cancelling
 the future is not killing the process (`.kill_on_drop(true)`, measured 2026-08-19).
-Read that language's subprocess section before trusting the timeout: Go language guidance, `sota-python` rules/05 §2, `sota-rust` rules/08 §1,
+Read that language's subprocess section before trusting the timeout: [`sota-golang`
+rules/05](../../sota-golang/rules/05-security.md) §3, [`sota-python` rules/05](../../sota-python/rules/05-security.md) §2, [`sota-rust` rules/08](../../sota-rust/rules/08-external-programs.md) §1,
 `sota-typescript` ("Command injection via child_process").
 
 **Five** runtimes measured under the same test:
@@ -273,28 +274,37 @@ building block, not a per-process sandbox API.
 
 - [ ] Every parser of attacker-supplied complex formats runs in a dedicated
       short-lived process with seccomp+Landlock (or bwrap/minijail/nsjail), fd-only
-      I/O, no network, no exec; never in the main service process.
+      I/O, no network, no exec; never in the main service process (§1).
 - [ ] Workers are one-per-input across trust domains; outputs re-encoded/normalized
-      and size-capped before the parent trusts them.
+      and size-capped before the parent trusts them, with dimensions and counts
+      validated before the parent allocates (§1).
 - [ ] Privileged operations brokered: workers hold FDs, not paths/secrets; broker
       uses `openat2` resolve flags (no string prefix checks); broker requests
-      logged and rate-limited.
+      logged and rate-limited; the broker parses no complex formats and takes no
+      policy from worker input (§2).
 - [ ] Lockdown sequencing visible in code: privileged init → irrevocable restrict →
-      then and only then process untrusted input.
+      then and only then process untrusted input (§2).
 - [ ] WASM: WASI preopens scoped to the job dir only; fuel/epoch + memory limits
-      set; host imports audited (copy-then-validate guest memory); engine itself
-      process-sandboxed for untrusted modules.
+      set; host imports audited (no exec or raw-path fs import; copy-then-validate
+      guest memory); engine itself process-sandboxed for untrusted modules (§3).
 - [ ] No `vm`/`vm2`/eval-jail as a boundary; V8 isolates backed by per-tier
-      sandboxed host processes with CPU watchdog + heap limits.
+      sandboxed host processes with CPU watchdog + heap limits; no Node-style APIs
+      exposed into the isolate, only a minimal audited host API (§4).
 - [ ] No `shell=True`/`exec`/`sh -c` with tainted input anywhere (grep for it);
       argv arrays with pinned flags and `--`; no exec-capable argument gadgets
-      reachable (`find -exec`, `tar --checkpoint-action`, delegates…).
-- [ ] Subprocesses get explicit minimal env, absolute paths, `close_fds`,
-      process-group kill on timeout, bounded stdout/stderr.
-- [ ] The timeout is a real deadline in *this* language — pipes held by a
+      reachable (`find -exec`, `tar --checkpoint-action`, delegates…) (§5).
+- [ ] Subprocesses get explicit minimal env, absolute paths, `close_fds`, a safe
+      cwd, process-group kill on timeout, bounded stdout/stderr; files reach
+      children as FDs (or paths re-validated beneath a root), and no child can
+      write a directory it also executes from (§5).
+- [ ] The timeout is a real deadline in *this* language (§5) — pipes held by a
       grandchild cannot extend it past the limit (Go: `cmd.WaitDelay` set) — and
       memory is capped with `RLIMIT_DATA`/cgroup, never `RLIMIT_AS` (R5.3a, `02`
-      R7.2a).
+      R7.2a); on macOS no memory rlimit applies, so a container or an RSS watchdog
+      with the `setrlimit` return checked (`02` R7.2b).
 - [ ] macOS: shipped apps use App Sandbox + Hardened Runtime with minimal
-      entitlements; untrusted code on macOS runs in VMs, not sandbox-exec alone;
-      any sandbox-exec use documented as unsupported-interface risk.
+      entitlements (no `allow-dyld-environment-variables` or
+      `disable-library-validation` without justification); untrusted code on macOS
+      runs in VMs, not sandbox-exec alone; any sandbox-exec use documented as
+      unsupported-interface risk, with a `(deny default)` profile that also scopes
+      `mach-lookup` (§6).

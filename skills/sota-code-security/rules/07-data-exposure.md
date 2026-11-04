@@ -25,7 +25,7 @@ because logs and error trackers routinely are.
   only from an allowlist of safe messages.
 - Don't leak via **differences** either: distinct messages, status codes, or
   response times for "user not found" vs "wrong password", "object missing" vs
-  "forbidden" (use 404 for both, rules/03), padding vs MAC failure (rules/04) —
+  "forbidden" (use 404 for both, [rules/03](03-authorization.md)), padding vs MAC failure ([rules/04](04-cryptography.md)) —
   all observable oracles (CWE-203/204).
 - Fail closed: error paths must not skip authz/validation (`except Exception:
   return data_anyway`), must release resources, and must not leave partial
@@ -66,7 +66,8 @@ def handle(e):
   numbers/CVV, private keys, OTPs, password-reset links, `Authorization`/
   `Cookie` headers, full request bodies of auth endpoints.
 - PII (emails, names, addresses, government IDs, precise geo, health data):
-  log only with purpose; prefer pseudonymous user IDs; mask
+  log only with purpose; prefer pseudonymous user IDs (in security/audit
+  telemetry, IDs only, never emails — [privacy rules/06](../../sota-privacy-compliance/rules/06-incident-breach-readiness.md) §3); mask
   (`j***@example.com`) or tokenize when the value is needed for support.
   Retention limits and deletion-on-request must reach logs and backups
   (GDPR/CCPA exposure is a security finding too).
@@ -108,7 +109,7 @@ class Secret(str):
 - Do log (security observability, OWASP A09): authn successes/failures, authz
   denials, validation rejections, privilege/role changes, MFA/recovery events,
   admin actions — with actor, action, target, result, source IP, timestamp;
-  ship to an append-only store with alerting on anomalies.
+  ship to an append-only store with alerting on anomalies (append-only is not tamper-evident against a writer of the store: [rules/18](18-tamper-evident-logs.md) §1).
 - **Payment integrations keep a full trail**: log every initiation, redirect to the gateway
   and callback with timestamp and source IP, and retain the raw callback request (headers
   and body, as received) so a dispute or forensic review can re-verify it later. Retain it
@@ -164,15 +165,15 @@ give each event a fixed severity so alerting keys on the name, not on a regex.
   validation error.** A value outside a closed option set (select, radio, enum), a
   changed hidden or state field, a field the handler does not expect, transaction data
   altered after the user confirmed it, a deserialized type outside the allowlist
-  (rules/01 §8), an output-validation failure. Emit a distinct event naming the
+  ([rules/01](01-input-injection.md) §8), an output-validation failure. Emit a distinct event naming the
   field (`input_validation_discrete_fail`, `malicious_extraneous`) at a higher severity
   than routine rejections, which stay `input_validation_fail`. Mixing the two buries
   the probe among typos.
 - **Crypto, transport and protocol failures are security events, not connectivity
   noise.** Every encrypt, decrypt or signature-verification failure
   (`crypt_decrypt_fail`, `crypt_encrypt_fail`; the user still gets the uniform error of
-  rules/04 §2); an outbound TLS handshake or certificate-verification failure, which can be
-  an interception attempt (rules/04 §5); a KMS, HSM or crypto-library error; and a request
+  [rules/04](04-cryptography.md) §2); an outbound TLS handshake or certificate-verification failure, which can be
+  an interception attempt ([rules/04](04-cryptography.md) §5); a KMS, HSM or crypto-library error; and a request
   using an HTTP method the route does not serve (`TRACE`, `PUT` on a read-only resource)
   once it is past the framework's `405`. Keep each separate from generic
   `network_error`, so a burst from one peer or principal can alert.
@@ -273,7 +274,7 @@ return PublicUser.model_validate(user)    # adding a DB column changes nothing h
   "admin" fields toggled by serializer flags that default open.
 - GraphQL: every **field** is an endpoint — apply field-level authz; disable
   introspection in prod (or gate it); suggestion/typo hints off; cost-limit
-  queries (rules/06 §5).
+  queries ([rules/06](06-memory-resource-safety.md) §5).
 - Enumeration surfaces: incrementing IDs + list endpoints, uniqueness errors
   ("email taken"), timing differences, sitemap/export endpoints — rate-limit
   and design responses to avoid existence oracles where it matters.
@@ -307,7 +308,7 @@ return PublicUser.model_validate(user)    # adding a DB column changes nothing h
 
 - Classify data at the schema level (public / internal / confidential /
   regulated) and let classification drive handling: regulated fields get
-  field-level encryption (rules/04 §4.1), masked logging, restricted
+  field-level encryption ([rules/04](04-cryptography.md) §4.1), masked logging, restricted
   serializers, and named retention periods enforced by deletion jobs — not
   policy documents.
 - Don't collect what you can't protect: every stored sensitive field is
@@ -316,17 +317,17 @@ return PublicUser.model_validate(user)    # adding a DB column changes nothing h
 - When a full sensitive value must reach the client (an account number, a tax ID, a
   recovery code), the UI masks it by default and shows it only on an explicit user action,
   with the reveal logged for high-sensitivity fields. Mobile specifics:
-  mobile-platform guidance OWASP: ASVS 5.0 V14.2.6.
+  mobile-platform guidance. OWASP: ASVS 5.0 V14.2.6.
 - Process-and-discard applies in memory too: once processing ends, wipe or re-encrypt the
   plaintext buffers of sensitive data, not only key material (best-effort in GC runtimes;
   key-management guidance). OWASP: ASVS 5.0 V11.7.2.
 - **SMS is a public channel.** It is unencrypted end to end and a SIM swap redirects it, so
-  it may carry low-value notifications and one-time codes (with the limits of rules/02 §5 and §7), never
+  it may carry low-value notifications and one-time codes (with the limits of [rules/02](02-authentication.md) §5 and §7), never
   account data, balances, health or personal details, or a link that works without login.
   OWASP: Mobile Application Security cheat sheet.
 - **Encryption in the wrong place does not reduce exposure.** Encrypting in browser code
   protects nothing from the user holding the key and the code; encrypting an ID in a URL
-  parameter is not access control (authorize the object, rules/03). A payload that crosses
+  parameter is not access control (authorize the object, [rules/03](03-authorization.md)). A payload that crosses
   an intermediary which terminates TLS (a CDN, an API gateway, a message broker) needs
   message-level encryption if that intermediary is not trusted with it. Data published to a
   public content-addressed store (IPFS, Arweave) cannot be access-controlled or deleted, so
@@ -343,14 +344,16 @@ return PublicUser.model_validate(user)    # adding a DB column changes nothing h
   query missing the filter and to every secondary store; account-deletion
   flows must fan out to logs, backups schedule, search, analytics, and vendors.
 - Exports/reports are mass-exposure events: same authz as the underlying data
-  (rules/03), watermark/audit who exported what, rate-limit, and expire
-  download links (signed, short-TTL — rules/04 §7).
+  ([rules/03](03-authorization.md)), watermark/audit who exported what, rate-limit, and expire
+  download links (signed, short-TTL — [rules/04](04-cryptography.md) §7).
 
 ## 6. Debug & non-prod surfaces (CWE-489)
 
 - Production must have: debug modes off (framework debug pages, GraphQL
   playgrounds, Swagger UIs gated or auth'd), actuator/metrics/health endpoints
   restricted (`/actuator/env`, `/debug/pprof`, `/metrics` leak secrets/topology),
+  on Spring Boot via the exposure property, with `heapdump` the worst endpoint
+  (JVM language guidance),
   profilers and REPL endpoints absent.
 - Test/seed accounts, magic bypass headers (`X-Debug-User`), and feature-flag
   backdoors must never ship — grep for them in audits.
@@ -381,6 +384,8 @@ return PublicUser.model_validate(user)    # adding a DB column changes nothing h
 
 ## 7. Audit grep starters
 
+*(advisory)* — a pattern list feeding the §1–§6 checklist items; it states no rule of its own.
+
 ```text
 printStackTrace|traceback.format_exc|err.Error\(\) flowing into responses
 DEBUG\s*=\s*True | app.debug | NODE_ENV !== 'production' branches serving errors
@@ -398,12 +403,12 @@ resources :x without only:/except: | spring-boot-starter-data-rest | @Repository
 
 ## Audit checklist
 
-- [ ] Does a global boundary handler convert all unhandled errors to generic client messages with correlation IDs, full detail server-side only?
-- [ ] Are stack traces, paths, SQL, versions, and framework debug pages unreachable in prod responses?
-- [ ] Are existence/secret oracles avoided (uniform messages, codes, and timing for auth and object-access failures)?
-- [ ] Is there a logger-level redaction filter for credentials/tokens/PII, plus masked-`repr` secret types?
-- [ ] Are user-controlled values sanitized for CR/LF before logging, and format strings never built from input?
-- [ ] Are security events (logins, denials, role changes, admin actions) logged with actor/action/target to an append-only store with alerting?
+- [ ] Does a global boundary handler convert all unhandled errors to generic client messages with correlation IDs, full detail server-side only (§1)?
+- [ ] Are stack traces, paths, SQL, versions, and framework debug pages unreachable in prod responses (§1)?
+- [ ] Are existence/secret oracles avoided (uniform messages, codes, and timing for auth and object-access failures) (§1)?
+- [ ] Is there a logger-level redaction filter for credentials/tokens/PII, plus masked-`repr` secret types (§2)?
+- [ ] Are user-controlled values sanitized for CR/LF before logging, and format strings never built from input (§2)?
+- [ ] Are security events (logins, denials, role changes, admin actions) logged with actor/action/target to an append-only store with alerting (§2)?
 - [ ] **Does every authentication, session and authorization outcome emit a named event
       from one vocabulary (§2.1)** — success-after-failures with a count, threshold with the
       limit, lock with a reason, failed password change at high severity, session
@@ -430,15 +435,15 @@ resources :x without only:/except: | spring-boot-starter-data-rest | @Repository
 - [ ] **Has the generated route table been dumped and trimmed to what the product uses
       (§6)?** MEDIUM:
       `grep -rnE '^[[:space:]]*resources?[[:space:]]+:[a-z_]+|spring-boot-starter-data-rest|@RepositoryRestResource' . | grep -vE 'only:|except:|exported[[:space:]]*=[[:space:]]*false'`
-- [ ] Are query strings free of secrets and PII?
-- [ ] Does every write endpoint bind through an explicit allowlist DTO (`extra="forbid"`) — no direct body-to-model assignment?
-- [ ] Are privileged fields (role, verified, tenant_id, price) unwritable via any public schema?
-- [ ] Do responses use explicit output DTOs (no raw entity serialization), with field-level authz on GraphQL?
-- [ ] Are client-controlled field/include/expand/sort params allowlist-resolved?
-- [ ] Are debug endpoints, playgrounds, actuators, source maps, `.git`/`.env`, and magic test bypasses absent from prod, and staging data masked or staging prod-hardened?
-- [ ] Are error trackers, session replay, analytics, warehouses, caches, and backups covered by the same scrubbing/retention/access rules as the primary DB?
-- [ ] Do deletion flows reach secondary stores, and do exports carry full authz, audit, and short-TTL signed links?
-- [ ] Is data classified at the schema level with retention enforced by automated deletion jobs?
+- [ ] Are query strings free of secrets and PII (§2)?
+- [ ] Does every write endpoint bind through an explicit allowlist DTO (`extra="forbid"`) — no direct body-to-model assignment — with separate create, update and admin schemas (§3)? HIGH when a privileged field is reachable; each hit of `grep -rnE "\*\*request\.(json|form|POST|data)|Object\.assign\([^,]+,[[:space:]]*req\.body|\.update\(req\.body|permit[!]|fields[[:space:]]*=[[:space:]]*[\"']__all__[\"']" --include='*.py' --include='*.js' --include='*.ts' --include='*.rb' .` binds a request body wholesale
+- [ ] Are privileged fields (role, verified, tenant_id, price) unwritable via any public schema, and are prices, subtotals, taxes, totals, discounts, balances and quotas recomputed server-side from identifiers and quantities, never accepted from the client (§3)?
+- [ ] Do responses use explicit output DTOs (no raw entity serialization), with field-level authz on GraphQL (§4)?
+- [ ] Are client-controlled field/include/expand/sort params allowlist-resolved (§3)?
+- [ ] Are debug endpoints, playgrounds, actuators, source maps, `.git`/`.env`, and magic test bypasses absent from prod, and staging data masked or staging prod-hardened (§6, §4)?
+- [ ] Are error trackers, session replay, analytics, warehouses, caches, and backups covered by the same scrubbing/retention/access rules as the primary DB (§5)?
+- [ ] Do deletion flows reach secondary stores, and do exports carry full authz, audit, and short-TTL signed links (§5)?
+- [ ] Is data classified at the schema level with retention enforced by automated deletion jobs (§5)?
 - [ ] **Does every non-allow exit of a security decision deny (§1)** — `default`, trailing
       `else`, `finally`, recovered panics, and Java `Error`s that `catch (Exception)` misses?
       HIGH: `grep -rnE '(finally|default|else)[^a-zA-Z]*[:{>-][^}]*return[[:space:]]+(true|True|ALLOW|Allow|PERMIT)|default[[:space:]]*->[[:space:]]*(true|ALLOW|PERMIT)' .`

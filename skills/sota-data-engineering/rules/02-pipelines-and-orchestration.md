@@ -5,7 +5,7 @@ backfills, and "just rerun it" are how data platforms are actually operated;
 a pipeline that corrupts on rerun is broken even if its happy path is
 perfect.
 
-## Idempotency — the prime directive
+## 1. Idempotency — the prime directive
 
 A task given the same logical interval must produce the same stored result
 no matter how many times it runs, and a partial failure mid-run must not
@@ -48,7 +48,7 @@ WHEN MATCHED THEN UPDATE SET ...
 WHEN NOT MATCHED THEN INSERT ...;
 ```
 
-## Logical time, not wall-clock time
+## 2. Logical time, not wall-clock time
 
 - **The orchestrator supplies the interval; the task uses only that.**
   `WHERE created_at >= NOW() - INTERVAL '1 day'` is a HIGH finding: results
@@ -77,7 +77,7 @@ def extract(data_interval_start, data_interval_end):
     )
 ```
 
-## Incremental processing & watermarks
+## 3. Incremental processing & watermarks
 
 - **Incremental by default for large sources.** Track a high-water mark on a
   monotonic column (`updated_at`, log sequence number, ingestion time) and
@@ -99,9 +99,9 @@ UPDATE etl.watermarks SET wm = :new_wm WHERE tbl='orders';
 COMMIT;
 ```
 - `updated_at` maintained by application code is unreliable (bulk fixes skip
-  it, clock skew). Prefer DB-generated change tracking or CDC (rules/03)
+  it, clock skew). Prefer DB-generated change tracking or CDC ([rules/03](03-streaming-and-cdc.md))
   for correctness-critical syncs; periodically reconcile row counts against
-  the source either way — plus control totals (rules/04, expectation battery).
+  the source either way — plus control totals ([rules/04](04-data-quality-and-contracts.md), expectation battery).
 - **Late data policy is explicit per table:** how late is accepted (e.g.
   reprocess partitions up to 7 days back via merge), and what happens after
   (corrections batch, or documented "closed" partitions).
@@ -110,7 +110,7 @@ COMMIT;
   incremental model that appends without a key is the same CRITICAL as
   above.
 
-## Backfill design
+## 4. Backfill design
 
 Backfills are a feature you design, not an emergency you improvise.
 
@@ -129,7 +129,7 @@ Backfills are a feature you design, not an emergency you improvise.
 - **AUDIT:** Ask "how would you reload March?" If the answer involves editing
   code or manual SQL, that's a HIGH finding.
 
-## Orchestration discipline
+## 5. Orchestration discipline
 
 Applies to Airflow 3+, Dagster, Prefect, and kin.
 
@@ -154,8 +154,9 @@ mart_dag   = DAG("marts",  schedule=[orders_stg])   # consumer triggered by prod
 - **Tasks are stateless and idempotent**; orchestrator metadata is not a data
   store. No XCom-ing dataframes; pass references (paths, table names,
   intervals).
-- **Retries: limited and meaningful.** 2–3 retries with exponential backoff
-  for transient failures. Retrying a deterministic transform error 10 times
+- **Retries: limited and meaningful.** 2–3 task retries with exponential backoff
+  for transient failures — at the task layer only: calls inside the task follow
+  [`sota-architecture` rules/04](../../sota-architecture/rules/04-resilience-and-failure-design.md) §2 and must not multiply with them. Retrying a deterministic transform error 10 times
   is noise; retrying forever masks outages. Alert on final failure, always.
 - **Timeouts on every task** sized from observed duration; a hung extraction
   blocking the daily run for 12 silent hours is an availability incident.
@@ -171,7 +172,7 @@ mart_dag   = DAG("marts",  schedule=[orders_stg])   # consumer triggered by prod
   Event-driven chains still need end-to-end freshness SLAs, since "nothing
   triggered" looks like success.
 
-## dbt-style transformation discipline
+## 6. dbt-style transformation discipline
 
 (Applies to dbt and equivalents — SQLMesh, etc. dbt note: dbt v2, the
 Fusion-based engine, is GA since 2026-09-14 (a native binary; on PyPI it is
@@ -183,7 +184,7 @@ docs.getdbt.com.)
 
 - **Tests on every model that matters:** at minimum `unique` + `not_null` on
   the primary key of every core/mart model, relationship tests on critical
-  FKs, accepted-values on enums. Severity-tier them (rules/04).
+  FKs, accepted-values on enums. Severity-tier them ([rules/04](04-data-quality-and-contracts.md)).
 - **No `SELECT *` crossing model boundaries** (staging enumerates; marts
   list final columns). `*` within a CTE chain of one model is fine.
 - **Documentation is part of the model:** description + column docs on all
@@ -193,24 +194,43 @@ docs.getdbt.com.)
   models; materialize hot paths as tables, cheap glue as views/ephemeral.
 - **CI runs build + tests on changed models and their downstream**
   (state/defer-based selection) against a non-prod target before merge.
-  rules/06 covers deployment.
+  [rules/06](06-operations-and-governance.md) covers deployment.
 - Pin package and adapter versions; reproducible builds.
 
 ## Audit checklist
 
 - [ ] Every scheduled write is partition-overwrite, MERGE, or full
-      rebuild — zero blind appends outside raw landing?
-- [ ] Writes atomic per run (no separately-failable delete-then-insert)?
-- [ ] All tasks parameterized by logical interval; no `NOW()`-relative
-      filters in scheduled code?
-- [ ] Watermarks persisted atomically with the data they describe?
-- [ ] Late-data policy documented per incremental table?
+      rebuild — zero blind appends outside raw landing? A scheduled
+      `INSERT INTO ... SELECT` against a modeled table = CRITICAL (§1)
+- [ ] Writes atomic per run (no separately-failable delete-then-insert)
+      (§1)?
+- [ ] Side effects (notifications, reverse-ETL pushes, API calls) carry idempotency keys
+      or run in a terminal step after the data write commits (§1)?
+- [ ] All tasks parameterized by a half-open logical interval
+      `[interval_start, interval_end)` (no overlap, no gap); no `NOW()`-relative
+      filters in scheduled code (HIGH); a fixed "reprocess last N days" window
+      is not the only late-data mechanism (§2)?
+- [ ] Watermarks bounded above (`> last AND <= new`) and persisted
+      atomically with the data they describe; incremental syncs periodically
+      reconciled against source row counts (§3)?
+- [ ] Late-data policy documented per incremental table; every dbt
+      incremental model sets `unique_key` or an insert-overwrite strategy (an
+      unkeyed appending incremental = CRITICAL) (§3)?
 - [ ] Backfill: arbitrary interval, same code path, bounded parallelism,
-      checks still run?
-- [ ] DAG edges match actual data dependencies (no cron-offset coupling)?
+      checks still run, `depends_on_past`-style ordering declared where models
+      depend on prior intervals? "How would you reload March?" answered
+      without code edits or manual SQL, else HIGH (§4)
+- [ ] DAG edges match actual data dependencies (no cron-offset coupling,
+      HIGH); tasks pass references, not dataframes, through XCom/orchestrator
+      metadata; no business logic in DAG Python (§5)?
 - [ ] Retries bounded with backoff; timeouts set; final-failure alerts
-      routed to an owner?
-- [ ] Freshness/SLA alerting on outputs, independent of task success?
-- [ ] dbt (or equivalent): key tests on every core/mart model, no
-      cross-model `SELECT *`, exposures declared, CI builds changed models
-      before merge?
+      routed to an owner (§5)?
+- [ ] Freshness/SLA alerting on outputs, independent of task success,
+      including event-driven chains (§5)?
+- [ ] dbt (or equivalent): `unique` + `not_null` on the primary key of
+      every core/mart model, relationship tests on critical FKs, no
+      cross-model `SELECT *`, mart models documented (description + columns),
+      exposures declared, no 1,500-line mega-models, CI builds changed models
+      and their downstream before merge (audited by [rules/04](04-data-quality-and-contracts.md)'s §7 CI item), package and
+      adapter versions pinned; before a dbt v2 upgrade, no deprecation warnings
+      left (§6)?

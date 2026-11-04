@@ -1,7 +1,7 @@
 # 04 — Cryptography & Secrets
 
 Scope: algorithm selection, AEAD/nonce discipline, key management, randomness,
-TLS configuration, secrets handling (constant-time comparison: rules/22).
+TLS configuration, secrets handling (constant-time comparison: [rules/22](22-constant-time-comparison.md)).
 Maps to OWASP A04:2025 (Cryptographic Failures), CWE-327/326/330/321/323/208.
 
 Core principle: **don't design, don't implement, barely even compose.** Use a
@@ -20,8 +20,8 @@ by default (CWE-1240).
 | Encrypting to a public key (no shared symmetric key) | HPKE (RFC 9180: KEM + KDF + AEAD, `info` bound to the context), libsodium sealed box or Tink hybrid; all hide the sender, so authenticate it separately | RSA over the payload itself, a hand-built "ECDH then AES" |
 | Signatures | Ed25519; ECDSA P-256 (deterministic nonce, RFC 6979) where required | RSA-PKCS1v1.5 for new code, DSA |
 | Hashing (integrity) | SHA-256/SHA-512, BLAKE2/3 | MD5, SHA-1 (CWE-328) |
-| Password hashing | argon2id (see rules/02) | any fast hash |
-| Key from a password/passphrase | argon2id, scrypt, or PBKDF2-HMAC-SHA256 at ≥ 600,000 iterations (parameters: rules/02 §1) | HKDF, a bare or iterated fast hash, OpenSSL `EVP_BytesToKey` |
+| Password hashing | argon2id (see [rules/02](02-authentication.md)) | any fast hash |
+| Key from a password/passphrase | argon2id, scrypt, or PBKDF2-HMAC-SHA256 at ≥ 600,000 iterations (parameters: [rules/02](02-authentication.md) §1) | HKDF, a bare or iterated fast hash, OpenSSL `EVP_BytesToKey` |
 | KDF from keys | HKDF (per-purpose `info` labels) | raw hash of key material, hash chains |
 | MAC | HMAC-SHA-256, Poly1305 (within AEAD), KMAC | H(key‖msg) — length extension (CWE-328) |
 
@@ -55,8 +55,8 @@ by default (CWE-1240).
   defaults to 10,000 iterations — set `-iter`). Store the salt and parameters beside the
   ciphertext. OWASP:
   Cryptographic Storage cheat sheet, Go-SCP (data protection), ASVS 5.0 V11.4.4.
-- **Algorithm, parameters and key choice come from server-side configuration, never from the message** (JWT `alg`, rules/17 §3; XML `EncryptionMethod`, above). On a device the attacker owns, crypto and RNG calls can be hooked:
-  where that threat is in scope, rely on attestation and server-side checks (mobile-platform guidance, §4.8). OWASP: Cornucopia CRK, CRMK.
+- **Algorithm, parameters and key choice come from server-side configuration, never from the message** (JWT `alg`, [rules/17](17-sessions-and-tokens.md) §3; XML `EncryptionMethod`, above). On a device the attacker owns, crypto and RNG calls can be hooked:
+  where that threat is in scope, rely on attestation and server-side checks (mobile-platform guidance). OWASP: Cornucopia CRK, CRMK.
 
 ### 1.1 Key agreement — validate the peer key, authenticate the peer, confirm the key
 
@@ -114,7 +114,7 @@ by default (CWE-1240).
 - Decryption failures: uniform error, no padding/MAC distinction surfacing to the
   caller (padding-oracle family, CWE-209/CWE-203); never act on plaintext before
   the tag verifies (no streaming-decrypt-then-check). Internally, every encrypt, decrypt or verify
-  failure emits a security event (`crypt_decrypt_fail`, rules/07 §2.1): a spike is tampering or a probe.
+  failure emits a security event (`crypt_decrypt_fail`, [rules/07](07-data-exposure.md) §2.1): a spike is tampering or a probe.
 - **Full 128-bit tag, length-checked input.** Java `new GCMParameterSpec(128, iv)` (SunJCE also accepts 96–120, measured JDK 25), Go `NewGCM` rather than
   `NewGCMWithTagSize` below 16, Python's default `min_tag_length=16`, Node `authTagLength: 16`. Check `len(ct) >= nonce + tag` before slicing:
   Go's `data[:ns]` on a short input panics (measured Go 1.27). OWASP: Java Security, Cryptographic Storage, DotNet Security cheat sheets.
@@ -135,7 +135,7 @@ pt = box.decrypt(ct, aad=record_id)
 - Findings on sight: `Math.random()`, `random.random()`, `rand()`, Java
   `java.util.Random`, time-seeded PRNGs, or UUIDv1/v4-from-non-crypto-PRNG used
   for any credential-like value.
-- Token entropy ≥ 128 bits; compare tokens constant-time (rules/22 §1); store long-lived
+- Token entropy ≥ 128 bits; compare tokens constant-time ([rules/22](22-constant-time-comparison.md) §1); store long-lived
   tokens hashed (SHA-256) so a DB leak isn't a credential leak.
 - Entropy is destroyed by post-processing: `random_string[:6]`, modulo into a
   small alphabet with bias, or "human-friendly" filtering can collapse 128
@@ -206,7 +206,8 @@ token = secrets.token_urlsafe(32)                                  # 256-bit URL
   is exactly this risk — back it up to hardware/escrow). **Back up / escrow
   data-encryption keys** so encrypted data stays recoverable; **never escrow signing or
   authentication keys** — a second copy destroys non-repudiation. Store key backups
-  under the same KMS/HSM control as the originals, with their own access audit.
+  under the same KMS/HSM control as the originals, with their own access audit. Probe:
+  key-management guidance.
 - Key material in memory: avoid copies (immutable strings in GC languages spread
   copies — prefer byte arrays you can zero); never in logs, exceptions, or
   serialized debug output.
@@ -245,13 +246,13 @@ mac_key  = HKDF(master, info=b"app/v1/url-signing",      length=32)
   in plaintext, never retry under a weaker algorithm or a hard-coded fallback key,
   and never accept an unverifiable ciphertext or signature "for now". A `catch`
   whose body writes the plaintext, or a `crypto_enabled=false` default taken when
-  the KMS is unreachable, is the silent-no-op shape of rules/10 §1 — make it loud
-  (rules/10 §3) and failing.
+  the KMS is unreachable, is the silent-no-op shape of [rules/10](10-silent-control-failure.md) §1 — make it loud
+  ([rules/10](10-silent-control-failure.md) §3) and failing.
 - **Defence in depth**: encrypted data still gets access control, and the design
   should stay safe if one layer breaks — field encryption does not replace authz
-  on the rows (rules/03), and a leaked DEK should expose one object, not all.
+  on the rows ([rules/03](03-authorization.md)), and a leaked DEK should expose one object, not all.
   OWASP: Cryptographic Storage cheat sheet, Secure Coding Practices QRG, Cornucopia.
-- Don't encrypt what you can avoid storing; hashing (rules/02) or truncation (last-4 of PAN) beats
+- Don't encrypt what you can avoid storing; hashing ([rules/02](02-authentication.md)) or truncation (last-4 of PAN) beats
   encryption when you never need the value back, and a value you must recover is encrypted, never hashed.
 
 ## 5. TLS configuration (CWE-295/319)
@@ -263,7 +264,11 @@ mac_key  = HKDF(master, info=b"app/v1/url-signing",      length=32)
   `InsecureSkipVerify: true`, `rejectUnauthorized: false`, trust-all
   TrustManagers, hostname-check disabling — all findings, including in tests
   that can leak into prod paths (CWE-295). Internal services get a private CA,
-  not disabled verification.
+  not disabled verification. **Rating (the library's one scale; language skills
+  point here):** HIGH — exploiting it needs a network position, this skill's High
+  band; CRITICAL where that position comes free or the payoff is code execution:
+  a client that runs on user networks (mobile, desktop, CLI on public Wi-Fi), or a
+  channel whose content runs (an update, a plugin, a script, a package).
 - **Verification can also be absent without any flag**, which a skip-verify grep misses:
   - Raw sockets: Java's `SSLSocket`/`SSLEngine` do not check the hostname unless
     `SSLParameters.setEndpointIdentificationAlgorithm("HTTPS")` is set (JSSE
@@ -278,12 +283,14 @@ mac_key  = HKDF(master, info=b"app/v1/url-signing",      length=32)
     expect before its subject becomes an identity: Go `RequestClientCert` and
     `RequireAnyClientCert` do not verify the certificate (`RequireAndVerifyClientCert`
     does); nginx `ssl_verify_client optional_no_ca` does not require a trusted CA, and
-    with `optional` the app must still check `$ssl_client_verify` = `SUCCESS`.
+    with `optional` the app must still check `$ssl_client_verify` = `SUCCESS`. Then authorise
+    the peer by a pinned identity (a typed SAN or SPKI), never by CN/DN or by "signed by a CA we
+    trust": network-security guidance.
   - **A forwarded client-certificate header is only as trustworthy as the hop that set
     it.** Envoy's `x-forwarded-client-cert` (XFCC) is sanitised by default;
     `ALWAYS_FORWARD_ONLY` forwards whatever the client sent, even without mTLS. Accept
     such a header only from an authenticated proxy link, and strip it at the edge
-    (the `X-User-Id` rule in API design guidance).
+    (the `X-User-Id` rule in [`sota-api-design` rules/07](../../sota-api-design/rules/07-security-operations.md) §8).
   OWASP: ASVS 5.0 V12.1.3, MASTG-TEST-0234, Go-SCP (http tls), User Privacy Protection
   cheat sheet.
 - **SSH host-key verification is the same control, and it is disabled the same
@@ -325,7 +332,7 @@ mac_key  = HKDF(master, info=b"app/v1/url-signing",      length=32)
 - Verify hostname AND chain. Pin only when you control both ends and the client's update cadence (native mobile, first-party
   clients), never in browsers (HPKP is obsolete) or toward a third party: SPKI pins with a backup key and a rotation plan (mobile-platform guidance).
 - Plaintext fallbacks: no HTTP listeners that serve content (redirect-only),
-  HSTS (rules/05); internal traffic encrypted too — mTLS for service-to-service
+  HSTS ([rules/05](05-web-security.md)); internal traffic encrypted too — mTLS for service-to-service
   (identity, not just confidentiality).
 - Outbound TLS from your code deserves the same scrutiny as inbound config —
   audit every HTTP client construction for verification overrides.
@@ -344,7 +351,7 @@ ssl_session_tickets off;              # or rotate ticket keys — static keys br
 
 - Verification-key distribution: publish via versioned key sets (JWKS-style,
   `kid` on every artifact), cache with TTL, overlap old+new during rotation,
-  and pin the JWKS *endpoint* to your own allowlist (rules/17 §3 `jku` rules).
+  and pin the JWKS *endpoint* to your own allowlist ([rules/17](17-sessions-and-tokens.md) §3 `jku` rules).
 
 Constant-time comparison (formerly section 6) moved to [rules/22](22-constant-time-comparison.md) §1 on 2026-09-25.
 
@@ -367,13 +374,13 @@ Constant-time comparison (formerly section 6) moved to [rules/22](22-constant-ti
   OWASP category, A03:2025).
 
 Tamper-evident logs and audit ledgers (formerly section 8) moved to [rules/18](18-tamper-evident-logs.md) §1 on
-2026-09-25; signed request/response exchanges and self-describing receipts are rules/18 §2.
+2026-09-25; signed request/response exchanges and self-describing receipts are [rules/18](18-tamper-evident-logs.md) §2.
 
 ## 9. Secrets hygiene in code & pipelines
 
 - Secret detection in CI (gitleaks/trufflehog) blocking merges; pre-commit hooks
   as the early net. On any hit: **rotate first**, then scrub history.
-- Secrets never in: URLs/query strings (CWE-598), log statements (rules/07),
+- Secrets never in: URLs/query strings (CWE-598), log statements ([rules/07](07-data-exposure.md)),
   error messages, client-visible config (`NEXT_PUBLIC_*`, mobile binaries —
   anything shipped to the client is public), CI logs (mask + use OIDC-federated
   short-lived cloud creds instead of static keys).
@@ -413,13 +420,13 @@ KeyAgreement/KeyGenerator | createCipheriv/Hash/Hmac/Sign | crypto.subtle | hash
 
 ## Audit checklist
 
-- [ ] Are all symmetric encryptions AEAD (GCM/ChaCha20-Poly1305 family), with no ECB/unauthenticated-CBC/custom modes anywhere?
-- [ ] Is nonce generation per-key safe (counter or XChaCha/SIV for random), never hardcoded or derived from predictable values?
-- [ ] Is AAD used to bind ciphertexts to their context?
-- [ ] Do all security tokens/keys come from the OS CSPRNG with ≥128-bit entropy?
-- [ ] Are there zero hardcoded secrets in source, git history, or client bundles, with CI secret scanning enforced?
-- [ ] Are keys separated per purpose/environment, versioned, and rotatable without downtime?
-- [ ] Is every TLS client verifying certificates and hostnames (no skip-verify flags), TLS ≥1.2 AEAD-only?
+- [ ] Are all symmetric encryptions AEAD (GCM/ChaCha20-Poly1305 family), with no ECB/unauthenticated-CBC/custom modes anywhere (§1)?
+- [ ] Is nonce generation per-key safe (counter or XChaCha/SIV for random), never hardcoded or derived from predictable values (§2)?
+- [ ] Is AAD used to bind ciphertexts to their context (§2)?
+- [ ] Do all security tokens/keys come from the OS CSPRNG with ≥128-bit entropy (§3)?
+- [ ] Are there zero hardcoded secrets in source, git history, or client bundles, with CI secret scanning blocking merges and every hit rotated before history is scrubbed, no secret in a URL or query string, log line, error message, client-visible config or CI log (CI using OIDC-federated short-lived credentials, not static keys), and each secret class held in its own store (signing keys non-exportable in KMS, service credentials in a secrets manager with TTL, per-user tokens hashed) (§9)?
+- [ ] Are keys separated per purpose/environment, versioned, and rotatable without downtime (§4)?
+- [ ] Is every TLS client verifying certificates and hostnames (no skip-verify flags), TLS ≥1.2 AEAD-only (§5)?
 - [ ] **Is every SSH client verifying host keys? HIGH on any hit** — the §10 host-key row, plus
       every Node `ssh2` connect call with no `hostVerifier` (it auto-accepts). The pattern must
       match JSch's `setConfig("StrictHostKeyChecking", "no")` as well as `-o ...=no`; the
@@ -455,14 +462,14 @@ KeyAgreement/KeyGenerator | createCipheriv/Hash/Hmac/Sign | crypto.subtle | hash
       `grep -rnE 'optional_no_ca|ALWAYS_FORWARD_ONLY|RequireAnyClientCert|RequestClientCert|SSLContext\(\)|check_hostname[[:space:]]*=[[:space:]]*False|\(SSLSocket\)|createSSLEngine\(' .`
       — a raw `SSLSocket` hit is fine only with `setEndpointIdentificationAlgorithm("HTTPS")`;
       a Go `RequestClientCert` hit only with a `VerifyPeerCertificate` that chain-validates.
-- [ ] Are long-lived stored tokens hashed at rest?
-- [ ] Is MD5/SHA-1 absent from any security-relevant use?
-- [ ] Do decryption/verification failures return uniform errors and stop processing before plaintext use?
+- [ ] Are long-lived stored tokens hashed at rest (§3)?
+- [ ] Is MD5/SHA-1 absent from any security-relevant use (§1)?
+- [ ] Do decryption/verification failures return uniform errors and stop processing before plaintext use (§2)?
 - [ ] **Is every AEAD tag 128 bits and every ciphertext length-checked before slicing (§2)? MEDIUM**: `grep -rnE 'GCMParameterSpec\((32|64|96|104|112|120)[,)]|NewGCMWithTagSize\([^,]*,[[:space:]]*(1[0-5]|[0-9])\)|min_tag_length[[:space:]]*=[[:space:]]*([0-9]|1[0-5])([^0-9]|$)|authTagLength:[[:space:]]*([0-9]|1[0-5])([^0-9]|$)' .` ; then read each `[:nonceSize]`-style slice for a preceding length check.
-- [ ] Are signed URLs/blobs HMAC'd over canonical encodings with expiry, verified before any field is used?
-- [ ] Is sensitive-field encryption application-layer (envelope, AAD-bound), with deterministic encryption confined to blind indexes?
-- [ ] Are dependencies and release artifacts checksum/signature-verified in CI/CD?
-- [ ] Is there a single crypto wrapper module rather than scattered primitive calls?
+- [ ] Are signed URLs/blobs HMAC'd over canonical (length-prefixed or serialized-struct) encodings with expiry, verified before any field is used, with the signature covering the key version, Ed25519 used wherever a third party verifies, and verification keys published as a versioned key set with key IDs (§7)?
+- [ ] Is sensitive-field encryption application-layer (envelope, AAD-bound), with deterministic encryption confined to blind indexes (§4)?
+- [ ] Are dependencies lockfile- and checksum-verified, and are release artifacts and containers signed (Sigstore/cosign-class) and verified in the deploy pipeline (§7)?
+- [ ] Is there a single crypto wrapper module rather than scattered primitive calls, holding algorithms and parameters with a version tag on every ciphertext so an algorithm break is a planned migration (§9)?
 - [ ] **Is key strength consistent and at 128 bits for new designs (§4)** — every KEK at least
       as strong as what it wraps, DEK and KEK independent, sizes chosen for the data's secrecy
       lifetime? MEDIUM (HIGH at 1024-bit RSA or a sub-224-bit curve): `grep -rnE 'key_size=(1024|2048)([^0-9]|$)|genrsa[^|;&]*[[:space:]](1024|2048)([^0-9]|$)|initialize\((1024|2048)[,)]|modulusLength:[[:space:]]*(1024|2048)([^0-9]|$)|GenerateKey\([^,]*,[[:space:]]*(1024|2048)\)|ssh-keygen[^|;&]*-b[[:space:]]*(1024|2048)([^0-9]|$)|secp192|secp224|SECP192R1|SECP224R1|P-224|prime192' .`

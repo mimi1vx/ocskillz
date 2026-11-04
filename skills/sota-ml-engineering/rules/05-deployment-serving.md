@@ -13,7 +13,7 @@ progressive rollout validated on live traffic.
 - **Streaming** — predictions on an event stream.
 - Choose by freshness/latency requirement; don't build a real-time service when
   nightly batch suffices. The choice dictates the feature architecture
-  (`rules/01`).
+  ([`rules/01`](01-ml-systems-architecture.md)).
 
 ## 2. Packaging & the serving environment
 
@@ -21,21 +21,21 @@ progressive rollout validated on live traffic.
   environment** (container; pinned libs). The serving-time framework/version
   must match what the model expects — a silent library mismatch changes outputs.
 - Prefer portable, **safe** model formats: ONNX for cross-framework serving,
-  `safetensors` over `pickle` (`rules/07`). Use a serving runtime (Triton,
+  `safetensors` over `pickle` ([`rules/07`](07-security-governance.md)). Use a serving runtime (Triton,
   KServe, BentoML, Ray Serve, or a framework server) rather than ad-hoc Flask
   where scale/standardization matters. Do **not** adopt TorchServe — the repo
   was archived Aug 2025 (no updates or security patches); flag it in existing
   systems and migrate.
 - The serving path must apply the **same feature transforms** as training
-  (`rules/02`) — share code or a feature store, never reimplement.
+  ([`rules/02`](02-data-and-features.md)) — share code or a feature store, never reimplement.
 
 ## 3. Registry-gated promotion
 
-- Deploy from the **model registry** (`rules/01`): a model is promoted
-  staging→production only after the validation gate passes (`rules/04`). The
+- Deploy from the **model registry** ([`rules/01`](01-ml-systems-architecture.md)): a model is promoted
+  staging→production only after the validation gate passes ([`rules/04`](04-evaluation-validation.md)). The
   deployed artifact is immutable and traceable to its lineage.
 - Admission and the serving process's load path both verify the model
-  signature against the authorised signer, and fail closed (`rules/07` §2).
+  signature against the authorised signer, and fail closed ([`rules/07`](07-security-governance.md) §2).
 - Keep the **previous production model** available for instant rollback.
 
 ## 4. Progressive rollout & rollback
@@ -56,7 +56,7 @@ progressive rollout validated on live traffic.
   canary or A/B, each version gets its own KV/prefix caches, adapter pool and
   any cached embeddings or results, keyed by model version, so one version
   never serves from state the other produced (tenant-scoped caches:
-  `sota-code-security` rules/08 §4). OWASP: AISVS 3.3.3.
+  [`sota-code-security` rules/08](../../sota-code-security/rules/08-llm-ai-security.md) §4). OWASP: AISVS 3.3.3.
 
 ## 5. Operational concerns
 
@@ -74,7 +74,7 @@ progressive rollout validated on live traffic.
 - Retiring a model is a planned step, not neglect: revoke its serving endpoints
   and credentials first, then delete the weights, checkpoints, caches and
   derived embeddings, and the training data held only for it (subject to the
-  retention schedule, `sota-privacy-compliance`). Record what was erased,
+  retention schedule, [`sota-privacy-compliance`](../../sota-privacy-compliance/SKILL.md)). Record what was erased,
   where, when and by whom; the registry entry stays as a tombstone with that
   record (e.g. MLflow `MlflowClient.delete_model_version` removes the version, so
   write the record first). Storage-level erasure of the underlying buckets and
@@ -82,27 +82,35 @@ progressive rollout validated on live traffic.
 
 ## Audit checklist
 
-- [ ] **Serving/training parity — CRITICAL if features reimplemented in the server** —
-      `grep -rniE 'predict|inference|serve' --include='*.py' . | head` (confirm the server calls
-      the SAME feature transform code/store as training, rules/02)
-- [ ] **Safe model format & reproducible env — HIGH** —
+- [ ] **Serving pattern matches the freshness need (§1) — LOW (manual)** — is a real-time service
+      built where scheduled batch would meet the freshness requirement, and does the feature
+      path match the chosen pattern (batch, online, streaming)?
+- [ ] **Serving/training parity (§2) — CRITICAL if features reimplemented in the server** —
+      `grep -rniE 'predict|inference|serve' --include='*.py' . | head` — a locator: it lists
+      every serving site; each hit is read, not a finding (confirm the server calls the SAME feature transform code/store as training, [rules/02](02-data-and-features.md))
+- [ ] **Safe model format & reproducible env (§2) — HIGH** —
       `grep -rniE 'pickle|joblib|torch.load|cloudpickle' --include='*.py' . | head` (unsafe
-      load? (rules/07)); `grep -rniE 'safetensors|onnx|torchscript' --include='*.py' . | head` ;
+      load? ([rules/07](07-security-governance.md))); `grep -rqiE 'safetensors|onnx|torchscript' --include='*.py' . || echo "no safe model format"` ;
       `grep -rniE 'torchserve|torch-model-archiver' . | head` (EOL runtime (archived Aug 2025,
       no security patches) — HIGH);
       `find . -maxdepth 3 -not -path '*/node_modules/*' \( -name 'Dockerfile*' -o -name 'requirements*.txt' -o -name poetry.lock -o -name uv.lock -o -name 'conda*.yml' \)` (serving env
       pinned?)
-- [ ] **Registry-gated deploy + rollback — HIGH** —
+- [ ] **Registry-gated deploy + rollback (§3) — HIGH** —
       `out=$(grep -rniE 'registry|stage|promote|production|rollback|previous.*model|champion|challenger' . 2>&1); rc=$?` ;
       `case $rc in 0) printf '%s\n' "$out" | head ;; 1) echo "no registry/rollback path found" ;; *) echo "SWEEP FAILED, not a finding about their code: $out" ;; esac`
-- [ ] **Progressive rollout — MEDIUM/HIGH** —
+      ; manual: is the deployed artifact immutable and traceable to its lineage, and the previous
+      production model kept deployable? Signature at admission and load: the model-signing item
+      in [rules/07](07-security-governance.md)
+- [ ] **Progressive rollout — MEDIUM/HIGH** (§4) —
       `out=$(grep -rniE 'shadow|canary|a/?b|traffic.*split|gradual|ramp' . 2>&1); rc=$?` ;
       `case $rc in 0) printf '%s\n' "$out" | head ;; 1) echo "no progressive rollout" ;; *) echo "SWEEP FAILED, not a finding about their code: $out" ;; esac`
-- [ ] **Serving input validation — MEDIUM** —
-      `grep -rniE 'validate|schema|pydantic|unseen|unknown.*categor|fillna|missing' --include='*.py' . | head`
+- [ ] **Serving input validation and operability (§5) — MEDIUM** —
+      `grep -rqiE 'validate|schema|pydantic|unseen|unknown.*categor|fillna|missing' --include='*.py' . || echo "no serving input validation"`
+      ; manual: load-tested against the latency budget before launch, and a versioned,
+      backward-compatible serving API
 - [ ] **Full-state rollback and isolated caches (§4) — MEDIUM/HIGH** — cache keys with no
-      model version: `grep -rniE 'cache_?key' --include='*.py' . | grep -viE 'model_?(version|id)'`
+      model version: `grep -rniE 'cache_?key\s*=' --include='*.py' . | grep -viE 'model_?(version|id)'`
       ; manual: does the rollback bundle pin tokenizer, config, features, prompts and index?
 - [ ] **Model decommissioning (§6) — MEDIUM** —
-      `grep -rniE 'decommission|retire|delete_model_version|delete_registered_model' . || echo "no model retirement path"`
+      `grep -rqiE 'decommission|retire|delete_model_version|delete_registered_model' . || echo "no model retirement path"`
       ; manual: endpoints revoked before artifacts erased, and the erasure recorded

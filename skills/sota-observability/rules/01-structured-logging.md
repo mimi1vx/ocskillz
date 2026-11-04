@@ -100,7 +100,7 @@ that a level change (global, root or per-package) cannot silence. Changing the
 level at runtime goes through an approved path — a change record, or an
 automatic rule that raises verbosity for a bounded window and reverts on a
 timer — and the toggle itself is an authenticated, audited admin action
-(rules/05 §3). A scheduled check compares the level each running instance
+([rules/05](05-operational-readiness.md) §3). A scheduled check compares the level each running instance
 actually reports with the intended one, because a "temporary" DEBUG or OFF
 outlives the incident that caused it. OWASP: Logging cheat sheet.
 
@@ -130,10 +130,13 @@ Rules:
   a parallel `request_id` scheme if tracing exists; if you must keep a legacy
   request_id, log both.
 - Propagate into async work: thread pools, queue consumers, cron-spawned
-  tasks must restore context before logging (see rules/03 §4).
+  tasks must restore context before logging (see [rules/03](03-tracing.md) §4).
 - Also bind stable dimensions once per request: `user_id` (if policy allows),
   `tenant_id`, `service.version`, `deployment.environment.name` — via logger
-  context, not repeated at every call site.
+  context, not repeated at every call site. **Clear that context at the start of every request**
+  (`structlog.contextvars.clear_contextvars()`, `MDC.clear()` in `finally`): on a reused thread an
+  unreset context logs the previous request's tenant and user ([`sota-python` rules/04](../../sota-python/rules/04-async.md) §6;
+  the same applies to JVM thread pools).
 - Audit test: pick any prod log line; you must be able to retrieve the full
   request trace and all sibling logs from it. If not, correlation is broken.
 
@@ -209,7 +212,7 @@ what was actually returned or written: a producer may log its *intent*, only the
 consumer can report the *effect*. Verify it by changing what the function returns and
 reading the emitted line — for anything running unattended (cron, pipeline stage, agent
 loop) the log is the **only witness**, so a log unchanged by that mutation is the
-finding. Full class: `sota-code-security` rules/14 §1. Scattered lines force
+finding. Full class: [`sota-code-security` rules/14](../../sota-code-security/rules/14-control-not-in-force.md) §1. Scattered lines force
 join-by-timestamp archaeology; the wide event makes "show me slow checkouts
 for enterprise tenants on v2.14" a single query.
 
@@ -251,7 +254,7 @@ Rules:
   plan, amounts, flags), infrastructure (version, region, instance).
 - High dimensionality is the point — many fields per event is good. (High
   *cardinality* is fine in logs/events; it is only forbidden in metric
-  labels — see rules/02 §3.)
+  labels — see [rules/02](02-metrics.md) §3.)
 - Same pattern for non-HTTP work: one event per consumed message, per job
   run, per batch — with queue lag, attempt number, batch size.
 - Wide events at INFO are never sampled away independently of their request;
@@ -315,8 +318,10 @@ a log line, an attacker can cause a million.
   go through a single writer (one queue plus one listener thread, or the
   collector reading per-process stdout), not N handles on one file. POSIX
   only promises that pipe writes of at most `PIPE_BUF` bytes are not
-  interleaved — a stack trace is larger than that, and a regular file shared
-  between processes has no such promise.
+  interleaved — a stack trace is larger than that — and for a regular file
+  shared between processes POSIX promises only that an `O_APPEND` write lands
+  at end-of-file with no intervening modification; a short write, or a writer
+  without `O_APPEND`, still tears records.
 - **Test the failure modes, and write down the answer.** Cover: sink
   unreachable, disk full, write permission removed, and the logger itself
   throwing (a serializer raising on an odd object). For each, the test
@@ -351,7 +356,7 @@ OWASP: Logging cheat sheet, Proactive Controls 2024 C9.
 
 Logs hold the evidence an intruder most wants to read or erase, so the store
 gets the controls of a sensitive database. Integrity and tamper evidence are
-`sota-code-security` rules/18; this section is who reads, where files live,
+[`sota-code-security` rules/18](../../sota-code-security/rules/18-tamper-evident-logs.md); this section is who reads, where files live,
 and how records travel.
 
 - **Reads are events too.** Record every query or export against the log
@@ -373,33 +378,49 @@ and how records travel.
   exporter, `insecure: true` turns TLS off and `insecure_skip_verify: true`
   keeps TLS but skips server-certificate checks (both default to false).
   Events from clients and other trust zones stay untrusted input
-  (`sota-code-security` rules/07 §2).
+  ([`sota-code-security` rules/07](../../sota-code-security/rules/07-data-exposure.md) §2).
+
+- **Keep a logging inventory.** Per stack layer: which events are logged, in what format,
+  to which sink, read by whom, under what access and for how long. Ship it with the release
+  documentation and update it with the code. Sinks not in it are unreviewed exposure
+  ([`sota-code-security` rules/07](../../sota-code-security/rules/07-data-exposure.md) §2). OWASP: ASVS 5.0 V16.1.1.
 
 OWASP: Logging cheat sheet, ASVS 5.0 V16.4.2 and V16.4.3.
 
 ## Audit checklist
 
-- [ ] All services emit JSON (or otherwise structured) logs; no printf prose
+- [ ] All services emit JSON (or otherwise structured) logs (§1); no printf prose
       on production paths.
-- [ ] Field names consistent across services; a field dictionary or OTel
+- [ ] Field names consistent across services (§1); a field dictionary or OTel
       semantic conventions are followed.
-- [ ] Sample 20 ERROR lines from production: every one represents something
+- [ ] Sample 20 ERROR lines from production (§2): every one represents something
       a human should act on. No expected 4xx/no-rows/retry noise at ERROR.
 - [ ] Every production log line carries trace_id (or correlation ID); IDs
-      flow into async/queue/cron work.
+      flow into async/queue/cron work. The ID is the active OTel trace_id
+      (a legacy request_id is logged beside it, not instead of it), injected
+      from logger context rather than passed by hand, and that context is
+      cleared at the start of every request; from any one prod line the
+      full trace and its sibling logs can be retrieved (§3).
 - [ ] Redaction enforced at logger/pipeline level, not call sites; grep logs
       for `Authorization`, `password=`, `eyJ` (JWT), card-number patterns —
-      zero hits.
+      zero hits. A test logs each known-bad shape (headers, user objects,
+      error objects) through the real logger and asserts no secret value
+      appears; any secret ever found in logs was rotated and the log history
+      purged (§4).
 - [ ] One wide event per request/job exists with outcome, duration breakdown,
-      and business context; it fires on exceptions too.
+      and business context; it fires on exceptions too. Its counts and
+      outcome are derived from what the unit of work actually returned or
+      wrote: changing the function's return changes the emitted line (§5).
 - [ ] No per-item INFO logging in loops/batch jobs; hot-path DEBUG is sampled
-      or disabled in prod.
-- [ ] Sampling never drops errors or splits a request's logs; audit/security
-      logs are unsampled on a separate stream.
+      or disabled in prod (§6).
+- [ ] Sampling never drops errors, the wide events of failed or slow
+      requests, or splits a request's logs; audit/security logs are
+      unsampled on a separate stream (§6).
 - [ ] Log volume/cost reviewed; top producers known; retention set per
-      stream; health-check traffic not logged.
+      stream; health-check traffic not logged at INFO in the operational
+      stream (§6).
 - [ ] Exception serialization scrubbed (no connection strings/tokens in
-      messages or stack locals).
+      messages or stack locals); errors serialized from an allowlist (§4).
 - [ ] (**Medium**) Every log-emitting host and collector syncs time and drift
       is alerted (`node_timex_sync_status == 0` or an offset threshold);
       clients and edge devices carry a received/observed timestamp beside

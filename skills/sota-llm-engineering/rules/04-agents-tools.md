@@ -6,8 +6,8 @@ become open-ended unless you bound them in the harness. The harness — not the
 prompt — owns budgets, stopping, authorization, and observability.
 
 Security split: tool-call authorization, prompt-injection-resistant design,
-and the lethal trifecta are sota-code-security rules/08; executing agent code
-in isolation is sota-sandboxing rules/05. This file owns build quality.
+and the lethal trifecta are [sota-code-security rules/08](../../sota-code-security/rules/08-llm-ai-security.md); executing agent code
+in isolation is [sota-sandboxing rules/05](../../sota-sandboxing/rules/05-ai-agent-sandboxing.md). This file owns build quality.
 
 ## 1. Workflow first, agent when earned
 
@@ -68,7 +68,7 @@ are tool-design failures, not model failures.
   auditing, and parallelizing impossible — promote an action to a dedicated
   tool when you need to gate it (§6), validate it, render it, or mark it
   parallel-safe. Server-side scoping (tenant from session, not from model
-  args) is the security half — sota-code-security rules/08.
+  args) is the security half — [sota-code-security rules/08](../../sota-code-security/rules/08-llm-ai-security.md).
 - **Strict schemas:** enums, formats, `additionalProperties: false`, examples
   in descriptions; use provider strict/validated tool modes where available.
   Validate arguments in code anyway — schema conformance ≠ semantic validity.
@@ -82,12 +82,12 @@ are tool-design failures, not model failures.
   payload. Empty results return an explicit "no results, don't retry same
   args" message, not `[]` alone.
 - **Bound tool output size.** A tool returning 200KB of JSON floods the
-  context (rules/02 §2): paginate, summarize, or write-to-file-and-reference.
+  context ([rules/02](02-prompt-context-engineering.md) §2): paginate, summarize, or write-to-file-and-reference.
   Token-cap every tool result in the harness.
 - **Few, distinct tools.** Overlapping tools ("search_docs" vs "find_docs")
   cause dithering. Prefer one well-described tool per capability; for large
   tool libraries use provider tool-search/dynamic-loading rather than 80
-  schemas in every prompt (cache-aware: append, don't swap — rules/02 §5).
+  schemas in every prompt (cache-aware: append, don't swap — [rules/02](02-prompt-context-engineering.md) §5).
 - **A *required* tool call is a harness property, not a prompt sentence.** "You
   MUST call `check_policy` before answering" is disregarded exactly as often as
   any other instruction to a probabilistic interpreter, and it fails silently in
@@ -99,7 +99,7 @@ are tool-design failures, not model failures.
   rather than from prose alleging it. Then **count both events** (finalize
   attempts blocked, tool results cited but never returned): a mandatory step
   nobody measures is indistinguishable from one nobody needs. This is the
-  *mandatory* twin of sota-code-security rules/14 §3, which covers the
+  *mandatory* twin of [sota-code-security rules/14](../../sota-code-security/rules/14-control-not-in-force.md) §3, which covers the
   *prohibitive* direction ("never reveal…", "only call this for admins"); the
   remedy differs, because you cannot fix a **missing step** by removing something
   from the context.
@@ -135,11 +135,11 @@ class AgentBudget:
   `model_context_window_exceeded`) is the same truncation; refusal → its own
   path; provider pause/continue signals (Anthropic's `pause_turn`: a
   server-tool loop hit its iteration limit — send the content back) →
-  resume per provider docs. An unhandled
+  resume per provider docs (Anthropic's values, verified 2026-09-26). An unhandled
   `stop_reason` is an infinite-loop or data-corruption bug waiting.
 - Long runs on current frontier models can legitimately take minutes per
   request — plan streaming/async/progress UX rather than raising HTTP
-  timeouts forever (rules/05 §3).
+  timeouts forever ([rules/05](05-production-engineering.md) §3).
 
 ### 3a. Goal design — what the loop is allowed to call "done"
 
@@ -157,7 +157,7 @@ finishes wrong.
   pass" on its own is a licence to delete the failing test — the model is
   optimizing the metric you actually stated. `Done: suite green. Boundary: no
   test file deleted or weakened, coverage not lowered.` The **pair** is the
-  anti-Goodhart mechanism (rules/01 §8); the done-criterion alone is the bait.
+  anti-Goodhart mechanism ([rules/01](01-evals.md) §8); the done-criterion alone is the bait.
 - **Prefer reconciliation to assertion.** An exit condition anchored to an
   external fact — a golden sample, an upstream total, a financial tie-out —
   cannot be satisfied by editing the checker. Assertions can: loosen the
@@ -186,7 +186,7 @@ finishes wrong.
   baseline, so a failure that predates the run is neither claimed as fixed nor
   used to hide a new one. Any agent edit to tests, check or CI configuration,
   or thresholds goes to human review whatever its tier — the PR-side detector
-  is sota-testing rules/07 §7.10. OWASP: OWASP DSOMM.
+  is [sota-testing rules/07](../../sota-testing/rules/07-suite-health-and-ci.md) §7.10. OWASP: OWASP DSOMM.
 
 Land it in stages — run it once by hand (which forces you to state exactly how
 the judge decides), then as a scripted loop, then on a schedule. Build a loop
@@ -217,13 +217,9 @@ the harness pauses, a human (or policy engine) approves:
   to work counts as irreversible and needs approval *before* it runs, not a
   review after. The critical tier (money above a limit, production deletes,
   permission grants) needs a second, independent approver.
-- **An approval is a record bound to one action.** Store actor, tool,
-  target, the normalised arguments (or their hash), approver identity,
-  reason, timestamp and expiry; the executor re-checks that the call it is
-  about to run matches the record and has not expired, so an approval for
-  one argument set cannot be replayed on another. **A timed-out approval is
-  a denial** — the pending action is dropped, never run by default. OWASP:
-  AISVS 9.6.2; OWASP AI Agent Security cheat sheet; OWASP DSOMM.
+- **An approval is a signed record bound to one action** (normalised args,
+  expiry, executor re-check, fail closed; **a timed-out approval is a
+  denial**) — [`sota-code-security` rules/08](../../sota-code-security/rules/08-llm-ai-security.md) §2. OWASP DSOMM.
 - **A run nobody asked for is still a request.** An agent started by a
   schedule, an event, a webhook or its own follow-up plan goes through the
   same tiers and approvals as a user-initiated one — with no human in the
@@ -234,7 +230,7 @@ the harness pauses, a human (or policy engine) approves:
   firing another's trigger — and hold a consequential action for review when
   its trigger pattern is new. OWASP: AISVS 12.4.1.
 - Authorization (can this principal do this at all) is enforced in code
-  regardless of approval UX — sota-code-security rules/08; the prompt is never the boundary.
+  regardless of approval UX — [sota-code-security rules/08](../../sota-code-security/rules/08-llm-ai-security.md); the prompt is never the boundary.
 
 ## 5. Context management across turns
 
@@ -252,8 +248,8 @@ window, costs grow quadratically with history, and quality drops.
   writes (notes, learned preferences, prior decisions). Treat memory as a
   product surface: schema/format guidance in the prompt, size limits,
   expiry/decay, user-visible and erasable where it holds user data
-  (rules/06 §5), and protected from poisoning via untrusted content
-  (sota-code-security rules/08). Current frontier models measurably improve with an explicit
+  ([rules/06](06-data-lifecycle.md) §5), and protected from poisoning via untrusted content
+  ([sota-code-security rules/08](../../sota-code-security/rules/08-llm-ai-security.md)). Current frontier models measurably improve with an explicit
   memory file + instructions on when to consult/update it — but only if you
   tell them when.
 - **Memory admission has a precedence order.** Not everything the agent produced
@@ -266,13 +262,13 @@ window, costs grow quadratically with history, and quality drops.
   symptom of getting this wrong is a correction that will not stick: the user
   fixes something and the old value returns next session, because a confident
   agent note outranked it. The security half — poisoning by untrusted content,
-  cross-user scoping — is sota-code-security rules/08.
+  cross-user scoping — is [sota-code-security rules/08](../../sota-code-security/rules/08-llm-ai-security.md).
 - **Memory is state someone can edit behind your back.** Seal every persisted
   entry and saved agent state with a keyed MAC (e.g. HMAC-SHA256, key held
   outside the agent's reach) or a signature, verify it on every load, and
   drop and alert on an entry that fails — a bare hash protects nothing, since
   whoever rewrites the entry rewrites the hash. Redact secrets and personal
-  data before the write (rules/06 §5), encrypt the store at rest, version it
+  data before the write ([rules/06](06-data-lifecycle.md) §5), encrypt the store at rest, version it
   so a poisoned store rolls back to a known-good snapshot, and schedule review
   or reset of long-lived memory. **Check each write against what is stored**:
   an entry that contradicts a stored fact on the same subject is flagged and
@@ -281,7 +277,7 @@ window, costs grow quadratically with history, and quality drops.
   OWASP: AISVS 8.2.5, 9.4.4; OWASP AI Agent Security cheat sheet; OWASP DSOMM.
 - **Don't resend what you can reference:** large artifacts go to files/object
   storage with a read tool, not pasted into every turn.
-- Cache-aware: history is append-only with a stable prefix (rules/02 §5);
+- Cache-aware: history is append-only with a stable prefix ([rules/02](02-prompt-context-engineering.md) §5);
   compaction events are natural cache-rebuild points — don't also swap tools
   or models there.
 
@@ -299,13 +295,17 @@ consequences:
 
 - **Pin the protocol revision** you build against and plan the move from
   2025-11-25 to 2026-07-28 — don't hand-roll protocol handling; use maintained
-  official SDKs that absorb revision churn. 2026-07-28 deprecates the Roots,
+  official SDKs that absorb revision churn. **The exception is a deliberate one:** a
+  small stdio server kept dependency-free on purpose may hand-roll, if it records that
+  decision, names its revisions and runs against a real client on each one — the churn
+  is then yours. Measured 2026-10-07: a hand-rolled server missed a required
+  2026-07-28 field (`cacheScope`) that only a real client caught. 2026-07-28 deprecates the Roots,
   Sampling, and Logging features (removal eligible from the first revision on or
   after 2027-07-28) and removes protocol-level sessions and the `Mcp-Session-Id`
   header — new servers shouldn't adopt those features or depend on session state.
 - **Treat third-party MCP servers as untrusted dependencies:** version-pin,
   review tool descriptions before exposing them to your model (description
-  text is prompt input — injection surface, sota-code-security rules/08), and apply your own
+  text is prompt input — injection surface, [sota-code-security rules/08](../../sota-code-security/rules/08-llm-ai-security.md)), and apply your own
   allowlist/gating layer over their tools rather than mounting everything.
 - **Your own tools don't have to be MCP.** In-process tool definitions are
   simpler, faster, and easier to test; MCP earns its overhead when you need
@@ -347,7 +347,7 @@ consequences:
 - **When you operate/self-host an MCP server, harden the server,
   not just the client** (OWASP MCP Security): bind local HTTP/SSE transports to
   `127.0.0.1`, not `0.0.0.0`; **validate the `Origin`/`Host` header on every
-  request** to block DNS-rebinding from a browser tab; where a server still
+  request** to block DNS-rebinding from a browser tab (probe: [`sota-code-security` rules/05](../../sota-code-security/rules/05-web-security.md), Host allowlist); where a server still
   issues session IDs (legacy revisions up to 2025-11-25 — 2026-07-28 removed
   protocol sessions, and a server on it neither mints nor echoes
   `Mcp-Session-Id`), or hands out any state handle of its own, make it
@@ -366,11 +366,11 @@ consequences:
 
 ## 7. Multi-agent: patterns and their real costs
 
-Multi-agent is tier 5 for a reason. Costs that proposals systematically
-ignore: token multiplication (each agent re-carries context — orchestrator+
-subagent systems commonly burn ~10–15× a single chat's tokens), inter-agent
-information loss (agents communicate by lossy summary), debugging across N
-interleaved traces, and eval complexity (judge trajectories and handoffs,
+Multi-agent is tier 5 for a reason. Costs that proposals systematically ignore: token multiplication (each
+agent re-carries context — Anthropic measured *"about 4× more tokens than chat"* for one agent and *"about 15×"* for
+multi-agent systems, engineering post *How we built our multi-agent research system*; an exploratory MIT pilot,
+`michaelpetrik/agent-topology-bench`, measured a four-role committee at 6.6–7.3× one strong agent's tokens with no
+success gain — 36/36 vs 6/6, at ceiling), inter-agent information loss (lossy summaries), debugging across N traces, and eval complexity (judge trajectories and handoffs,
 not just final output).
 
 Patterns that earn their cost:
@@ -384,7 +384,7 @@ Patterns that earn their cost:
   context genuinely de-anchors review (a self-critiquing single agent
   doesn't). Cap revision rounds.
 - **Cheap-model subagents under an expensive orchestrator** for mechanical
-  legwork (rules/05 §1 routing applies per-agent).
+  legwork ([rules/05](05-production-engineering.md) §1 routing applies per-agent).
 - **Partition before you fan out.** N agents pointed at one target with one
   instruction do not give you N chances — they give you **one chance N times**,
   because they converge on whatever is most salient. The pattern that works
@@ -402,14 +402,15 @@ Dev-agent") replicating org charts instead of isolating contexts; depth>1
 delegation trees nobody can trace; agents sharing no state but expected to
 agree; multi-agent where one good prompt + workflow scores the same on the
 eval. Subagent results are inputs to the orchestrator — validate them like
-tool output; budgets (§3) apply **per-agent and per-tree** (a parent's
+tool output, and name before fanning out every number you will report, as a field in the
+agents' structured output: a count summed from their prose is not a measurement; budgets (§3) apply **per-agent and per-tree** (a parent's
 budget bounds the sum of its children). Budgets cap the total; they do not
 notice a hijacked agent working inside them. Give each agent and each tool a
 **circuit breaker that trips on anomaly, not only on errors** — a call rate far
 above that agent's baseline, a first call to a tool or host it has never used,
 a burst of denials. An open breaker pauses that agent and returns a structured
 "unavailable" to its caller, so one agent's failure does not cascade through
-its peers; the containment ladder is sota-sandboxing rules/05 R4.5. OWASP:
+its peers; the containment ladder is [sota-sandboxing rules/05](../../sota-sandboxing/rules/05-ai-agent-sandboxing.md) R4.5. OWASP:
 OWASP AI Agent Security cheat sheet; OWASP RAG Security cheat sheet.
 
 ## Audit checklist
@@ -420,7 +421,7 @@ OWASP AI Agent Security cheat sheet; OWASP RAG Security cheat sheet.
 - [ ] Escalation ladder respected: no agent where a workflow's eval scores
       match; no multi-agent without measured single-agent failure; the four
       §1 gates documented for every agent in the system.
-- [ ] Every tool: when-to-call description, strict schema
+- [ ] Every tool (§2): when-to-call description, strict schema
       (`additionalProperties: false`, enums), bounded output size,
       structured actionable errors, explicit empty-result semantics.
 - [ ] Every **required** tool call enforced in the harness, not asserted in the
@@ -446,9 +447,9 @@ OWASP AI Agent Security cheat sheet; OWASP RAG Security cheat sheet.
       `grep -rniE '(cron|schedule|add_job|on_event|subscribe).{0,60}agent' . | grep -viE 'trigger_polic|allowed_trigger|authori[sz]e_trigger'`
 - [ ] Coding agents: failing checks recorded before the run and the result
       judged against that baseline; agent edits to tests, check/CI config or
-      thresholds routed to human review (§3a; detector in sota-testing
-      rules/07 §7.10). **High**.
-- [ ] MCP transport matches reach: stdio only for a single local client,
+      thresholds routed to human review (§3a; detector in [sota-testing
+      rules/07](../../sota-testing/rules/07-suite-health-and-ci.md) §7.10). **High**.
+- [ ] MCP transport matches reach (a local HTTP/SSE server binds `127.0.0.1`, never `0.0.0.0`): stdio only for a single local client,
       never to share a server; shared/remote servers on authenticated HTTP
       with TLS (§6). OAuth tokens held by local clients in the OS credential
       store, a `0600` file only as a documented fallback. **High** for a
@@ -457,16 +458,16 @@ OWASP AI Agent Security cheat sheet; OWASP RAG Security cheat sheet.
 - [ ] Per-agent and per-tool circuit breakers trip on anomaly (rate spike,
       first-seen tool or host, denial burst), pause the agent and return a
       structured "unavailable" to its caller (§7). **Medium**.
-- [ ] Mutating tools idempotent or idempotency-keyed; no non-idempotent
+- [ ] Mutating tools idempotent or idempotency-keyed (§2); no non-idempotent
       side effects inside a retrying loop.
 - [ ] Harness enforces ALL budget dimensions (iterations, tokens, cost,
       wall-clock, consecutive-error, repeat-call) with loud, state-
-      preserving failure — grep every loop for its bound.
-- [ ] `stop_reason` exhaustively handled; truncated output never parsed as
-      complete.
-- [ ] Consequential actions behind per-action human/policy gates that
+      preserving failure; a detected loop gets one change-approach turn, then aborts (§3) — grep every loop for its bound.
+- [ ] `stop_reason` exhaustively handled, context-window and pause/continue stops included;
+      truncated output never parsed as complete (§3).
+- [ ] Consequential actions behind per-action human/policy gates (§4) that
       suspend durably and feed deny-reasons back; authorization additionally
-      code-enforced (sota-code-security rules/08).
+      code-enforced ([sota-code-security rules/08](../../sota-code-security/rules/08-llm-ai-security.md)).
 - [ ] Actions tiered by risk and reversibility; only the lowest tier
       auto-approves; critical tier needs a second approver; approvals bound
       to actor/tool/target/normalised args with expiry and approver, and a
@@ -480,14 +481,14 @@ OWASP AI Agent Security cheat sheet; OWASP RAG Security cheat sheet.
       revision (§6). **Critical** for a literal credential in a server
       definition. Probe (`PAT` only as a whole `_`-delimited word, so `PATH`,
       `PYTHONPATH` and `CLASSPATH` stay quiet): `grep -rnE '"([A-Z0-9_]*(TOKEN|KEY|SECRET|PASSWORD)[A-Z0-9_]*|([A-Z0-9]+_)*PAT(_[A-Z0-9]+)*)"[[:space:]]*:[[:space:]]*"[^"$]{8,}"' .`
-- [ ] Context management present for long sessions: pruning/compaction with
+- [ ] Context management present for long sessions (§5): pruning/compaction with
       eval coverage, memory with limits/expiry/erasability, artifacts by
       reference not by paste.
-- [ ] MCP: protocol revision pinned (2025-11-25 servers have a tracked migration
-      to 2026-07-28), official SDKs used, third-party servers version-pinned with
+- [ ] MCP: protocol revision pinned (§6) (2025-11-25 servers have a tracked migration
+      to 2026-07-28), official SDKs used (or a recorded dependency-free exception tested against a real client per revision), third-party servers version-pinned with
       reviewed descriptions and an own gating layer; MCP credentials in a
       vault.
-- [ ] Multi-agent: pattern is context-isolation/parallelism or fresh-context
+- [ ] Multi-agent (§7): pattern is context-isolation/parallelism or fresh-context
       verification — not role-play; token multiplication estimated and
       accepted; per-tree budgets; subagent output validated; traces
       reconstructable per agent.

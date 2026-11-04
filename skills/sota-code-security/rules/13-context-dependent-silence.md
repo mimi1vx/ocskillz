@@ -1,21 +1,23 @@
 # 13 — Context-Dependent Silence: correct here, broken there
 
-Five defect classes that `rules/10` does not cover and `rules/11`'s diagnostics
+Five defect classes that [`rules/10`](10-silent-control-failure.md) does not cover and [`rules/11`](11-dead-path-diagnostics.md)'s diagnostics
 point at but do not describe. What unites them is **conditionality**: each one is
 genuinely correct under the condition you tested and silently wrong under the one
 you shipped into — small input vs large, fresh artifact vs stale, the sample
 format vs the next one, one component vs the seam between two, this environment
 vs that one.
 
+## 0. Why these survive review: test the condition, not the instance
+
 That is why they survive review. There is no wrong line to find: the code is
 right, and the *condition* is what changed. A test written against the passing
 condition passes forever, which makes every one of these invisible to the
 same-context checks that would catch an ordinary bug.
 
-**Read this after `rules/11` §2** — its diagnostics (duration, denominator,
+**Read this after [`rules/11`](11-dead-path-diagnostics.md) §2** — its diagnostics (duration, denominator,
 cross-scale delta, telemetry silence, execution proof) are how you *notice* one of
 these; this file is what you are looking at once you do. The inert-control catalog
-is `rules/10`; proving a control works is `rules/12`.
+is [`rules/10`](10-silent-control-failure.md); proving a control works is [`rules/12`](12-verifying-the-verifier.md).
 
 ## 1. Scale-dependent silence — correct small, broken large
 
@@ -42,14 +44,14 @@ The tell: **the threshold is a literal in the code and no fixture crosses it.**
 logs `skipped 12 rules (budget exhausted)` at INFO and returns a normal-looking
 result has reported *partial* coverage as *complete*. The consumer cannot tell
 "clean" from "clean as far as we got". Rule: a truncating budget degrades loudly
-(rules/10 §3) **and** the result carries the partiality in its own value —
+([rules/10](10-silent-control-failure.md) §3) **and** the result carries the partiality in its own value —
 `coverage: partial`, `skipped: 12`, a distinct status — never only in a log line.
 An audit finding here is the missing field, not the budget.
 
 Proof required: state the trigger **numerically** (threshold, node count, row
 count) and show the fixtures never reach it. Measure at both scales where cheap.
 Performance framing of the same code → `deep-performance-audit`; the fixture
-side → `sota-testing` rules/03.
+side → [`sota-testing` rules/03](../../sota-testing/rules/03-doubles-and-test-data.md).
 
 ## 2. Stale-artifact no-op — a key narrower than the behaviour
 
@@ -81,7 +83,7 @@ carry the **trust context**, or a lower-trust build can poison a release).
 ## 3. Format assumption generalised from one sample
 
 The same error made about a **sentence** rather than a parser — a mechanism asserted from
-one artifact — is `rules/15` §2.1's third bullet.
+one artifact — is [`rules/15`](15-instruments-and-guards.md) §2.1's third bullet.
 
 A parser built against one observed sample of an external interface, where a
 sibling field, a newer version, or an edge case has another shape. Indexing into
@@ -126,8 +128,8 @@ pass their own tests — each knows only its own side of the seam.
 What separates this from §3 is *where the assumption lives*: §3 is a consumer
 generalising from one sample of an external interface; this is an internal seam
 **no schema describes**, so nothing exists for a registry or a compat check to
-compare. Declared contracts are `sota-data-engineering` rules/04 and
-`sota-testing` rules/04 — this class is what is left when none exists.
+compare. Declared contracts are [`sota-data-engineering` rules/04](../../sota-data-engineering/rules/04-data-quality-and-contracts.md) and
+[`sota-testing` rules/04](../../sota-testing/rules/04-integration-contract-system.md) — this class is what is left when none exists.
 
 The high-yield trigger is a change that is not a code change: **selecting a
 different backend, engine, driver, or frontend** for one class of input, where
@@ -152,7 +154,7 @@ version to pin.
 What makes it silent either way is the **defaulted read**. `d.get(k, default)` against a
 dict you did not construct converts a detectable disagreement into a plausible constant:
 the consumer names one key, the producer emits another, nothing raises. A `KeyError`
-would have surfaced it in minutes; the default runs for weeks. Field-reported
+would have surfaced it in minutes; the default runs for weeks. Observed
 2026-09-02, four instances in one service — a recorder reading `confidence` where the
 producer wrote `final_confidence` (168 rows stored `0.0`), and a store reading
 `verdict.get("reasoning", "")` where the model answered `reason` (221 of 232 rows
@@ -173,21 +175,21 @@ if raw is _MISSING:
   `d[k]` and let it raise. Where a default is genuinely right, absence must be
   **distinguishable from the default value** — a sentinel, a counter, a log line. The
   write-side twin — a literal `[]` or `""` emitted because the upstream dict never
-  carried the value — is `rules/16` §2.3, the same finding one function earlier.
+  carried the value — is [`rules/16`](16-where-no-ops-hide.md) §2.3, the same finding one function earlier.
 - **Where the producer is a model, no static check closes the seam.** The prompt naming
   a field and the code reading that field can both be correct while the model answers
   with a synonym: no diff, no version bump, no producer test that fails. The sound
   detector is **runtime** — diff the keys the response carried against the keys anything
   consumed, and log every returned key nothing read. **An ignored key is the signal**; it
   is the only artifact of the disagreement that exists on both sides.
-- This is the mirror of the tolerant-reader rule (API design guidance):
+- This is the mirror of the tolerant-reader rule ([`sota-api-design` rules/02](../../sota-api-design/rules/02-versioning-evolution.md) §3):
   ignoring unknown fields stays correct for evolvability, and what is added here is that
   it ignores them **audibly**. It is a different question from `deny_unknown_fields` at a
-  trust boundary (`rules/09` §4), which rejects because the producer is hostile; here the
+  trust boundary ([`rules/09`](09-untrusted-data-ingestion.md) §4), which rejects because the producer is hostile; here the
   producer is one you invoked.
 - The structural fix is upstream, not here: constrain the decoding
-  (`sota-llm-engineering` rules/02 §6). **A prompt is not an enforcement boundary** — in
-  every reported case the schema was inlined in the prompt, so rules/02 §1's
+  ([`sota-llm-engineering` rules/02](../../sota-llm-engineering/rules/02-prompt-context-engineering.md) §6). **A prompt is not an enforcement boundary** — in
+  every reported case the schema was inlined in the prompt, so [rules/02](02-authentication.md) §1's
   self-contained-prompt rule was already satisfied and did not help.
 
 Rule for BUILD: for every dict you read but did not construct, index it or make absence
@@ -235,7 +237,7 @@ collection rather than an error. Two defences, and you want both:
 differently from another, in the same tree, because a writer and its readers were each given
 their own default path — and the wrong answer is the well-formed, legitimate one.
 
-Field-reported: **6,491 advisories live in one SQLite file, and every default reader opened a
+Observed: **6,491 advisories live in one SQLite file, and every default reader opened a
 different one** whose table had zero rows. Proven by executing the same call against both:
 `lookup_advisories_for_package("Go", "github.com/cri-o/cri-o")` returned **13** and **0**. It
 was silent because `[]` is a *correct* answer meaning "this package has no known advisories",
@@ -244,7 +246,7 @@ command that **writes** the data defaulted the other.
 
 - **An empty result from a store must carry the store's identity and inventory.** *"0 rows"*
   is not a finding; *"0 rows in `/path/db.sqlite`, which holds 0 advisories total"* is, and
-  it names its own bug. The general form is `sota/rules/03` §2 — say what the answer is
+  it names its own bug. The general form: say what the answer is
   about.
 - **A default path repeated in N places is one design decision expressed N times.** Audit
   writers and readers *together*, not each against itself: the defect is invisible in either
@@ -257,10 +259,12 @@ command that **writes** the data defaulted the other.
 
 - [ ] **Scale**: does any control's behaviour change with input size — a
       size-gated path, a chunked branch, a timeout, a pagination limit — and does
-      a fixture actually cross that threshold (§1)?
+      a fixture actually cross that threshold (§1)? Unbounded traversals, recursion and
+      variable-length queries bounded?
 - [ ] **Staleness**: is any cache, fingerprint, tag or memo keyed on **less** than
       the behaviour it stands for, so a change that matters leaves the key equal
-      (§2)?
+      (§2)? Asked of every key: what input can change while it stays constant — tool/ruleset
+      **version** included?
 - [ ] **One sample**: was any parser, matcher or format assumption written against
       a single reference implementation, and does it reject the *other* correct
       spelling (§3)?
@@ -273,10 +277,23 @@ command that **writes** the data defaulted the other.
 - [ ] **Location**: does the control depend on an environment fact — a default
       `char` signedness, a filesystem's case behaviour, a locale, a mounted
       path — that differs between where it was tested and where it runs (§5)?
-- [ ] For every one found: is the **condition** written into a regression test,
+- [ ] For every one found: is the **condition** written into a regression test (§0),
       rather than the instance being patched (all sections)?
 - [ ] **Does every empty result name the store it queried?** (§6) "0 rows" without the store's
       path and inventory is not a finding. Where a writer and its readers each carry a default
       path, audit them *together* — one design decision expressed N times, and the defect is
       invisible in either half alone.
+- [ ] Truncating budgets degrade **loudly and in the returned value** (§1)
+      (`coverage: partial`), never only in a log line?
+- [ ] External-interface parsers validated against the **declared schema** (§3) and a
+      real sample from the installed version, not one observed response; numeric
+      parsing rejects trailing garbage?
+- [ ] Every artifact handed **between stages** (§4) has its layout, writer and reader
+      named, and any producer change validated by **running the consumer on real
+      output** — not by each side's own tests?
+- [ ] **Environment-dependent predicates** (§5): any filter tested against an absolute
+      path, hostname, username, env var or locale — each hit of
+      `grep -rnE '\.parts|os\.environ|gethostname' .` near a comprehension. Run the suite from a `mktemp -d` clone, not
+      the working tree; on macOS that path resolves under `/private`, which is exactly
+      the component such filters tend to exclude.
 

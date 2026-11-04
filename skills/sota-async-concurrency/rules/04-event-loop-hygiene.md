@@ -1,6 +1,8 @@
 # 04 — Event-Loop Hygiene: Never Block the Loop
 
-## The contract
+## 1. The contract
+
+*(advisory)* — the rationale and latency math behind §2–§8; its rule is probed there.
 
 An event loop multiplexes thousands of tasks onto one thread. Any task that
 holds the thread for more than ~10–50ms steals latency from **every** other
@@ -11,7 +13,7 @@ One blocking call in one handler degrades the whole process. There is no
 Latency math: a 200ms sync call on a loop serving 500 req/s queues ~100
 requests behind it. Blocking is a tail-latency multiplier, not a local cost.
 
-## The blocklist — what must never run on the loop thread
+## 2. The blocklist — what must never run on the loop thread
 
 1. **Sync I/O:** file reads/writes (`open`/`read`, `fs.readFileSync`),
    sync HTTP clients (`requests`, `urllib`, `http.client`), sync DB drivers
@@ -50,7 +52,7 @@ async def register(req):
     await asyncio.sleep(0.1)
 ```
 
-## Offloading correctly
+## 3. Offloading correctly
 
 | Runtime | I/O-blocking call | CPU-bound work |
 |---|---|---|
@@ -74,7 +76,7 @@ Offloading rules:
   state from worker threads; return data and apply it on the loop
   (`call_soon_threadsafe` / channel back / `postMessage`).
 
-## Long-task chunking
+## 4. Long-task chunking
 
 When CPU work must run on the loop (small, frequent, not worth a pool),
 chunk it so other tasks interleave:
@@ -100,7 +102,7 @@ bound the chunk's own cost — size N so each chunk stays under ~10ms. Chunking
 mutable shared state reintroduces interleaving races (rule 02): your data
 structure is now visible mid-aggregation.
 
-## Microtask vs macrotask (JS — and the asyncio analogue)
+## 5. Microtask vs macrotask (JS — and the asyncio analogue)
 
 - **Microtasks** (promise callbacks, `queueMicrotask`, `await` resumption)
   run to exhaustion after the current task, *before* rendering, I/O events,
@@ -128,7 +130,7 @@ while (!done) { await new Promise(r => setImmediate(r)); doSmallStep(); }
   But a coroutine that awaits only immediately-ready awaitables can still hog;
   the loop runs ready callbacks in batches.
 
-## Sync-over-async: the self-deadlock
+## 6. Sync-over-async: the self-deadlock
 
 Blocking the loop on a result *the loop itself must produce* doesn't just
 degrade — it deadlocks instantly. The loop thread waits on a future; the
@@ -169,7 +171,7 @@ the JS analogue is `Atomics.wait` on the main thread. Variants to flag:
 the program (one `asyncio.run` / `#[tokio::main]` / single runtime), not
 sprinkled through the call graph. Crossings mid-stack are findings.
 
-## Detecting a blocked loop (build it in; check for it in audits)
+## 7. Detecting a blocked loop (build it in; check for it in audits)
 
 - **Python:** run with `loop.set_debug(True)` + `loop.slow_callback_duration =
   0.05` in staging — logs any callback >50ms with its name. `aiomonitor`
@@ -177,14 +179,15 @@ sprinkled through the call graph. Crossings mid-stack are findings.
   inspects a live process's task tree (`pstree` also reports await-graph
   cycles, i.e. async deadlocks); `asyncio.print_call_graph()` in-process.
 - **Node:** monitor event-loop lag/utilization (`perf_hooks.monitorEventLoopDelay`,
-  `performance.eventLoopUtilization()`); alert at p99 lag >100ms.
+  `performance.eventLoopUtilization()`); alert at p99 lag >100ms — the library's one
+  loop-lag threshold, a judgment that matches asyncio debug mode's 100 ms slow-callback default.
   `blocked-at` pinpoints offenders in dev.
 - **Rust:** `tokio-console` shows tasks with long poll times; a single poll
   >100ms is a blocking bug.
 - An audit of an async service that has **no loop-lag metric** should flag
   that as a MEDIUM observability finding by itself.
 
-## Sneaky blockers (audit-grade list)
+## 8. Sneaky blockers (audit-grade list)
 
 - Logging handlers doing sync file/network writes on the loop (Python
   `logging` to a slow disk; use `QueueHandler`).
@@ -206,22 +209,32 @@ sprinkled through the call graph. Crossings mid-stack are findings.
       `subprocess.run`, `open(`, `.read()`/`.write()` on files, `sqlite3`,
       `psycopg2`, `boto3` (sync), `Sync(` suffixed Node APIs, `hashSync`,
       `pbkdf2Sync`, `execSync`, `std::thread::sleep`, `std::sync::Mutex` in
-      hot async paths, `reqwest::blocking`.
+      hot async paths, `reqwest::blocking`, `threading.Lock` acquire and
+      `queue.Queue` `.get()`/`.join()` inside coroutines (§2).
 - [ ] Sync-over-async crossings mid-stack: `run_until_complete`/`block_on`/
       `.result()`/`.Result` reachable from loop threads (deadlock-capable:
-      CRITICAL); `nest_asyncio` anywhere.
-- [ ] Password hashing / crypto in request handlers: offloaded? (HIGH if not.)
-- [ ] Large JSON/template/compression work on the loop thread?
+      CRITICAL); `nest_asyncio` anywhere; offloaded functions calling
+      `fut.result()` back into the loop (§6).
+- [ ] Password hashing / crypto in request handlers (§2): offloaded? (HIGH if not.)
+- [ ] Large JSON/template/compression work on the loop thread (§2)?
 - [ ] Offload pools: bounded? Sized deliberately? Semaphore in front of
-      `spawn_blocking`/executor for expensive ops?
-- [ ] Worker results applied to shared state via loop-safe mechanism
+      `spawn_blocking`/executor for expensive ops? Large payloads shipped to a
+      process pool (serialization cost)? Calls whose p99 can exceed 10ms left
+      on the loop? (§3)
+- [ ] Worker results applied to shared state via loop-safe mechanism (§3)
       (`call_soon_threadsafe`, channels, `postMessage`) — not direct mutation
       from the worker thread?
 - [ ] Long loops over unbounded input without a yield point (and is the
-      chunked state safe to observe mid-flight)?
+      chunked state safe to observe mid-flight)? Chunk size kept under ~10ms
+      per chunk? (§4)
 - [ ] JS: recursive microtask/`nextTick` patterns; `await Promise.resolve()`
-      used as a "yield" (it isn't).
-- [ ] Node `dns.lookup` on hot paths / `UV_THREADPOOL_SIZE` left at 4 with
+      used as a "yield" (it isn't) (§5).
+- [ ] Node `dns.lookup` on hot paths (§2) / `UV_THREADPOOL_SIZE` left at 4 with
       heavy fs+crypto+dns use?
+- [ ] Sneaky blockers (§8), MEDIUM: imports inside handlers —
+      `grep -rnE '^[[:space:]]+(import [A-Za-z_]|from [A-Za-z_.]+ import )' --include='*.py' .`
+      (keep hits inside `async def`; a module-level `try:` import is noise);
+      logging to file/network on the loop without `QueueHandler`; "async" ORM
+      facades over sync drivers; metrics endpoints rendering on the loop.
 - [ ] Loop-lag metric exported and alerted on? Debug slow-callback logging
-      available in staging?
+      available in staging? No loop-lag metric = MEDIUM (§7).

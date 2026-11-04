@@ -1,6 +1,6 @@
 # 03 — Primitives: Locks, Semaphores, Condvars, Channels, Select, Once
 
-## Picking the primitive
+## 1. Picking the primitive
 
 | Need | Use | Not |
 |---|---|---|
@@ -15,7 +15,7 @@
 Prefer the highest-level primitive that fits: channel > semaphore > mutex >
 atomic > condvar (condvars are last because they're the easiest to misuse).
 
-## Mutex vs RwLock — RwLock is not "mutex but faster"
+## 2. Mutex vs RwLock — RwLock is not "mutex but faster"
 
 - RwLock pays for its bookkeeping; under short critical sections a plain mutex
   often outperforms it. Choose RwLock only for **read-heavy, long-ish reads,
@@ -43,7 +43,7 @@ Upgradable locks (read→write upgrade) deadlock when two readers both try to
 upgrade. If your design "needs" an upgrade, restructure: release, re-acquire
 write, **re-validate** (state may have changed — TOCTOU otherwise).
 
-## Semaphores: the bounding primitive
+## 3. Semaphores: the bounding primitive
 
 A semaphore's job in modern code is **admission control**: cap in-flight
 work, connections, memory-heavy operations.
@@ -68,7 +68,7 @@ Rules:
 - Weighted semaphores (`golang.org/x/sync/semaphore`) for memory-proportional
   bounding: acquire `n = estimated_bytes`, not 1.
 
-## Condition variables: two famous bugs
+## 4. Condition variables: two famous bugs
 
 **Bug 1 — spurious wakeups & stolen wakeups.** `wait()` can return without a
 notify, and another thread may consume the state between notify and your
@@ -99,7 +99,7 @@ In async code, prefer events/channels over condvars; if you use
 `asyncio.Condition`, the same predicate-loop law applies (`await
 cond.wait_for(pred)` encodes it).
 
-## Channels & queues: bounded or it's a bug
+## 5. Channels & queues: bounded or it's a bug
 
 **An unbounded channel is a memory leak with extra steps.** If the producer
 is ever faster than the consumer — and under load it will be — the queue
@@ -144,7 +144,7 @@ Channel discipline:
   pull semantics or a library — `Array.push` into a shared array consumed by
   an interval is an unbounded queue in disguise.
 
-## Select / race patterns
+## 6. Select / race patterns
 
 `select` (Go), `tokio::select!`, `asyncio.wait(FIRST_COMPLETED)`,
 `Promise.race` — wait on multiple sources, proceed with the first.
@@ -178,7 +178,7 @@ await asyncio.gather(*pending, return_exceptions=True)  # reap, don't leak
 result = done.pop().result()
 ```
 
-## Once / lazy init
+## 7. Once / lazy init
 
 One-time initialization under concurrency must be a primitive, not a flag:
 
@@ -211,7 +211,7 @@ function getConn() {
   if init can call back into something needing the same Once (or lock),
   that's a self-deadlock; `sync.Once` re-entry deadlocks.
 
-## Reentrancy & lock scope hygiene
+## 8. Reentrancy & lock scope hygiene
 
 - Recursive/reentrant mutexes paper over design problems and break invariant
   reasoning (the invariant may be broken when you re-enter). Avoid; refactor
@@ -223,21 +223,36 @@ function getConn() {
 
 ## Audit checklist
 
-- [ ] Unbounded anything: `Queue()` no maxsize, `unbounded_channel`,
+- [ ] Unbounded anything (§5): `Queue()` no maxsize, `unbounded_channel`,
       `make(chan T, huge)`, arrays used as queues, channels with
       goroutine-per-send. Each is MEDIUM minimum; HIGH on network-fed paths.
 - [ ] Condvar waits: `if` instead of `while` around `wait()` (HIGH);
       predicate mutated outside the mutex; `notify_one` with heterogeneous
-      waiters.
+      waiters (§4).
 - [ ] RwLock: recursive read acquisition; reader-storm writer starvation;
-      upgrade patterns; would snapshot-swap be simpler?
+      upgrade patterns (state re-validated after release and re-acquire);
+      would snapshot-swap be simpler? Chosen without read-heavy, measured
+      contention, where a plain mutex is likely faster? (§2)
 - [ ] Semaphores: released on all paths (RAII/finally)? Acquired with
-      timeout/cancellation? Nested under another semaphore/pool?
+      timeout/cancellation? Nested under another semaphore/pool without a
+      global order? Memory-heavy work bounded by weight (bytes), not 1? (§3)
 - [ ] Channel sends/receives without a cancellation branch; close() called
-      from consumer side or from multiple producers (Go panic).
+      from consumer side or from multiple producers (Go panic); capacity
+      choice undocumented (§5).
 - [ ] `Promise.race` / `select!` / `wait(FIRST_COMPLETED)`: are losers
       cancelled and reaped? Are tokio `select!` arms cancellation-safe?
+      Hand-rolled "check A then B" loops starving B, or a shutdown branch that
+      must win ties without `biased;` or an explicit first check? (§6)
 - [ ] Lazy init: value memoized instead of future (stampede)? Failed init
-      cached forever (permanent outage)? DCL without acquire/release?
-- [ ] Critical sections containing I/O, awaits, callbacks, or logging.
-- [ ] Reentrant locks or `fooLocked` conventions violated (double-acquire).
+      cached forever (permanent outage)? DCL without acquire/release? Init
+      inside a Once that can call back into the same Once or lock
+      (self-deadlock)? (§7)
+- [ ] Primitive mismatches (§1), MEDIUM: read each hand-off and wait site for
+      a shared list + lock + sleep-poll used as a queue, a polling loop
+      waiting for a state change, a spin-checked counter bounding access, or
+      two atomics guarding one invariant; replace with the table's "Use".
+- [ ] Critical sections containing I/O, awaits, callbacks, or logging (§8).
+- [ ] Reentrant locks or `fooLocked` conventions violated (double-acquire);
+      critical sections doing more than lock, mutate, unlock (see the item
+      above); lock not named after and declared next to the data it guards
+      (§8).

@@ -37,33 +37,35 @@ recently-fired alerts; open the on-call dashboard cold and try to answer
 
 ## 2. Evidence-gathering greps and probes
 
+*(advisory)* — a reference list of lead-finding greps for the §1 trace; its one rule, a hit is a lead and not a finding, is probed by the §6 evidence item.
+
 Adapt to language/stack; these locate the load-bearing code fast.
 
 ```bash
 # Logging reality: structured vs printf
-grep -rEn 'print\(|console\.log|System\.out|fmt\.Print' --include='*.py' --include='*.js' --include='*.ts' --include='*.go' --include='*.java' src/ | head
-grep -rEn 'logger\.|log\.|slog\.|zap\.|structlog|pino|winston' src/ | head
+grep -rEn 'print\(|console\.log|System\.out|fmt\.Print' --include='*.py' --include='*.js' --include='*.ts' --include='*.go' --include='*.java' --exclude-dir=node_modules --exclude-dir=.git . | head
+grep -rEn 'logger\.|log\.|slog\.|zap\.|structlog|pino|winston' --exclude-dir=node_modules --exclude-dir=.git . | head
 
 # Level abuse: expected events at error level
-grep -rEn 'log(ger)?\.(error|Error)' src/ | grep -iE 'not found|retry|invalid input|missing param'
+grep -rEn 'log(ger)?\.(error|Error)' --exclude-dir=node_modules --exclude-dir=.git . | grep -iE 'not found|retry|invalid input|missing param'
 
 # Secrets/PII risk at call sites
-grep -rEn 'log.*\b(password|token|secret|authorization|api_key|ssn|card)' -i src/
-grep -rEn 'log.*(req\.(headers|body)|request\.(headers|json)|to_dict\(\)|JSON\.stringify\(req)' src/
+grep -rEn 'log.*\b(password|token|secret|authorization|api_key|ssn|card)' -i --exclude-dir=node_modules --exclude-dir=.git .
+grep -rEn 'log.*(req\.(headers|body)|request\.(headers|json)|to_dict\(\)|JSON\.stringify\(req)' --exclude-dir=node_modules --exclude-dir=.git .
 
 # Correlation: who binds trace/request IDs, and is it middleware or hand-passed
-grep -rEn 'trace_id|traceId|correlation|request_id|traceparent' src/ | head -30
+grep -rEn 'trace_id|traceId|correlation|request_id|traceparent' --exclude-dir=node_modules --exclude-dir=.git . | head -30
 
 # OTel posture: API vs SDK, where configured, propagators
 grep -rn 'opentelemetry' --include='*' -l | head
-grep -rEn 'TracerProvider|set_tracer_provider|NodeSDK|sdktrace' src/   # should hit ~1 file/service
-grep -rEn 'inject|extract' src/ | grep -i propagat                      # queue propagation exists?
+grep -rEn 'TracerProvider|set_tracer_provider|NodeSDK|sdktrace' --exclude-dir=node_modules --exclude-dir=.git .   # should hit ~1 file/service
+grep -rEn 'inject|extract' --exclude-dir=node_modules --exclude-dir=.git . | grep -i propagat                      # queue propagation exists?
 
 # Metrics cardinality: label values from variables = suspect
-grep -rEn '\.labels\(|With\(prometheus\.Labels|attributes=' src/ | grep -vE '"(GET|POST|2xx|4xx|5xx)"'
+grep -rEn '\.labels\(|With\(prometheus\.Labels|attributes=' --exclude-dir=node_modules --exclude-dir=.git . | grep -vE '"(GET|POST|2xx|4xx|5xx)"'
 
 # Health endpoints: what do they actually check
-grep -rEn '(livez|healthz|readyz|/health|/ready|liveness|readiness)' src/ k8s/ deploy/ charts/
+grep -rEn '(livez|healthz|readyz|/health|/ready|liveness|readiness)' --exclude-dir=node_modules --exclude-dir=.git .
 
 # Debug surface exposure
 grep -rEn --exclude-dir=node_modules --exclude-dir=.git 'pprof|actuator|debug|heapdump|/metrics' . | grep -ivE 'test|_test'
@@ -73,7 +75,7 @@ find . -path ./node_modules -prune -o -name '*.y*ml' -print | xargs grep -lE 'al
 find . -name '*.json' | xargs grep -l '"panels"' 2>/dev/null | head
 
 # Error tracking
-grep -rEn 'sentry|rollbar|bugsnag|crashlytics|captureException' src/ | head
+grep -rEn 'sentry|rollbar|bugsnag|crashlytics|captureException' --exclude-dir=node_modules --exclude-dir=.git . | head
 ```
 
 Then read the hits in full context — a grep match is a lead, not a finding.
@@ -83,7 +85,7 @@ Then read the hits in full context — a grep match is a lead, not a finding.
 Pattern-match against these; each maps to the rules file that specifies the
 fix. Severity per SKILL.md conventions.
 
-**Logging (rules/01):**
+**Logging ([rules/01](01-structured-logging.md)):**
 - G1. printf/console logging on prod paths; unparseable. [MEDIUM]
 - G2. No correlation/trace ID in logs; async/queue work logs orphaned. [HIGH]
 - G3. Secrets/PII reachable in logs (headers, bodies, user objects dumped);
@@ -101,17 +103,18 @@ fix. Severity per SKILL.md conventions.
   severities. [MEDIUM, HIGH where an audit trail is a compliance claim]
   OWASP: ASVS 5.0 V16.1.1, Logging cheat sheet.
 
-**Metrics (rules/02):**
+**Metrics ([rules/02](02-metrics.md)):**
 - G7. No RED per route; or "error" undefined (4xx counted, timeouts not). [HIGH]
 - G8. No saturation metrics on pools/queues — the "slow but CPU idle"
   blindspot. [HIGH]
 - G9. Unbounded labels (IDs, raw paths, error strings). [HIGH; CRITICAL if
   user-mintable]
 - G10. Latency as gauge/average; p99s averaged across instances; buckets
-  never tuned to SLO thresholds. [MEDIUM–HIGH]
+  never tuned to SLO thresholds. [HIGH when an SLO or a page reads the
+  averaged number — the SKILL.md table's case; MEDIUM on a dashboard only]
 - G11. No exemplars / no metric→trace path. [MEDIUM]
 
-**Tracing (rules/03):**
+**Tracing ([rules/03](03-tracing.md)):**
 - G12. No tracing at all on a multi-service system. [HIGH]
 - G13. Broken propagation: traces shatter at queue/job boundaries; one user
   action = N disconnected traces. [HIGH]
@@ -120,7 +123,7 @@ fix. Severity per SKILL.md conventions.
 - G15. Naive 1% head sampling: zero traces of any error. [MEDIUM–HIGH]
 - G16. PII in span attributes or baggage; baggage leaking to third parties. [CRITICAL]
 
-**SLOs & alerting (rules/04):**
+**SLOs & alerting ([rules/04](04-slos-alerting.md)):**
 - G17. No SLOs; alerting is ad-hoc thresholds someone set in 2022. [HIGH]
 - G18. Cause-based paging (CPU, restarts, disk%) with no symptom coverage;
   or every ERROR log pages. [HIGH]
@@ -141,11 +144,12 @@ fix. Severity per SKILL.md conventions.
   log query is the real observability system. Runbooks/dashboards absent
   or stale. [MEDIUM]
 
-**Operational readiness (rules/05):**
+**Operational readiness ([rules/05](05-operational-readiness.md)):**
 - G22. Liveness probe checks dependencies (restart-storm primitive); or
   readiness == liveness == "return 200". [CRITICAL/HIGH]
 - G23. Debug/profiling/metrics endpoints reachable without auth from
-  outside the internal network. [CRITICAL]
+  outside the internal network. [CRITICAL when they return memory, env or
+  config; HIGH for profiles and stack traces — rules/05 §3]
 - G24. Silent fallbacks: degradation with no metric/log/alert. [HIGH]
 - G25. No error tracker, or tracker is a landfill (thousands untriaged, no
   release tags, no sourcemaps). [HIGH/MEDIUM]
@@ -165,7 +169,7 @@ for trace_id in a sample log line; deliver verdicts + top-5 findings.
 
 **1 day (standard):** full §1 journey trace for two paths incl. failure
 path; label-cardinality review of every custom metric; alert inventory
-against the rules/04 quality bar; debug-surface enumeration; scored rubric
+against the [rules/04](04-slos-alerting.md) quality bar; debug-surface enumeration; scored rubric
 + full findings report.
 
 **1 week (deep):** everything above, plus: live verification (break a
@@ -236,20 +240,28 @@ Rules for findings:
 ## Audit checklist (meta — did the audit itself cover everything)
 
 - [ ] 2–3 critical user journeys traced through actual code, entry to
-      async tail, including the failure path.
-- [ ] The two verdict questions answered with named evidence.
-- [ ] All five pillars scored; gaps mapped to catalog IDs and rules files.
-- [ ] Secrets/PII telemetry scan performed (logs, span attributes, baggage,
+      async tail, including the failure path; the 3am on-call path walked
+      (alert → runbook → dashboard → trace/log query), each missing link
+      recorded as a finding (§1).
+- [ ] The two verdict questions answered with named evidence, whatever the
+      time box, with the CRITICAL hunts (secrets in telemetry, liveness
+      dependency checks, exposed debug endpoints) run first (§4).
+- [ ] All five pillars scored 0–3 against the rubric, the profile reported
+      rather than only a total (§5); gaps mapped to catalog IDs and rules
+      files, at the catalog's severities (§3).
+- [ ] Secrets/PII telemetry scan performed (§3, §4) (logs, span attributes, baggage,
       error tracker payloads).
-- [ ] Probe configs (liveness/readiness) read from deploy manifests, not
+- [ ] Probe configs (liveness/readiness) read from deploy manifests (§4), not
       assumed; debug surface enumerated from route/port truth.
-- [ ] Alert inventory reviewed against actionability/runbook/owner bar;
+- [ ] Alert inventory reviewed against actionability/runbook/owner bar (§4);
       on-call interviewed or page history sampled if accessible.
-- [ ] Telemetry pipeline itself assessed (sampling config, export loss,
+- [ ] Telemetry pipeline itself assessed (§3) (sampling config, export loss,
       collector SPOF, dead-man's-switch).
-- [ ] Findings carry file:line evidence, severity, concrete fix, effort;
-      "shortest path to YES" list delivered.
-- [ ] Logging inventory requested and compared with the code (G29): pick
+- [ ] Findings carry file:line evidence, severity, concrete fix, effort (no
+      evidence, no finding); "absent" is kept apart from "present but
+      broken", what is good is noted, and the "shortest path to YES" list
+      is delivered (§6).
+- [ ] Logging inventory requested and compared with the code (§3) (G29): pick
       three events it lists (e.g. a failed login, an authorization denial, an
       admin change), trigger each in a test or sandbox, and confirm the record
       arrives in the named sink with the documented name, fields and severity.

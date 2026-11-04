@@ -12,7 +12,7 @@ description: >-
   instrumentation, health check, runbook, Sentry, crash reporting, profiling.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@a02c19971ad39254846890f87300a46b19e3e82e
+  source: martinholovsky/SOTA-skills@4c4837e3f891b4194623e467fec6294df4ff8d0a
   adapted-for: opencode
 ---
 
@@ -67,14 +67,16 @@ not afterthoughts. Workflow:
 
 ## AUDIT mode
 
-Assess an existing codebase/deployment. Read `rules/06` first for the full
+**Coverage:** every `rules/` file's Audit checklist applies in AUDIT mode. Mark one *not applicable* only with its reason in the report — never skip a file because the thing it checks for is absent, since that absence may be the finding.
+
+Assess an existing codebase/deployment. Read [`rules/06`](rules/06-audit-playbook.md) first for the full
 playbook; sample real code paths, do not trust README claims.
 
 **Severity conventions:**
 
 | Severity | Meaning | Examples |
 |----------|---------|----------|
-| CRITICAL | Blind during incidents, or telemetry is itself a hazard | Secrets/PII in logs; no error visibility at all; liveness check hits the database (restart storms); unauthenticated debug/pprof endpoints |
+| CRITICAL | Blind during incidents, or telemetry is itself a hazard | Secrets/PII in logs; no error visibility at all; liveness check hits the database (restart storms); unauthenticated debug endpoints that return memory, env or config (profiles alone: HIGH, rules/05 §3) |
 | HIGH | Materially slows MTTR or breaks at scale | No correlation/trace IDs; unbounded label cardinality; cause-based paging alerts with no runbooks; readiness == liveness; percentiles averaged across instances |
 | MEDIUM | Degrades signal quality or cost discipline | Wrong log levels (ERROR for expected events); no exemplars; head-only sampling losing all error traces; dashboards as vanity walls; no log sampling on hot paths |
 | LOW | Hygiene and polish | Inconsistent field names; missing OTel semantic conventions; unpinned dashboard queries; noisy Sentry grouping |
@@ -98,12 +100,12 @@ with the shortest path to YES.
 
 | File | Read this when... |
 |------|-------------------|
-| `rules/01-structured-logging.md` | Writing or reviewing log statements, choosing levels, designing wide events/canonical log lines, configuring redaction, sampling, controlling log spend, clock sync and event-vs-receive time, log-level governance, protecting the log store (read auditing, file placement, authenticated transport), or hardening the logging path against flooding and sink failure |
-| `rules/02-metrics.md` | Adding Prometheus/OTel metrics, choosing counter vs gauge vs histogram, designing labels, computing percentiles, applying RED/USE, linking metrics to traces via exemplars |
-| `rules/03-tracing.md` | Instrumenting with OpenTelemetry, deciding what gets a span, propagating context across HTTP/queues/jobs, choosing head vs tail sampling, using (or avoiding) baggage |
-| `rules/04-slos-alerting.md` | Defining SLIs/SLOs, error budgets, writing burn-rate alerts, reviewing alert quality, fighting alert fatigue, deciding page vs ticket |
-| `rules/05-operational-readiness.md` | Implementing health endpoints, exposing graceful degradation, securing debug endpoints, continuous profiling, Sentry-style error tracking, building dashboards, **edge access logs as a decision-grade signal**, keeping test-written telemetry out of the sink production writes — and the question with no instrument, where a proxy measurement silently answers a different one |
-| `rules/06-audit-playbook.md` | Auditing a codebase's observability posture end-to-end; common gaps catalog; scoring and reporting |
+| [`rules/01-structured-logging.md`](rules/01-structured-logging.md) | Writing or reviewing log statements, choosing levels, designing wide events/canonical log lines, configuring redaction, sampling, controlling log spend, clock sync and event-vs-receive time, log-level governance, protecting the log store (read auditing, file placement, authenticated transport), or hardening the logging path against flooding and sink failure |
+| [`rules/02-metrics.md`](rules/02-metrics.md) | Adding Prometheus/OTel metrics, choosing counter vs gauge vs histogram, designing labels, computing percentiles, applying RED/USE, linking metrics to traces via exemplars |
+| [`rules/03-tracing.md`](rules/03-tracing.md) | Instrumenting with OpenTelemetry, deciding what gets a span, propagating context across HTTP/queues/jobs, choosing head vs tail sampling, using (or avoiding) baggage |
+| [`rules/04-slos-alerting.md`](rules/04-slos-alerting.md) | Defining SLIs/SLOs, error budgets, writing burn-rate alerts, reviewing alert quality, fighting alert fatigue, deciding page vs ticket |
+| [`rules/05-operational-readiness.md`](rules/05-operational-readiness.md) | Implementing health endpoints, exposing graceful degradation, securing debug endpoints, continuous profiling, Sentry-style error tracking, shutdown and crash telemetry (the last 10 seconds), synthetic monitoring, building dashboards, **edge access logs as a decision-grade signal**, keeping test-written telemetry out of the sink production writes — and the question with no instrument, where a proxy measurement silently answers a different one |
+| [`rules/06-audit-playbook.md`](rules/06-audit-playbook.md) | Auditing a codebase's observability posture end-to-end; common gaps catalog; scoring and reporting |
 
 ## Top 10 non-negotiables
 

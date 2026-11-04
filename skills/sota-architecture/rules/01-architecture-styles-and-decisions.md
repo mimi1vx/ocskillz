@@ -24,7 +24,7 @@ not distributed-systems cost.
 
 **Never extract because:** "microservices are best practice", résumé pressure,
 "we might need to scale later", or to fix a tangled codebase (you'll get a
-tangled distributed system — see rules/07, distributed monolith).
+tangled distributed system — see [rules/07](07-anti-patterns-catalog.md), distributed monolith).
 
 ```text
 GOOD: one repo, one deploy
@@ -49,14 +49,48 @@ package and/or published events). Cross-module calls go through that surface.
 Cross-module data access goes through that surface — never through the other
 module's tables.
 
-## 3. Choose style by problem shape, not fashion
+## 2a. Monorepos: the build enforces the boundary, and CI selects honestly
+
+One repository holding many packages makes §2 easier to break: every package can reach every
+other. Facts below were read in each tool's own docs on 2026-10-07; re-check before relying
+on one.
+
+- **Prefer a boundary the build refuses to cross over one a linter reports.** Bazel's default
+  visibility is `//visibility:private`, and a target *"will fail to build during the analysis
+  phase if it violates the visibility of one of its dependencies"*. The docs advise against
+  `default_visibility` public. Nx's `@nx/enforce-module-boundaries` (tag `depConstraints`) is a
+  **lint** error, so it enforces only where lint gates CI. Turborepo's `turbo boundaries` (2.4+)
+  is still **experimental**, and it checks imports outside a package or of undeclared
+  dependencies, not architectural tags.
+- **Phantom dependencies are a boundary leak.** pnpm is *"semistrict"* by default: your code
+  sees only declared dependencies. `shamefully-hoist` / `publicHoistPattern` give application
+  code *"access to phantom dependencies"* again. `workspace:` refuses to resolve anything but a
+  local package.
+- **Ownership is enforced only when it is required.** CODEOWNERS lives in `.github/`, the root
+  or `docs/`, and the first location found wins. The *last* matching pattern takes precedence,
+  and a line with invalid syntax is skipped silently. Owners are merely *requested* unless
+  branch protection or a ruleset has "Require review from Code Owners". Own the CODEOWNERS file
+  itself.
+- **One lockfile per workspace, and know which workspace files to commit.** A Cargo workspace
+  shares one `Cargo.lock` at its root. Go: *"It is generally inadvisable to commit go.work
+  files"*, because CI may *"test the wrong versions of a module's dependencies"*. The exception
+  is modules developed exclusively together, and that should be a recorded decision.
+- **Affected-only CI is a selection rule, so give it its inputs.** `nx affected` derives the
+  set from git plus the project graph; take the base SHA from the last successful run on `main`.
+  Nx marks **every** project affected when the lockfile changes, as a failsafe. Its
+  `sharedGlobals` input (toolchain and runtime versions, root config) is **empty by default**,
+  so a change there selects nothing until a team declares it. Turborepo's `--affected` treats a
+  too-shallow checkout as "all changed", and its global hash covers the root lockfile,
+  `globalDependencies` and `globalEnv`. A selection that misses a global input reads as a green
+  build that tested nothing ([`sota-code-security` rules/11](../../sota-code-security/rules/11-dead-path-diagnostics.md) §2.2).
+
 
 | Style | Wins when | Loses when |
 |---|---|---|
 | Modular monolith | Small/medium team, evolving domain, unknown load profile | Genuinely independent scaling/deploy needs across teams |
 | Microservices | Many teams, independent deploy cadence, per-service scaling, mature platform (CI/CD, observability, on-call) | Team < ~3 squads, no platform engineering, chatty domain |
 | Serverless (FaaS) | Spiky/bursty load, event glue, low ops budget, embarrassingly stateless handlers | Long-lived connections, latency-critical p99 (cold starts), heavy local state, cost at sustained high throughput |
-| Event-driven backbone | Many consumers per fact, audit/replay needs, temporal decoupling | Request/response semantics forced through events (see rules/03) |
+| Event-driven backbone | Many consumers per fact, audit/replay needs, temporal decoupling | Request/response semantics forced through events (see [rules/03](03-distributed-systems-and-events.md)) |
 
 **Rule:** Serverless is an operational model, not an architecture. You still owe
 module boundaries, idempotency, and observability. A pile of 200 lambdas sharing
@@ -108,7 +142,7 @@ approval, an interactive prompt, a rate-limited or paid API call — can silentl
 the exact friction an earlier decision removed. Both artifacts are locally correct; the
 contradiction lives in the gap between them, and no test sees it.
 
-Field-reported: a repository decided, with the reasoning written into `CONTRIBUTING`, to
+Example: a repository decided, with the reasoning written into `CONTRIBUTING`, to
 stop signing every commit because the key sat on a touch-required token and the tap per
 commit blocked automated work. About an hour later, in the same session, a gate ledger was
 built whose `anchor` command signed its chain head with that same key — and anchoring was
@@ -174,7 +208,7 @@ can't claim it.
 - Dependency direction: "no module imports `billing/internal`" — architecture test.
 - Coupling budget: cyclic dependencies between modules = build failure.
 - Latency: p99 of checkout API < 300 ms under k6 load profile — perf gate on main.
-- Resilience: weekly chaos run kills one replica of each service; SLOs must hold (see rules/04).
+- Resilience: weekly chaos run kills one replica of each service; SLOs must hold (see [rules/04](04-resilience-and-failure-design.md)).
 - Cost: per-tenant infra cost stays under $X — scheduled report with alert.
 - Schema safety: migration linter forbids destructive DDL without expand/contract.
 
@@ -193,7 +227,7 @@ comment; Type 1 decisions get an ADR, a spike, and an exit strategy.
 **Rule:** For every Type 1 dependency, write down the exit strategy in the ADR
 ("we wrap the broker behind `EventBus` port; migration = reimplement adapter +
 dual-publish for N days"). Don't build a full abstraction layer preemptively —
-a thin port is enough (see rules/02 on ports).
+a thin port is enough (see [rules/02](02-domain-modeling-and-boundaries.md) on ports).
 
 ## 7. Conway's law: design team and system boundaries together
 
@@ -227,7 +261,8 @@ disguised as a weekend project.
 
 **Rule:** Adopted dependencies still get an ADR (lock-in is a consequence) and
 a fitness function (e.g., "all calls to vendor X go through adapter Y" —
-architecture test).
+architecture test). Before the manifest line lands, run the pre-adoption checks (release maturity,
+point of origin, source review, insecure defaults) from the CI and supply-chain controls.
 
 ## 10. Edge composition: gateways and BFFs
 
@@ -239,7 +274,7 @@ responses.
 
 **Rule:** Keep business logic out of the gateway. A gateway that transforms
 payloads, enforces domain rules, or orchestrates workflows is an unowned god
-service (rules/07 §3) written in YAML. Gateways route and protect; BFFs compose;
+service ([rules/07](07-anti-patterns-catalog.md) §3) written in YAML. Gateways route and protect; BFFs compose;
 services decide.
 
 **Rule:** Each BFF is owned by the client team it serves. A shared BFF for all
@@ -283,14 +318,14 @@ retire, keep with a named owner, or merge into something else.
 
 **Rule:** Move consumers off per customer, not by broadcast. List every caller and tenant
 still on the service or on an old version of it, give each one a migration plan and a
-date, and switch the service off only when that list is empty (the API side: API
-design guidance rules/02 §5). Stop supporting a version once no customer runs it.
+date, and switch the service off only when that list is empty (the API side: [`sota-api-design`
+rules/02](../../sota-api-design/rules/02-versioning-evolution.md) §5). Stop supporting a version once no customer runs it.
 
 **Rule:** Tear everything down in one tracked change, in this order: stop traffic, revoke
 its identities and secrets (service accounts, API keys, certificates:
 identity and access-management guidance, key-management guidance), then export or delete
-its data under the retention policy (rules/05 §6). Only after that remove DNS records
-(CI and supply-chain controls), firewall and routing rules, queues and topics, and compute,
+its data under the retention policy ([rules/05](05-scalability-state-and-data.md) §6). Only after that remove DNS records
+(infrastructure-as-code deployment controls), firewall and routing rules, queues and topics, and compute,
 and delete the code path. Anything left behind is an orphan nobody will patch.
 
 **Rule:** The last step is taking it out of the inventory of production components, and of
@@ -312,6 +347,12 @@ tied to a measurable symptom (incident class, lead-time drag, cost line).
 
 ## Audit checklist
 
+- [ ] **Monorepo boundaries are build-enforced or lint-gated (§2a)** — `grep -rnE 'default_visibility[[:space:]]*=[[:space:]]*\[[^]]*"//visibility:public"' --include=BUILD --include=BUILD.bazel .`
+      (a package defaulting to public) ; `grep -nE '^[[:space:]]*(shamefully-hoist[[:space:]]*=[[:space:]]*true|shamefullyHoist:[[:space:]]*true|public-?[hH]oist-?[pP]attern)' .npmrc pnpm-workspace.yaml 2>/dev/null`
+      (phantom dependencies re-opened) ; `git ls-files | grep -E '(^|/)go\.work(\.sum)?$'` (a committed `go.work` needs a recorded reason)
+- [ ] **Ownership and affected-only CI actually hold (§2a)** — `gh api repos/OWNER/REPO/branches/main/protection --jq .required_pull_request_reviews.require_code_owner_reviews`
+      (not `true`, or no ruleset doing it: CODEOWNERS only requests review) ; for `nx affected`, read `nx.json` `namedInputs.sharedGlobals`
+      (empty: a toolchain or root-config change selects no project)
 - [ ] **Every deferral with a "revisit if…" trigger names where the evidence accrues and
       who reads it** (§4b), and the trigger is stated so that some observation could close
       it. Probe: list every deferred entry, then ask when each was last checked and what
@@ -322,7 +363,7 @@ tied to a measurable symptom (incident class, lead-time drag, cost line).
 
 - [ ] **Every control that spends a scarce resource per use states its cost profile**
       (*what, how often*), and that frequency was checked against the ADRs and contributor
-      docs (§4). A control whose per-use cost contradicts a decision already in force is a
+      docs (§4, §4a). A control whose per-use cost contradicts a decision already in force is a
       finding even though it works.
 
 - [ ] **Retired services are fully gone and out of the inventory (§12a), Medium:** list
@@ -335,18 +376,18 @@ tied to a measurable symptom (incident class, lead-time drag, cost line).
       DNS record that still resolves).
 
 - Is there a written rationale (ADR) for the current architecture style, with consequences and alternatives?
-- Could this system be a modular monolith? If it's microservices, can the team name the measured force that justified each extraction?
-- Are module/service boundaries enforced by CI tooling (import rules, architecture tests), not just convention?
-- Does any module reach into another module's internals or tables directly?
+- Could this system be a modular monolith? If it's microservices, can the team name the measured force that justified each extraction? Inside the monolith, does each module own a separate schema? (§1)
+- Are module/service boundaries enforced by CI tooling (import rules, architecture tests), not just convention? (§2)
+- Does any module reach into another module's internals or tables directly? (§2)
 - Do services deploy independently in practice (check release history), or do they ship in lockstep?
-- Is every Type 1 decision (datastore, broker, tenancy, public contracts) covered by an ADR with an exit strategy?
+- Is every Type 1 decision (datastore, broker, tenancy, public contracts) covered by an ADR with an exit strategy? (§6)
 - Are ADRs immutable and superseded rather than edited? Is the most recent ADR less than ~3 months old (i.e., is the practice alive)?
-- Are architectural qualities (latency, coupling, resilience, cost) encoded as automated fitness functions that run in CI or on a schedule?
-- Does every service/module have exactly one owning team, recorded machine-readably?
-- Were recent extractions done strangler-style with a deleted old path, or do zombie code paths remain?
-- Is any commodity capability (auth, flags, queues, search) hand-built without an ADR justifying it?
+- Are architectural qualities (latency, coupling, resilience, cost) encoded as automated fitness functions that run in CI or on a schedule? Where two qualities conflict, does an ADR name the winner and does the fitness function enforce that chosen trade-off rather than both? (§5)
+- Does every service/module have exactly one owning team, recorded machine-readably? Does any service boundary cross a team boundary (shared ownership)? An orphaned service is Critical (§7)
+- Were recent extractions done strangler-style with a deleted old path, or do zombie code paths remain? Did any extraction change more than one variable at once (new service AND new datastore AND new language)? (§8)
+- Is any commodity capability (auth, flags, queues, search) hand-built without an ADR justifying it? Does each adopted dependency have an ADR and a fitness function proving all calls go through its adapter? (§9)
 - Do sync vs async interaction choices match the semantics (answers vs facts), or are request/response flows tunneled through events?
-- Do clients reach internal services directly, or through a gateway/BFF? Does the gateway contain business logic?
-- Are context/container diagrams stored as text in the repo and current (spot-check three services against the diagram)?
-- Is any rewrite running big-bang style with parallel feature development on old and new?
-- Do superseded ADRs exist (evidence assumptions get re-validated), or has nothing been revisited since launch?
+- Do clients reach internal services directly, or through a gateway/BFF? Does the gateway contain business logic? Is each BFF owned by the client team it serves, or is one BFF shared by all clients? (§10)
+- Are context/container diagrams stored as text in the repo and current (spot-check three services against the diagram)? Did significant (Type 1) designs get an RFC/design doc before implementation, circulated with a comment deadline? (§11)
+- Is any rewrite running big-bang style with parallel feature development on old and new? Is each rewrite scoped to one bounded context, with a feature freeze on the replaced slice and a kill date for the old path? (§12)
+- Do superseded ADRs exist (evidence assumptions get re-validated), or has nothing been revisited since launch? Is architecture debt in the feature backlog with each item tied to a measurable symptom (incident class, lead-time drag, cost line)? (§13)

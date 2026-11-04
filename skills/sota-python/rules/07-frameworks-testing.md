@@ -1,8 +1,8 @@
 # 07 — FastAPI, Django, and pytest Mastery
 
 Framework-specific traps and Python runner mechanics. Language-agnostic test strategy,
-doubles, test data, coverage philosophy, and suite health live in `sota-testing`. Deep
-Python rules live elsewhere (async → rules/04, validation → rules/02, SQL safety → rules/05).
+doubles, test data, coverage philosophy, and suite health live in [`sota-testing`](../../sota-testing/SKILL.md). Deep
+Python rules live elsewhere (async → [rules/04](04-async.md), validation → [rules/02](02-typing-correctness.md), SQL safety → [rules/05](05-security.md)).
 
 ## 1. FastAPI
 
@@ -49,7 +49,7 @@ async def create_user(payload: UserIn, svc: UserService = Depends(get_user_servi
 ### The sync-in-async trap (most common FastAPI perf bug)
 
 - `async def` endpoint + blocking call (requests, sync SQLAlchemy session, `time.sleep`)
-  → blocks the **single** event loop; whole service serializes. See rules/04 §3.
+  → blocks the **single** event loop; whole service serializes. See [rules/04](04-async.md) §3.
 - `def` (sync) endpoint → FastAPI runs it in the anyio threadpool (default ~40 threads) —
   blocking is *safe* there but throughput caps at pool size.
 - Rule: endpoint is `async def` **only if everything it awaits is truly async** (asyncpg /
@@ -57,10 +57,10 @@ async def create_user(payload: UserIn, svc: UserService = Depends(get_user_servi
   stay sync, or fix the stack. An `async def` endpoint with zero `await` inside is a bug
   marker — it gains nothing and risks someone adding blocking calls later.
 - **Exception: the liveness probe.** A liveness endpoint is *supposed* to await nothing —
-  its job is "is the event loop responsive", so `sota-observability` rules/05 §1 specifies
+  its job is "is the event loop responsive", so [`sota-observability` rules/05](../../sota-observability/rules/05-operational-readiness.md) §1 specifies
   process-internal-only, "usually just return 200". Written as `def` it runs in the anyio
   threadpool, where saturation by slow sync handlers delays the probe and the orchestrator
-  restarts a process whose event loop was fine — the restart storm rules/05 exists to
+  restarts a process whose event loop was fine — the restart storm [`sota-observability` rules/05](../../sota-observability/rules/05-operational-readiness.md) §1 exists to
   prevent. So a no-`await` `async def` is **correct** here and the marker does not apply.
   Say so in the docstring, or the next reader "fixes" it. Readiness (`/readyz`), which does
   check dependencies, follows the normal rule.
@@ -120,16 +120,16 @@ orders = (
   Django 5.2 remains the LTS — don't flag staying on it as a finding.
 - `async def` views must not call the sync ORM directly — use `aget/afirst/acount` async
   ORM methods or `sync_to_async` wrappers; a blocking ORM call in an async view under ASGI
-  stalls the loop (rules/04 §7).
+  stalls the loop ([rules/04](04-async.md) §7).
 - Settings via `django-environ`/env vars; `DEBUG=False`, `ALLOWED_HOSTS`, `SECRET_KEY` from
   secrets store — run `manage.py check --deploy` in CI.
 - Keep `.raw()`, `.extra()`, `RawSQL` out of the codebase or parameterized + reviewed
-  (rules/05 §3).
+  ([rules/05](05-security.md) §3).
 
 ### Cookies the application sets (Flask, Starlette/FastAPI, Django)
 
-The framework's session cookie is configured by settings and owned by `sota-code-security`
-rules/17. Every *other* cookie — a preference, a device id, a "remember this" token — goes
+The framework's session cookie is configured by settings and owned by [`sota-code-security`
+rules/17](../../sota-code-security/rules/17-sessions-and-tokens.md). Every *other* cookie — a preference, a device id, a "remember this" token — goes
 through `response.set_cookie(...)`, and the defaults there are the insecure ones. Measured
 this session (Werkzeug 3.1 / Starlette 1.7 / Django 6.1), a bare `set_cookie("pref", "v")`
 emitted:
@@ -201,7 +201,7 @@ def test_parse_duration(raw: str, expected: int | None) -> None:
 - Every test runs alone and in any order: `pytest -p no:randomly` shouldn't be needed —
   install `pytest-randomly` and keep it green.
 - Banned: module-level mutable state shared across tests, tests that rely on execution
-  order, `lru_cache`d functions tested without `cache_clear` between tests (rules/06 §4),
+  order, `lru_cache`d functions tested without `cache_clear` between tests ([rules/06](06-performance.md) §4),
   writes to shared tmp paths — use the `tmp_path` fixture, env mutation without
   `monkeypatch.setenv` (which auto-reverts).
 - Verify independence in CI occasionally: `pytest -x --randomly-seed=last`, and
@@ -225,6 +225,14 @@ def test_sort_idempotent(xs: list[int]) -> None:
   (roundtrip, idempotence, commutativity, oracle vs reference impl).
 - Persist the example database (`.hypothesis/` in CI cache) so regressions replay;
   failing examples get promoted to `@example(...)` regression pins.
+- **A green property with `assume()`, `.filter()` or an early `return` may have tested almost
+  nothing**: `HealthCheck.filter_too_much` fails only near-total rejection (a 2% pass rate
+  passed), and an early `return` is never counted. Gate reach as
+  [`sota-testing` rules/06](../../sota-testing/rules/06-property-fuzzing-mutation.md) §6.6 says.
+- **Contracts on pure functions: CrossHair** searches symbolically (Z3) over PEP 316 docstring,
+  `icontract` or `deal` contracts and type hints, and returns counterexamples. It is a bounded
+  search, not a proof: "no counterexample" is not "correct". (ESBMC, a bounded model checker,
+  also has a Python frontend.)
 
 ### Markers, selection, and suite layering
 
@@ -263,47 +271,71 @@ testpaths = ["tests"]
 - Mock at the boundary you own (`mocker.patch.object(svc, "client")`), not deep internals;
   patch where the name is *looked up*, not where it's defined. Over-mocked tests that
   assert call sequences test the mock, not the code — prefer fakes (in-memory repo).
-- Async tests: `asyncio_mode = "auto"` (rules/04 §10). Time: `freezegun`/`time-machine`,
+- Async tests: `asyncio_mode = "auto"` ([rules/04](04-async.md) §10). Time: `freezegun`/`time-machine`,
   never `sleep`.
 - Coverage gate (`--cov --cov-fail-under=N`) measures *executed*, not *asserted* — treat as
-  floor, not target; mutation testing (`mutmut`) where correctness is critical.
+  floor, not target; mutation testing (`mutmut`) where correctness is critical — `mutmut run`
+  exits 0 whatever survives, so gate on its exported stats ([`sota-testing` rules/06](../../sota-testing/rules/06-property-fuzzing-mutation.md) §6.3).
+- **Code with an escape hatch (`ctypes`, `cffi`, a C extension: [rules/05](05-security.md) §11) runs its
+  suite under `python -X dev` in CI.** Dev mode enables `faulthandler` and the debug hooks
+  on the memory allocators. Measured on 3.14.8: writing 10 bytes past a 1000-byte
+  `ctypes.create_string_buffer` exited 0 under plain `python`, and under `-X dev` printed
+  "pad bytes ... are not all FORBIDDENBYTE" and aborted (exit 134). Use the `-X dev` flag,
+  not `PYTHONDEVMODE=1`: `-I` and `-E` drop every `PYTHON*` variable (measured, dev mode off).
+  Free-threaded builds (`3.14t`; `Py_MOD_GIL_NOT_USED`): [rules/01](01-tooling-project-setup.md) §8. A compiled extension's
+  own C belongs under the C toolchain's sanitizers as well.
 
 ## Audit checklist
 
 - [ ] **FastAPI** —
       `grep -rn "async def" $(grep -rln "APIRouter\|FastAPI" --include="*.py" src/) | head`
-      (then check for blocking calls inside);
+      (lists every async def in a FastAPI module; each hit is read for blocking calls
+      inside, not a finding);
       `grep -rn "requests\.\|time.sleep\|session.query\|Session(" --include="*.py" src/ | grep -i route`
       (sync-in-async [HIGH]);
       `grep -rn "@\(app\|router\)\.\(get\|post\|put\|delete\)" --include="*.py" src/ -A3 | grep -L response_model | head`
       (ORM leak risk); `grep -rn "AsyncClient()" --include="*.py" src/ | grep -v lifespan`
       (per-request clients [MEDIUM]);
-      `grep -rn -B2 "livez\|/health\|healthz" --include="*.py" src/ | grep "^.*def "` (liveness:
-      `async def` , no deps (§1 exception));
+      `grep -rn -A2 'livez\|/health\|healthz' --include='*.py' src/ | grep -E '^[^:]+[-:][0-9]+[-:][[:space:]]*def '`
+      (a sync `def` health handler; liveness should be `async def`, no deps (§1 exception));
       `grep -rn "^[A-Z_]* = .*Session\|^engine = " --include="*.py" src/` (module-global state
       vs Depends)
 - [ ] **Django ORM** —
       `grep -rn "\.objects\.all()\|\.objects\.filter" --include="*.py" src/ | wc -l` ;
       `grep -rln "select_related\|prefetch_related" --include="*.py" src/ | wc -l` (ratio sanity
       check);
-      `grep -rn "for .* in .*\.objects\." --include="*.py" src/ -A2 | grep "\.\(name\|user\|customer\)" | head`
+      `grep -rnE 'for .* in .*\.objects\.' --include='*.py' src/ | grep -vE 'select_related|prefetch_related'`
       (N+1 candidates); `grep -rn "count() > 0\|len(.*objects" --include="*.py" src/` (exists()
       instead); `grep -rn "\.raw(\|\.extra(\|RawSQL" --include="*.py" src/` ([HIGH if
       interpolated]); `git log --oneline -- '**/migrations/*.py' | head` (edited-after-merge
-      migrations?); `grep -rn "makemigrations --check" .github/ .gitlab-ci.yml 2>/dev/null`
-      (drift gate present?)
+      migrations?); `grep -rq "makemigrations --check" .github/ .gitlab-ci.yml || echo "no makemigrations --check gate"`
+      (the message = no drift gate); `grep -rq "check --deploy" .github/ .gitlab-ci.yml || echo "no check --deploy gate"`
+      (the message → LOW, no deploy-settings gate, §2)
 - [ ] **--- App-set cookies: Secure / HttpOnly / SameSite flags (§2 cookies) --- [HIGH for an
       auth or identity token; MEDIUM for a preference]** —
       `grep -rnE '\.set_(signed_)?cookie\(' --include='*.py' src/ | grep -vE 'secure[[:space:]]*=[[:space:]]*True.*httponly[[:space:]]*=[[:space:]]*True|httponly[[:space:]]*=[[:space:]]*True.*secure[[:space:]]*=[[:space:]]*True'`
       (every hit relies on a framework default that is off; a multi-line call is listed too —
       read it; `samesite` is checked by hand)
-- [ ] **pytest** — `grep -rn "def setUp\|TestCase" --include="*.py" tests/` (legacy style
+- [ ] **pytest** (§3) — `grep -rn "def setUp\|TestCase" --include="*.py" tests/` (legacy style
       [LOW]); `grep -rn "pytest.raises(Exception)" --include="*.py" tests/` (too-broad
       [MEDIUM]); `grep -rn "time.sleep" --include="*.py" tests/` (flaky timing [MEDIUM]);
-      `grep -rn "scope=\"session\"\|scope=\"module\"" --include="*.py" tests/ conftest.py 2>/dev/null`
-      (mutable shared state?);
+      `grep -rnE 'scope=.(session|module).' --include='*.py' --exclude-dir=.venv .`
+      (lists every session/module-scoped fixture; each hit is read for mutable shared
+      state, not a finding);
       `grep -rn "os.environ\[" --include="*.py" tests/ | grep -v monkeypatch` (env pollution);
       `grep -rln "parametrize" --include="*.py" tests/ | wc -l` ;
-      `grep -rln "hypothesis" --include="*.py" tests/ || echo "no property tests"` ;
+      `err=$({ [ -d tests ] && [ -r tests ] || { echo "tests/ missing or unreadable" >&2; exit 2; }; grep -rl "hypothesis" --include="*.py" tests/; } 2>&1 >/dev/null); rc=$?` ;
+      `case $rc in 0) ;; 1) echo "no property tests" ;; *) echo "SWEEP FAILED, not a finding about their code: $err" ;; esac`
+      (the guard is needed: macOS grep exits 1, not 2, when `tests/` is missing under `--include`) ;
       `pytest -q -n auto 2>&1 | tail -3` (parallel-safe = independent);
       `pytest -q -p randomly 2>&1 | tail -3` (order-independent?)
+- [ ] **Escape hatch with no runtime checker in CI (§3) [MEDIUM; HIGH where the native call
+      takes a length or pointer from input]** —
+      `grep -rlE '^[[:space:]]*(import|from)[[:space:]]+(ctypes|cffi)' --include='*.py' . | head -1 ; find . -name '*.c' -not -path './.venv/*' | head -1`
+      (any hit = an escape hatch) ;
+      `grep -rnE -e '-X[[:space:]]?dev' --include='*.y*ml' --include='*.toml' --include='*.cfg' --include='*.ini' --include='*.sh' . | head -3`
+      (no hit = the suite never ran with the debug allocator; `PYTHONDEVMODE` alone is inert
+      under `-I`/`-E`)
+- [ ] **Property tests whose reach nobody checks (§3) [LOW; MEDIUM on parsers]** —
+      `grep -rnE 'assume\(|\.filter\(' --include='*.py' tests/` (each property using one needs
+      the reach gate of [`sota-testing` rules/06](../../sota-testing/rules/06-property-fuzzing-mutation.md) §6.6)

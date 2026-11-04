@@ -38,7 +38,7 @@ cross_val_score(pipe, X_train, y_train, cv=TimeSeriesSplit())
   Causes: features computed by different code in the two paths; different data
   sources; time-of-day/freshness differences; a transform applied in training
   but missing in serving.
-- Fix structurally (`rules/01`): one feature definition (feature store / shared
+- Fix structurally ([`rules/01`](01-ml-systems-architecture.md)): one feature definition (feature store / shared
   transform) used by both. Then **detect** residual skew by logging served
   feature values and comparing their distribution to training (Rules of ML #29:
   *the best way to make sure you train like you serve is to log features at
@@ -58,7 +58,7 @@ cross_val_score(pipe, X_train, y_train, cv=TimeSeriesSplit())
   features before learned ones (Rules of ML). Document each feature's source,
   semantics, and freshness.
 - **Drop unused/underperforming features** — they're data dependencies that cost
-  maintenance and add skew surface (Hidden Technical Debt, `rules/01`).
+  maintenance and add skew surface (Hidden Technical Debt, [`rules/01`](01-ml-systems-architecture.md)).
 - Handle missing values and categoricals deliberately and identically in both
   paths; don't let a serving-time unseen category crash or silently mis-encode.
 
@@ -66,12 +66,12 @@ cross_val_score(pipe, X_train, y_train, cv=TimeSeriesSplit())
 
 - Version training **data** (dataset snapshot/hash, DVC/lakeFS-style or a
   warehouse snapshot) and **feature definitions** so a model's inputs are
-  reproducible (`rules/01`). "Which data trained this model?" must have an exact
+  reproducible ([`rules/01`](01-ml-systems-architecture.md)). "Which data trained this model?" must have an exact
   answer.
 - Validate data **schema and distribution** at pipeline entry (types, ranges,
   nullability, expected categories) — catch a broken upstream feed before it
   trains a bad model. (TFX-DV / Great Expectations-style; cross-ref
-  `sota-data-engineering` for pipeline contracts.)
+  [`sota-data-engineering`](../../sota-data-engineering/SKILL.md) for pipeline contracts.)
 - **Lineage records the recipe, not just the result.** A dataset version names
   its components and every transformation, augmentation, filter and merge that
   produced it, so a bad source can be traced forward to every derived set.
@@ -88,7 +88,7 @@ cross_val_score(pipe, X_train, y_train, cv=TimeSeriesSplit())
 ## 6. Data governance & PII
 
 - Minimize personal data in features; collect/keep only what has a lawful basis
-  and document it (`rules/07`, cross-ref `sota-privacy-compliance`). Don't use
+  and document it ([`rules/07`](07-security-governance.md), cross-ref [`sota-privacy-compliance`](../../sota-privacy-compliance/SKILL.md)). Don't use
   protected attributes as features unless justified and lawful; beware proxies.
 - Track data provenance/consent so you can honor deletion and explain what a
   model was trained on.
@@ -124,54 +124,65 @@ cross_val_score(pipe, X_train, y_train, cv=TimeSeriesSplit())
   reconcile them against the verdicts and drop the flagged rows. Online and
   reinforcement learners, which cannot wait, cap how far the policy may move per
   update or epoch (a clipped or trust-region step), so a burst of forged rewards
-  cannot drag the model far before the verdicts land (`rules/07` §1). OWASP:
+  cannot drag the model far before the verdicts land ([`rules/07`](07-security-governance.md) §1). OWASP:
   AI-Powered Advertising Systems Security cheat sheet.
 
 ## Audit checklist
 
-- [ ] **Train/serve skew**: is the transformation that produces a training feature the
+- [ ] **Train/serve skew** (§2): is the transformation that produces a training feature the
       *same code path* as the one serving it — a shared library or a feature store — or
       two implementations that must be kept in step by hand? Two implementations is the
       finding, whether or not they currently agree.
-- [ ] **Point-in-time correctness**: does every training label join features **as of** the
-      label's timestamp? A join that picks up feature values computed after the event
+- [ ] **Point-in-time correctness and target leakage (§1)**: does every training label join features **as of** the
+      label's timestamp, and is no feature a proxy for, or derived after, the label? A join that picks up feature values computed after the event
       leaks the future into training and inflates offline metrics — it will not reproduce
       in serving, which is how it is usually discovered.
-- [ ] If a **feature store** is in use: are offline and online stores written from one
+- [ ] If a **feature store** is in use (§2): are offline and online stores written from one
       pipeline, is freshness monitored per feature, and is a feature's serving default
       (on a store miss) the same value training saw for a missing feature?
-- [ ] If one is **not** in use: what enforces the two answers above instead? "We are
-      careful" is not a mechanism (`rules/01` §3).
+- [ ] If one is **not** in use (§2): what enforces the two answers above instead? "We are
+      careful" is not a mechanism ([`rules/01`](01-ml-systems-architecture.md) §3).
 
-- [ ] **Preprocessing leakage — CRITICAL** —
+- [ ] **Preprocessing leakage (§1) — CRITICAL** —
       `grep -rnE '\.fit(_transform)?\(' --include='*.py' . | grep -vE 'Pipeline|fit\(X_train|fit\(train'`
       (fit on full data?);
       `grep -rnE 'SMOTE|resample|SelectKBest|StandardScaler|fit_transform' --include='*.py' . # before split?`
-- [ ] **Split correctness — CRITICAL/HIGH** —
+      — a locator: it lists every resampling/scaling/selection site; each hit is read, not a
+      finding (is it fit before the split, or inside a Pipeline on the training fold?)
+- [ ] **Split correctness (§1, §3) — CRITICAL/HIGH** —
       `grep -rnE 'train_test_split\(' --include='*.py' . | grep -v 'stratify\|TimeSeries\|Group'`
       (temporal/group needed?);
       `grep -rniE 'TimeSeriesSplit|GroupKFold|GroupShuffle' --include='*.py' . || echo "no temporal/group split — verify IID"`
-- [ ] **Train/serve skew — CRITICAL Diff training feature code vs serving feature code; are
+      ; manual: is the held-out test set touched only for the final evaluation, with model selection
+      by CV on train and no tuning on the test set?
+- [ ] **Train/serve skew (§2) — CRITICAL Diff training feature code vs serving feature code; are
       served features logged for training?** —
-      `grep -rniE 'feature.?store|feast|log.*feature|skew' --include='*.py' . | head`
-- [ ] **Data/feature versioning — HIGH** —
+      `grep -rqiE 'feature.?store|feast|log.*feature|skew' --include='*.py' . || echo "no feature store or served-feature logging"`
+- [ ] **Data/feature versioning — HIGH** (§5) —
       `out=$(grep -rniE 'dvc|lakefs|dataset.*hash|snapshot|data.?version' . 2>&1); rc=$?` ;
       `case $rc in 0) printf '%s\n' "$out" | head ;; 1) echo "no data versioning found" ;; *) echo "SWEEP FAILED, not a finding about their code: $out" ;; esac`
-- [ ] **Data validation at entry — HIGH** —
+- [ ] **Data validation at entry — HIGH** (§5) —
       `grep -rniE 'great_expectations|pandera|tfdv|schema.*valid|expect_' --include='*.py' . || echo "no data validation"`
-- [ ] **PII in features — HIGH (cross-ref sota-privacy-compliance)** —
+- [ ] **PII in features (§6) — HIGH (cross-ref [sota-privacy-compliance](../../sota-privacy-compliance/SKILL.md))** —
       `grep -rniE 'email|ssn|phone|dob|address|name|ip_addr' --include='*.py' . | grep -i feature | head`
 - [ ] **Signed dataset attestations and stage-to-stage verification (§5) — HIGH** —
-      `grep -rniE 'in-toto|dsse|attest' . | grep -iE 'dataset|manifest|chunk|annotation|stage' || echo "no signed dataset attestation"`
+      `grep -rniE 'in-toto|dsse|attest' . | grep -qiE 'dataset|manifest|chunk|annotation|stage' || echo "no signed dataset attestation"`
       ; manual: does each pipeline stage verify the previous stage's output before use?
 - [ ] **Purpose-bound fields and settlement data separated (§6) — MEDIUM** —
       `grep -rniE 'settlement|payout|invoice|billing' --include='*.py' --include='*.sql' . | grep -iE 'label|train|feature'`
       (each hit is a label or feature reading the ledger directly)
 - [ ] **Per-row consent/lawful-basis code on training rows (§6) — HIGH** —
-      `grep -rniE 'lawful_?basis|legal_?basis|consent_?(code|reason|basis)|tc_?string' . || echo "no per-row consent or lawful-basis code"`
+      `grep -rqiE 'lawful_?basis|legal_?basis|consent_?(code|reason|basis)|tc_?string' . || echo "no per-row consent or lawful-basis code"`
 - [ ] **Auto-label QA and labeling roles (§7) — MEDIUM** — auto-labels with no threshold on
       the same line:
       `grep -rniE '(pseudo|weak|auto)_?label' --include='*.py' . | grep -viE 'confidence|threshold|min_score'`
       ; manual: create/modify/approve separated on the labeling platform
 - [ ] **Adjudication-window quarantine (§7) — HIGH where outcomes can be reversed** —
       `grep -rniE 'quarantine|adjudicat|chargeback|holdback' --include='*.py' --include='*.sql' . || echo "no quarantine before outcome events reach training"`
+- [ ] **Feature documentation and identical missing/unseen handling (§4) — MEDIUM** — encoders left on
+      the default that raises on an unseen category:
+      `grep -rnE '(OneHotEncoder|OrdinalEncoder)\(' --include='*.py' . | grep -v 'handle_unknown'`
+      (scikit-learn defaults to `handle_unknown='error'`; read multi-line calls by hand, and read an
+      explicit setting for silent mis-encoding); manual: each feature's source, semantics and
+      freshness documented, unused features dropped, and missing values and categoricals encoded by
+      the same code in both paths

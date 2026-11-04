@@ -4,14 +4,16 @@ The externally sourced `sota-*` skills in this directory are adapted from
 **SOTA Engineering Skills** by Martin Holovsky:
 
 - Source: https://github.com/martinholovsky/SOTA-skills
-- Imported commit: `a02c19971ad39254846890f87300a46b19e3e82e`
+- Imported commit: `4c4837e3f891b4194623e467fec6294df4ff8d0a`
 - License: [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
-- Upstream license text and warranty disclaimer: https://github.com/martinholovsky/SOTA-skills/blob/a02c19971ad39254846890f87300a46b19e3e82e/LICENSE
+- Upstream license text and warranty disclaimer: https://github.com/martinholovsky/SOTA-skills/blob/4c4837e3f891b4194623e467fec6294df4ff8d0a/LICENSE
 
 Adapted skills: `sota-code-security`, `sota-data-engineering`,
 `sota-llm-engineering`, `sota-ml-engineering`, `sota-observability`,
 `sota-privacy-compliance`, `sota-python`, `sota-rust`, `sota-sandboxing`,
-`sota-testing`, `sota-async-concurrency`, and `sota-architecture`.
+`sota-testing`, `sota-async-concurrency`, `sota-architecture`,
+`sota-shell-scripting`, `sota-skill-security`, `sota-api-design`,
+`sota-golang`, and `sota-swift`.
 `sota-architecture` omits upstream `rules/08-nats-jetstream.md`.
 
 Local modifications adapt the material for opencode, make repository

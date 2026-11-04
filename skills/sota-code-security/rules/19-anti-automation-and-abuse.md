@@ -10,9 +10,9 @@ child CWE-837 (improper enforcement of a single, unique action).
 Core principle: **you are not trying to stop every bot, you are trying to make abuse cost
 more than it earns — and every value-granting action needs its own ceiling, because the
 login rate limit does not protect the coupon endpoint.** Login throttling and lockout stay
-in rules/02 §1; one-time-operation replay and workflow state stay in rules/03; atomic
-check-then-act (double redemption) stays in rules/06; the detection counters that feed
-these decisions stay in rules/07 §2.1.
+in [rules/02](02-authentication.md) §1; one-time-operation replay and workflow state stay in [rules/03](03-authorization.md); atomic
+check-then-act (double redemption) stays in [rules/06](06-memory-resource-safety.md); the detection counters that feed
+these decisions stay in [rules/07](07-data-exposure.md) §2.1.
 
 ## 1. Graduated responses to automation
 
@@ -33,7 +33,7 @@ tripped it, so they change one thing and try again. Scale the response to how su
 - **Tarpit instead of 403.** A delay that grows with confidence and carries random jitter
   collapses a bot's throughput without telling it that it was detected. Bound the delay
   server-side (async sleep, not a held worker thread) so the tarpit does not become your
-  own resource exhaustion (rules/06).
+  own resource exhaustion ([rules/06](06-memory-resource-safety.md)).
 - **Degrade the login path under attack.** The Credential Stuffing Prevention guidance
   lists slowing measures that need no user tracking: rising JavaScript work, a
   proof-of-work puzzle, long waits, oversized responses, randomised error text. Each raises
@@ -48,7 +48,7 @@ tripped it, so they change one thing and try again. Scale the response to how su
   whose browser is privacy-hardened, blocks some disabled users and privacy-conscious
   users; prefer challenge over block for those signals. Fingerprinting signals are personal
   data: minimise, hash or truncate, and keep them for days, not indefinitely
-  (`sota-privacy-compliance`).
+  ([`sota-privacy-compliance`](../../sota-privacy-compliance/SKILL.md)).
 - **Unblock automatically.** IP-level mitigations expire and are lifted as abuse stops;
   addresses are reassigned and shared (carrier NAT, corporate egress).
 
@@ -81,7 +81,7 @@ cheat sheet.
 - **Phone verification.** Look up the line type: virtual (VoIP) numbers are cheap in
   bulk, so a VoIP number earns more friction or no value-granting eligibility rather than
   automatic rejection (some real users only have one). SMS sending limits and SMS pumping
-  are in rules/02 §7 and rules/06.
+  are in [rules/02](02-authentication.md) §7 and [rules/06](06-memory-resource-safety.md).
 - **Identity beyond the email address.** Trials, referral rewards and one-per-customer
   offers keyed on email alone reset with a new mailbox. Tie eligibility to stronger signals:
   a verified phone, a payment-method fingerprint, a device signal, KYC where the value
@@ -107,7 +107,7 @@ frontend guidance). Offer a non-visual alternative wherever one is shown.
   response. Tokens are short-lived and single-use per the providers' documentation
   (reCAPTCHA: two minutes; hCaptcha: 120 seconds by default; Turnstile: 300 seconds), so a
   verification call that is skipped, cached or made fail-open on a provider error is a
-  no-op control (rules/10). Decide the outage behaviour explicitly.
+  no-op control ([rules/10](10-silent-control-failure.md)). Decide the outage behaviour explicitly.
 - **Self-hosted challenge: the answer never leaves the server.** Keep the expected answer
   in server-side state, or send only a token that carries an HMAC (keyed with a server
   secret) over the challenge ID, the answer and an expiry — never the answer, or an
@@ -142,16 +142,16 @@ OWASP: Code Review Guide v2 (CAPTCHA); Bot Management and Anti-Automation cheat 
   order on the server, and clamp the result to a price floor (cost, a minimum margin, or
   at least zero plus any non-discountable fees) so no combination can make an order
   free or negative. Compute discounts from codes server-side; never accept a discount
-  amount or total from the client (rules/03).
+  amount or total from the client ([rules/03](03-authorization.md)).
 - **Caps at every layer.** A per-action cap (one use per order), a per-account lifetime
   cap (total promotional value), and a per-source cap (per payment method, per device, per
   shipping address) — each layer catches what multi-accounting slips past the one above.
-  Enforce each atomically (rules/06, conditional update or unique constraint).
+  Enforce each atomically ([rules/06](06-memory-resource-safety.md), conditional update or unique constraint).
 - **Scarce inventory.** A reservation made by adding to a cart expires if unpaid within
   a set time and the stock is released, or bots camp the whole allocation (denial of
   inventory). Pair it with server-side per-account purchase limits that also count
   identity proxies (the same card, address or device), and for limited drops a waiting
-  room with random admission (`sota-architecture` rules/04 §6).
+  room with random admission ([`sota-architecture` rules/04](../../sota-architecture/rules/04-resilience-and-failure-design.md) §6).
 - **De-duplicate orders by normalised identity.** Hash a normalised shipping address
   (case, whitespace, abbreviations, postcode) and a payment fingerprint (card BIN plus last
   four plus a holder hash, or the gateway's fingerprint) and count orders per value; one
@@ -160,7 +160,7 @@ OWASP: Code Review Guide v2 (CAPTCHA); Bot Management and Anti-Automation cheat 
   session or device, and high decline ratios are the signature. Score payment attempts for
   risk before calling the gateway, rate-limit authorisation attempts per session, device
   and account, use the gateway's step-up cardholder authentication (for example 3-D
-  Secure) where risk is elevated, and alert on the decline ratio (rules/07 §2.1).
+  Secure) where risk is elevated, and alert on the decline ratio ([rules/07](07-data-exposure.md) §2.1).
 - **Referrals: two people, not two accounts.** Before paying a referral reward, check the
   referrer and referee differ on the signals of §2 (payment method, device, verified
   phone, address), and pay only after the referee does something that costs them (a paid,
@@ -170,6 +170,45 @@ OWASP: Code Review Guide v2 (CAPTCHA); Bot Management and Anti-Automation cheat 
 
 OWASP: Business Logic Security cheat sheet; Bot Management and Anti-Automation cheat
 sheet; Third Party Payment Gateway Integration cheat sheet.
+
+## 5. Verifying a claimed crawler or agent
+
+An exemption for "good bots" (no rate limit, no challenge, the full page for a search
+crawler) is an allow-list, and the `User-Agent` header is not an identity: any client can
+send `Googlebot`. Copying a crawler's User-Agent is the cheapest way past every rung of §1.
+
+- **The User-Agent selects which check to run; it never passes one.** Verify the connecting
+  IP (the one your own proxy recorded, never a client-sent `X-Forwarded-For` —
+  network-security guidance)
+  by the method the crawler's operator publishes:
+  - **Forward-confirmed reverse DNS.** Look up the IP's PTR name, require it to end in a
+    domain the operator lists (read 2026-10-27: `googlebot.com`, `google.com` or
+    `googleusercontent.com` for Google; `search.msn.com` for Bingbot), then resolve that name
+    forward and require the same IP back. **The reverse lookup alone proves nothing**: the
+    owner of an address block writes its PTR records and can make them say `googlebot.com`;
+    only the forward lookup in the operator's own zone ties the name to the address. Match
+    the suffix at a label boundary (`.googlebot.com`), never as a substring.
+  - **The operator's published IP ranges.** Google and Bing publish crawler CIDR lists as
+    JSON; Bing asks that its list be refreshed daily. Fetch on a schedule and cache; a
+    vendored copy goes stale silently (as §2's disposable-domain list does) and on a failed
+    refresh keep the last good copy and log its age rather than loading an empty list.
+- **Keep lookups off the hot path.** Cache each IP's verdict for a bounded time, give DNS a
+  short timeout, and treat a timeout or error as *unverified*, never verified — a lookup that
+  fails open is a no-op control ([rules/10](10-silent-control-failure.md)).
+- **An unverified claim is an ordinary client**, scored by §1 like any other, and a
+  crawler User-Agent from an address that fails verification is itself a signal.
+- **Web Bot Auth is the cryptographic direction, still a draft.** The IETF webbotauth working
+  group's `draft-ietf-webbotauth-httpsig-protocol` (datatracker, read 2026-10-27: revision -00,
+  "WG Document", not in WG last call) has the agent sign requests with HTTP Message
+  Signatures (RFC 9421) and name its key directory (JWKS, served at
+  `/.well-known/http-message-signatures-directory`) in a `Signature-Agent` header. Verify
+  through a maintained library with expiry and replay checks, and keep DNS or IP verification
+  for crawlers that do not sign. A CDN's verified-bot flag (some list Web Bot Auth, published
+  IP lists and reverse DNS as their methods) is trustworthy only on traffic that provably
+  arrived through that CDN.
+
+Sources: Google, "Verify requests from Google crawlers and fetchers"; Bing Webmaster Tools,
+"How to Verify Bingbot"; IETF datatracker, webbotauth working group documents.
 
 ## Audit checklist
 
@@ -187,7 +226,7 @@ Probes print a lead list; read each hit before reporting it.
       `grep -rnE "split\(['\"][+]['\"]\)|[\\][+][^'\"]*@|indexOf\(['\"][+]['\"]\)" .`
 - [ ] **Disposable-domain list refreshed and used as a signal (§2)** — LOW. Is any
       throwaway-domain list pulled on a schedule, and does a hit raise risk rather than
-      silently reject? Where it lives: `grep -rniE 'disposable|throwaway|burner' .`
+      silently reject? A hit that rejects outright: `grep -rniE '(disposable|throwaway|burner)[^;]*(raise|reject|abort|deny|forbidden|40[03])' .` (the refresh schedule needs a separate look)
 - [ ] **Signup velocity keyed beyond IP (§2)** — MEDIUM. Signup files that rate-limit
       but never mention an ASN, device or fingerprint key:
       `grep -rliE 'signup|sign_up|register' . | while IFS= read -r f; do grep -qiE 'rate.?limit|limiter|throttle' "$f" && ! grep -qiE 'asn|device|fingerprint' "$f" && echo "$f"; done`
@@ -220,3 +259,9 @@ Probes print a lead list; read each hit before reporting it.
 - [ ] **Referral rewards check two people, not two accounts (§4)** — MEDIUM. A
       self-referral check that compares only account IDs:
       `grep -rnE -i '(referrer|inviter)_?(id)?[[:space:]]*(!=|!==|==|===)[[:space:]]*(referee|invitee|new_?user|user)_?(id)?' .`
+- [ ] **Crawler allow-list verified, not keyed on the User-Agent (§5)** — HIGH where the
+      exemption skips a rate limit, challenge or paywall. A crawler name tested against the
+      User-Agent on a line that does no verification (a check split across lines is missed;
+      read the allow-list path):
+      `grep -rniE '(user.?agent|[^a-z]ua[^a-z])[^;]*(googlebot|bingbot|applebot|duckduckbot|yandexbot|baiduspider|gptbot|claudebot)|(googlebot|bingbot|applebot|duckduckbot|yandexbot|baiduspider|gptbot|claudebot)[^;]*(user.?agent|[^a-z]ua[^a-z])' . | grep -viE '^[^:]*robots[.]txt:|^[^:]*:[0-9]+:.*(rdns|reverse|gethostby|verif|ip_?range|cidr|signature)'`
+      Then confirm reverse DNS is forward-confirmed and published IP lists are refreshed.

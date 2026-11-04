@@ -45,7 +45,10 @@ fn process(s: &str, items: &[u32]) -> usize { ... }
   `&str` then immediately `.to_owned()` forces a copy the caller may have been
   able to move; prefer `impl Into<String>` there.
 - Return `&str`/`&[T]` borrowed from `self` where lifetimes allow; `Cow<'_, str>`
-  when sometimes-owned (see rules/06 for perf framing).
+  when sometimes-owned (see [rules/06](06-performance.md) for perf framing).
+- Gate this file with Clippy: `needless_pass_by_value`, `trivially_copy_pass_by_ref` (pedantic) and
+  `rc_buffer` (restriction) fire only when enabled by name; `large_enum_variant` (perf) and
+  `mutable_key_type` (suspicious) are on by default, so keep them unsilenced.
 
 ## 2. Rc/Arc/Box/RefCell: when shared ownership is right
 
@@ -109,12 +112,12 @@ fn transfer(from: AccountId, to: AccountId, amount: Cents) -> Result<(), Error>
   the cast. An integer above 2^53 that passes through `f64` loses its low bits
   (`9007199254740993` comes back as `...992`, measured), so deserialize amounts and IDs into
   integer or decimal fields.
-- **Arithmetic edge cases on numeric input** (adds to the `checked_*` policy in rules/05 §3).
+- **Arithmetic edge cases on numeric input** (adds to the `checked_*` policy in [rules/05](05-security-supply-chain.md) §3).
   `str::parse::<f64>()` returns `Ok` for `"nan"`, `"inf"`, `"-Infinity"` (any case, per core's
   float grammar) and `Ok(inf)` for `"1e400"`. NaN compares false to everything, so
   `if x < min || x > max { reject }` passes it, and `x.clamp(min, max)` returns it: test
   `!x.is_finite()` first. Integer `/` and `%` panic on a zero divisor **and on `MIN / -1`** in
-  release as well as debug, so a caller-chosen divisor is a panic-DoS (rules/05 §4): use
+  release as well as debug, so a caller-chosen divisor is a panic-DoS ([rules/05](05-security-supply-chain.md) §4): use
   `checked_div`/`checked_rem`, which return `None` for both. Float `x / 0.0` is `inf`, not an
   error. `-MIN` and `MIN.abs()` panic in debug but return `MIN` in release: use `checked_neg`,
   `checked_abs` or `unsigned_abs`. `a * b / c` can overflow in the product when the result
@@ -201,9 +204,9 @@ impl Backend for Postgres { ... }
 - Return-position `impl Trait` (and RPITIT in traits, stable since 1.75) over
   boxed returns where the concrete type is single. For public traits needing
   dyn-compatibility with async, use `async-trait` or hand-rolled
-  `Box<Pin<...>>` returns (see rules/04).
+  `Box<Pin<...>>` returns (see [rules/04](04-async-tokio.md)).
 - Implement standard traits eagerly: `Debug` on everything public (or a manual
-  redacting impl for secrets — rules/05), `Default` where a zero-config value
+  redacting impl for secrets — [rules/05](05-security-supply-chain.md)), `Default` where a zero-config value
   exists, `Display` + `std::error::Error` on errors, `From` for infallible
   conversions, `TryFrom` for fallible ones. Never impl `Into` directly.
 - **`Eq`/`Ord`/`PartialEq`/`PartialOrd`: `#[derive]` them; hand-write only with
@@ -302,31 +305,49 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
   Member crates use `serde = { workspace = true }`. Split crates along compile
   and dependency boundaries (`core` no-heavy-deps, `cli`, `server`), not by
   "layer" for its own sake — each crate is a compile unit and a semver unit.
-- Binary crates: keep `main.rs` thin (arg parsing + call into `lib.rs`) so the
+- Binary crates: keep `main.rs` thin (arg parsing + call into `lib.rs`; flag, output and exit-code design belong with CLI UX guidance) so the
   logic is testable.
 
 ## Audit checklist
 
-- [ ] `rg '\.clone\(\)' -t rust` — review each hit near a `for`/borrow error
+- [ ] `rg '\.clone\(\)' -t rust` (§1) — review each hit near a `for`/borrow error
       fix; flag clones of `String`/`Vec`/large structs that exist only to
       appease borrowck. `clippy::redundant_clone` — a **nursery** lint, so
       enable it explicitly (`all` + `pedantic` leave it off); known false
       negatives, still run it.
 - [ ] `rg 'fn \w+\((&self, )?\w+: (String|Vec<|PathBuf)' -t rust` — owned params
-      that are only read → should borrow.
+      that are only read → should borrow (§1).
 - [ ] `rg '&String|&Vec<|&PathBuf|&Box<' -t rust` — double-indirection params
-      (`clippy::ptr_arg` catches most).
-- [ ] `rg 'Arc<Mutex<' -t rust` — each one: is shared mutable state actually
+      (`clippy::ptr_arg` catches most) (§1).
+- [ ] `rg 'Arc<Mutex<' -t rust` (§2) — each one: is shared mutable state actually
       required, or would a channel/owner task work? Check for `Weak` where
-      graphs/cycles appear: `rg 'Rc<RefCell<'`.
-- [ ] `rg '_ =>' -t rust` — wildcard arms on local enums lose exhaustiveness;
-      `clippy::wildcard_enum_match_arm` (pedantic) to enforce.
-- [ ] Public enums likely to grow without `#[non_exhaustive]`:
-      `rg -B2 'pub enum' | rg -v non_exhaustive`.
-- [ ] `rg 'for i in 0\.\.' -t rust` — index loops; check `clippy::needless_range_loop`.
-- [ ] `rg 'unwrap_or\([a-zA-Z_]+\(' -t rust` — eager argument evaluation
+      graphs/cycles appear: `rg 'Rc<RefCell<'`. Immutable config behind a lock:
+      `grep -rnE 'Arc<(Mutex|RwLock)<[A-Za-z_]*Config' --include='*.rs' .` — `Arc<Config>` when
+      nothing writes it = Low. A `RefCell` borrow held across a call into a caller-supplied
+      closure or callback = Medium (runtime double-borrow panic). Refcount bumps spelled
+      `Rc::clone(&x)`/`Arc::clone(&x)`: `clippy::clone_on_ref_ptr` (restriction).
+- [ ] `rg '_ =>' -t rust` (§7) — wildcard arms on local enums lose exhaustiveness;
+      `clippy::wildcard_enum_match_arm` (restriction, not pedantic) to enforce.
+- [ ] Public enums likely to grow without `#[non_exhaustive]` (§7):
+      `rg -B2 'pub enum' | rg -v non_exhaustive`. Inversely, `#[non_exhaustive]` on a closed set
+      (an `Ordering`-like enum) removes downstream exhaustiveness checking for no gain = Low.
+- [ ] `rg 'for i in 0\.\.' -t rust` (§8) — index loops; check `clippy::needless_range_loop`.
+- [ ] `rg 'unwrap_or\([a-zA-Z_]+\(' -t rust` (§8) — eager argument evaluation
       (`clippy::or_fun_call`).
-- [ ] Raw primitive IDs in public signatures: `rg 'fn .*\b(id|user|key)\w*: (u32|u64|i64|String)'`.
+- [ ] Raw primitive IDs in public signatures (§3): `rg 'fn .*\b(id|user|key)\w*: (u32|u64|i64|String)'`.
+- [ ] **Typestate transition that leaves the old state usable (§4) — Low** —
+      `grep -rlw 'PhantomData' --include='*.rs' . | xargs -r grep -nE 'fn [a-z_][a-z0-9_]*\(&(mut )?self[^)]*\)[[:space:]]*->[^{;]*[A-Z][A-Za-z0-9_]*<[A-Z]'` lists, in files with state-parameterised types, methods that take
+      `&self`/`&mut self` and return a generic type (single-line signatures only; a getter such as
+      `-> Option<String>` prints too). A method returning
+      the same type in another state must take `self` by value; one that takes `&self`/`&mut self`
+      leaves the previous state callable. A runtime `enum` is not a
+      finding where states are dynamic, numerous or serialized.
+- [ ] **Builders (§5) — Low** —
+      `grep -rnE 'fn build\(&?(mut )?self\)' --include='*.rs' . | grep -v 'Result<'` lists
+      infallible `build()`s: one that unwraps, expects or panics on a missing or invalid field
+      should return `Result<T, BuildError>` or take the field in `T::builder(required)`. Also:
+      one builder mixing `self` and `&mut self` setters; a constructor past ~4 parameters with no
+      builder (`clippy::too_many_arguments` with `too-many-arguments-threshold = 4` in `clippy.toml`).
 - [ ] **Money in binary floats (§3) — MEDIUM, HIGH in money paths** —
       `grep -rniE '(price|amount|total|balance|cost|fee|tax)[a-z0-9_]*[[:space:]]*:[[:space:]]*f(32|64)' --include='*.rs' .`
       (a money field, parameter or binding typed as a float) ;
@@ -340,7 +361,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
       at file level, so a file with one `is_finite` hides the rest: read each parse site. Then
       look by hand for `/`, `%` or unary `-` on a caller-supplied integer that has no
       `checked_div`/`checked_neg`.
-- [ ] Public trait intended to be closed but unsealed — can a downstream crate
+- [ ] Public trait intended to be closed but unsealed (§6) — can a downstream crate
       impl it? If yes and that's unintended, seal it.
 - [ ] Hand-written comparison impls: `rg 'impl (PartialEq|Eq|PartialOrd|Ord)' -t rust`
       — verify invariants (total order, consistency with `Eq`, symmetry); a
@@ -353,11 +374,11 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
       `grep -rnE '^[[:space:]]*pub [a-z_][a-z0-9_]*:|struct [A-Z][A-Za-z0-9_]*(<[^>]*>)?\(pub ' --include='*.rs' .`
       — a `pub` field on a type that also has a validating constructor (`new`/`TryFrom`
       returning `Result`) lets any caller build the invalid value = Medium (High when the
-      invariant is security-relevant, or when `unsafe` code relies on it — rules/03 §1).
+      invariant is security-relevant, or when `unsafe` code relies on it — [rules/03](03-unsafe-discipline.md) §1).
       rustc's `unreachable_pub` (allow-by-default) lists `pub` items that should be
       `pub(crate)`.
-- [ ] Multi-crate repo without `[workspace.dependencies]` → version drift;
+- [ ] Multi-crate repo without `[workspace.dependencies]` (§9) → version drift;
       `cargo tree -d` to find duplicate dependency versions.
-- [ ] Clippy gates for this file's concerns: `clippy::needless_pass_by_value`,
+- [ ] Clippy gates for this file's concerns (§1): `clippy::needless_pass_by_value`,
       `clippy::trivially_copy_pass_by_ref`, `clippy::large_enum_variant`,
       `clippy::rc_buffer`, `clippy::mutable_key_type`.

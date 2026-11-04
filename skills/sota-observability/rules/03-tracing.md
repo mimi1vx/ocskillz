@@ -13,6 +13,14 @@ tracing SDKs in application code are technical debt as of 2026.
 - **Applications configure the SDK once at the entry point**: tracer
   provider, resource attributes, sampler, exporter (OTLP). Nothing else in
   the codebase imports SDK packages.
+- **Gate "tracing is available" on importing the SDK, never the API.** The API is designed
+  to be present and inert, and frameworks now pull it in themselves (FastAPI declares
+  `opentelemetry-api` as a required dependency and the SDK only as an extra; PyPI metadata,
+  checked 2026-10-12). So `import opentelemetry` succeeding says nothing: an app that gated
+  on it and then imported the SDK crashed at startup with `otel.enabled: true`, and a test
+  guarded by `importorskip("opentelemetry")` ran and failed instead of skipping.
+  Import the SDK modules you configure, and warn when one is missing. Same
+  family as [`sota-code-security` rules/16](../../sota-code-security/rules/16-where-no-ops-hide.md) §2.15: present is not working.
 - **Export OTLP to a Collector**, not directly to a vendor: the Collector
   owns batching, retries, tail sampling, redaction, fan-out, and vendor
   routing. Swapping backends becomes a Collector config change, not a code
@@ -67,7 +75,7 @@ large loops (span the batch, count the items), logging itself.
 **Attributes vs events vs status:**
 - **Attributes** = dimensions you'd filter/group by: route, db.system.name,
   tenant_id, cache.hit, retry.count. Set on the span, bounded-ish values,
-  no payloads, no PII (same redaction policy as logs — rules/01 §4).
+  no payloads, no PII (same redaction policy as logs — [rules/01](01-structured-logging.md) §4).
 - **Events** = point-in-time happenings inside the span: `retry_scheduled`,
   `lock_acquired`, and especially **exception events**
   (`span.record_exception(e)`). Note OTel plans to deprecate the Span Event
@@ -78,7 +86,7 @@ large loops (span the batch, count the items), logging itself.
   migrate instrumentation via `OTEL_SEMCONV_EXCEPTION_SIGNAL_OPT_IN=logs`
   (or `logs/dup` to emit both), and SDK-level routing can surface log-based
   events as span events for backends that need them. Exceptions-as-logs
-  matches rules/01 §1 (`exception.stacktrace` as a structured field).
+  matches [rules/01](01-structured-logging.md) §1 (`exception.stacktrace` as a structured field).
 - **Status**: set `ERROR` only for genuine failures of that unit of work.
   A 404 on a lookup endpoint is not span-error; an unhandled exception is.
   Marking expected outcomes as errors poisons tail sampling and spanmetrics.
@@ -194,7 +202,7 @@ Rules:
   zero traces of the incident.
 - Log the effective sampling config; during incidents, support a runtime
   knob to raise sampling on a specific route/tenant.
-- Remember sampled-out requests still need their wide event (rules/01 §5) —
+- Remember sampled-out requests still need their wide event ([rules/01](01-structured-logging.md) §5) —
   logs are the unsampled record; traces are the deep-dive.
 
 ## 5. Limits, overhead, and pipeline hardening
@@ -225,15 +233,16 @@ Tracing must never take down the service it observes.
   `otelcol_processor_incoming_items` vs `_outgoing_items` gap
   (`otelcol_processor_dropped_spans` was deprecated in Collector v0.110.0).
 - **Collector hardening**: `memory_limiter` is the **first** processor in
-  every pipeline (with `GOMEMLIMIT` at ~80% of the hard limit) so overload
+  every pipeline (with `GOMEMLIMIT` at 80% of the hard limit — the collector README's own figure; other Go
+  services: [`sota-golang` rules/06](../../sota-golang/rules/06-performance.md) §5) so overload
   backpressures receivers instead of OOM-killing the gateway; receivers
   bind a specific interface — the default host is `localhost` since
   v0.104.0 (gate stable in v0.110.0), so a `0.0.0.0` in Kubernetes is an explicit choice that needs
-  receiver auth/TLS (rules/01 §8) and a NetworkPolicy; `zpages`, `pprof` and
+  receiver auth/TLS ([rules/01](01-structured-logging.md) §8) and a NetworkPolicy; `zpages`, `pprof` and
   `health_check` extensions stay on localhost or an internal-only port.
 - Redaction in the pipeline: a Collector `attributes`/`redaction` processor
   deny-listing token/PII-shaped attributes is the backstop for instrument-
-  ation mistakes — same philosophy as logger-level redaction (rules/01 §4).
+  ation mistakes — same philosophy as logger-level redaction ([rules/01](01-structured-logging.md) §4).
 - Shutdown: flush the provider on SIGTERM (`provider.shutdown()` /
   `ForceFlush`) or you lose the last batch of every deploy — which is
   exactly the window where regressions live.
@@ -258,25 +267,35 @@ services — and into every outbound header.
 
 - [ ] Application code depends on OTel API only; SDK configured in exactly
       one place per service; exporters point at a Collector, not hardcoded
-      vendors.
+      vendors; `service.name`, `service.version` and
+      `deployment.environment.name` set as resource attributes; any "tracing
+      is available" check imports the SDK, never the bare API (§1). Probe
+      for gates on the API package (each hit is the finding):
+      `grep -rnE '(importorskip|find_spec)\([[:space:]]*.opentelemetry.[[:space:]]*[,)]|^[[:space:]]*import[[:space:]]+opentelemetry[[:space:]]*$' --include='*.py' .`
 - [ ] Auto-instrumentation enabled for frameworks, DB, HTTP clients, queue
-      clients; semantic conventions used for names/attributes.
+      clients; semantic conventions used for names/attributes (§1).
 - [ ] Every outbound network call (HTTP, DB, cache, queue) produces a span;
-      retries visible; span names are low-cardinality templates.
+      retries visible; span names are low-cardinality templates; spans are
+      always ended (`with`/`defer`/`try-finally`); queue/pool wait time is
+      recorded as a span or an attribute (§2).
 - [ ] Span status ERROR only on real failures; exceptions recorded as span
       events or span-correlated logs (Span Event API deprecation planned); no
-      payloads/PII in attributes.
+      payloads/PII in attributes (§2).
 - [ ] Trace continuity verified end-to-end across HTTP → queue → worker →
-      cron paths (one trace or linked traces per user action).
-- [ ] Sampling is deliberate: documented policy; errors and slow traces are
-      retained (tail sampling or equivalent); ParentBased everywhere;
-      sampling rate adjustable during incidents.
-- [ ] trace_id present in logs (cross-link works both ways: log→trace,
-      trace→logs, metric exemplar→trace).
+      cron paths (one trace or linked traces per user action); batch
+      consumers link every source message; inbound `traceparent` sampling
+      flags from the internet are not trusted blindly (stripped or
+      regenerated at the edge where clients could force sampling) (§3).
+- [ ] Sampling is deliberate: documented policy, effective config logged;
+      errors and slow traces are retained (tail sampling or equivalent);
+      ParentBased everywhere; sampling rate adjustable during incidents (§4).
 - [ ] Baggage usage reviewed: no PII/secrets, stripped or validated at trust
-      boundaries, not leaking to third-party APIs.
-- [ ] Collector pipeline monitored (dropped spans, queue saturation, export
+      boundaries, not leaking to third-party APIs; count and size capped (§6).
+- [ ] Collector pipeline monitored (§5) (dropped spans, queue saturation, export
       failures); tail-sampling memory sized for peak.
+- [ ] SDK limits and shutdown (§5): no `SimpleSpanProcessor` in production config
+      (`grep -rn 'SimpleSpanProcessor' .`), attribute value-length limit set explicitly,
+      provider shutdown/flush wired to SIGTERM.
 - [ ] Collector hardened (§5): `memory_limiter` first in every
       pipeline; no receiver or `zpages`/`pprof`/`health_check` endpoint on
       `0.0.0.0` without auth and a network restriction. Probe, then read each

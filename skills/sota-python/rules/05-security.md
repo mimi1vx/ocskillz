@@ -10,7 +10,7 @@ each has a grep signature — hunt them all in audits.
 callables during load. Same family: `shelve`, `marshal`, `dill`, `joblib.load`, pandas
 `read_pickle`, torch `torch.load` without `weights_only=True` *and* torch ≥ 2.6 (CVE-2025-32434,
 GHSA-53q9-r3pm-6pq6: `weights_only=True` itself was bypassed to RCE on torch ≤ 2.5.1, fixed in
-2.6.0; model-artifact trust is `sota-ml-engineering` rules/07), and **`jsonpickle.decode`
+2.6.0; model-artifact trust is [`sota-ml-engineering` rules/07](../../sota-ml-engineering/rules/07-security-governance.md)), and **`jsonpickle.decode`
 / `jsonpickle.loads`** — the JSON wire format hides that it rebuilds objects: a `py/reduce`
 entry calls any importable function, and its `safe=True` default only stops `eval()`
 (measured, jsonpickle 4.1.2: `{"py/reduce": [{"py/function": "os.getcwd"}, ...]}` ran
@@ -40,7 +40,7 @@ obj = msgspec.json.decode(blob, type=Job)     # or json + pydantic validation
   input through a fixed dict — `HANDLERS = {"csv": export_csv}` then `HANDLERS[kind]` — so
   the set of reachable callables is the one you wrote. No in-interpreter "restricted" mode is
   a security boundary; code that must run untrusted expressions runs in a separate sandboxed
-  process (`sota-sandboxing`). OWASP: Code Review Guide; Proactive Controls; ASVS.
+  process ([`sota-sandboxing`](../../sota-sandboxing/SKILL.md)). OWASP: Code Review Guide; Proactive Controls; ASVS.
 - Templates: Jinja2 with autoescape on for HTML (`select_autoescape`); never render
   user-controlled **template strings** (SSTI → RCE), only user data into fixed templates.
   Same logic for `str.format` on user-supplied format strings (`"{0.__class__}"` walks objects).
@@ -60,10 +60,16 @@ subprocess.run(
 
 - `shell=True` with ANY variable in the string is a HIGH finding. Constant-string
   `shell=True` is still a smell (PATH games, IFS) — rewrite as a list.
-- `--` before user-controlled positional args so `-rf`-style values can't become flags
+- `--` before user-controlled positional args so `-rf`-style values can't become flags (probe:
+  [`sota-code-security` rules/01](../../sota-code-security/rules/01-input-injection.md) §3)
   (argument injection — applies to git, curl, tar, find especially).
 - Validate or allowlist executables; never let the user pick the binary. Set `timeout=`,
   handle `CalledProcessError`. `os.system` is banned outright.
+- A memory budget on a child is, **on Linux**, `preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_DATA, …)`,
+  **never `RLIMIT_AS`**: an AS cap kills a native binary in its loader with exit 127 ("command not
+  found"), so a probe reads as EMPTY, not FAILED ([`sota-sandboxing` rules/02](../../sota-sandboxing/rules/02-linux-os-hardening.md) R7.2a).
+  **On macOS no memory rlimit can be set** and that `preexec_fn` aborts the spawn: run the child
+  in a container with `--memory`, or under an RSS-polling supervisor ([`sota-sandboxing` rules/02](../../sota-sandboxing/rules/02-linux-os-hardening.md) R7.2b, *Not Linux*).
 
 ## 3. SQL: parameters, never interpolation
 
@@ -196,7 +202,7 @@ code  = f"{secrets.randbelow(1_000_000):06d}"
 
 §6 covers *randomness*. Algorithm and protocol choice — AEAD selection, nonce discipline,
 key derivation, constant-time comparison, crypto agility, post-quantum migration — is
-**`sota-code-security` rules/04**, deliberately, because those decisions are identical across
+**[`sota-code-security` rules/04](../../sota-code-security/rules/04-cryptography.md)**, deliberately, because those decisions are identical across
 languages and drift badly when restated per runtime. Load it before designing anything
 cryptographic; this section is only the Python-specific part.
 
@@ -207,8 +213,8 @@ cryptographic; this section is only the Python-specific part.
 - **`hashlib` is not a password API.** `md5`/`sha1` for *security* purposes are flagged
   (bandit B303/B324); for a non-security digest pass `usedforsecurity=False` so the intent is
   in the code rather than in a reviewer's head. Password hashing wants argon2/bcrypt/scrypt,
-  not a bare hash — the choice itself is `sota-code-security` rules/04.
-- **`crypt` was removed in 3.13** (PEP 594, rules/01 §7a). Code still importing it is both
+  not a bare hash — the choice itself is [`sota-code-security` rules/04](../../sota-code-security/rules/04-cryptography.md).
+- **`crypt` was removed in 3.13** (PEP 594, [rules/01](01-tooling-project-setup.md) §7a). Code still importing it is both
   broken on a modern floor and using weak, platform-dependent hashing.
 
 ## 6b. Remote host trust: verify, or you are trusting DNS
@@ -228,7 +234,7 @@ cryptographic; this section is only the Python-specific part.
 - Untrusted XML: use `defusedxml`; stdlib `etree` is OK against entity *expansion* on modern
   versions but external entity and DTD handling across libs (lxml!) still needs hardening:
   `lxml.etree.XMLParser(resolve_entities=False, no_network=True)`.
-- SSRF (policy: `sota-code-security` rules/01 §5; this is the Python idiom):
+- SSRF (policy: [`sota-code-security` rules/01](../../sota-code-security/rules/01-input-injection.md) §5; this is the Python idiom):
   - **Take a key, not a URL.** Accept a host name or record id, look it up in your own
     allowlist and build the URL yourself; a caller-supplied URL relayed to a client is the bug.
   - **Check the address you dial, at connect time.** Validating the hostname and then letting
@@ -268,7 +274,7 @@ both. So any validation, authorization, or bounds check written as an `assert`
   `PYTHONOPTIMIZE` (Dockerfile `CMD`, entrypoint, `uv run` flags).
 - Note the sibling trap: lenient numeric parsing. `int(" 12 \n")` is `12` and
   `float("1_0")` is `10.0` — a corrupt field yields a plausible number rather
-  than an error. Full class: `sota-code-security` rules/13 §3.
+  than an error. Full class: [`sota-code-security` rules/13](../../sota-code-security/rules/13-context-dependent-silence.md) §3.
 
 ## 8. Input-adjacent denial of service & injection oddities
 
@@ -304,22 +310,22 @@ both. So any validation, authorization, or bounds check written as an `assert`
 - **Log injection:** user strings logged verbatim can forge log lines (`\n` + fake record)
   or smuggle ANSI escapes into terminals. Strip/escape control characters at the logging
   formatter for user-supplied fields; one more reason for structured logging
-  (fields are quoted) — see rules/03 §11.
+  (fields are quoted) — see [rules/03](03-idioms-pitfalls.md) §11.
 - **`int()`/numeric parsing:** Python ints are unbounded — `int(user_str)` of a 10MB digit
   string allocates happily; 3.11+ caps str→int at 4300 digits by default
   (`sys.set_int_max_str_digits`) — don't raise that limit on request paths. Cap input length
-  before parsing.
+  before parsing; nesting depth and what no `except` catches: [rules/03](03-idioms-pitfalls.md) §10.
 - **`webbrowser.open()` command injection:** crafted URLs (e.g. containing `%action`)
   passed to `webbrowser.open()` reach the shell with certain browser types —
   CVE-2026-4519 and its incomplete-fix follow-up CVE-2026-4786 (2026). Never pass
   user-influenced URLs; validate scheme/host first, and keep the interpreter patched.
 - **Header/CRLF injection:** never place raw user input into HTTP headers, email headers
   (`email.message` does folding — still validate), or redis/SMTP protocol lines; reject
-  `\r`/`\n` in any value destined for a protocol line.
+  `\r`/`\n` in any value destined for a protocol line (probe: [`sota-code-security` rules/01](../../sota-code-security/rules/01-input-injection.md) §11).
 
 ## 8a. Debug consoles and error pages in production
 
-Django's `DEBUG=False` is already a settings rule (rules/07 §2). This is the mechanism, and
+Django's `DEBUG=False` is already a settings rule ([rules/07](07-frameworks-testing.md) §2). This is the mechanism, and
 it generalises past Django.
 
 - **Werkzeug's interactive debugger executes arbitrary Python** in any traceback frame when
@@ -355,15 +361,16 @@ new privilege boundary: the caller needs the rights a debugger needs (per PEP 76
 root or `CAP_SYS_PTRACE`; macOS `task_for_pid`; Windows `PROCESS_VM_READ`/`WRITE`). It does
 turn those rights into one-call code execution, so switch it off in production as defence
 in depth: `PYTHON_DISABLE_REMOTE_DEBUG=1`, `-X disable-remote-debug`, or a build configured
-`--without-remote-debug`. Measured on 3.14.6 with `sys.is_remote_debug_enabled()`:
-- **The documented spelling does nothing.** The 3.14 command-line docs write
-  `-X disable_remote_debug`; CPython's `initconfig.c` reads `disable-remote-debug`, and the
-  underscore form left it enabled. Use the hyphen.
+`--without-remote-debug`. Measured on 3.14.8 and 3.15.0 with `sys.is_remote_debug_enabled()`:
+- **The underscore spelling does nothing.** CPython's `initconfig.c` reads
+  `disable-remote-debug`; `-X disable_remote_debug` is accepted silently and leaves it
+  enabled. The docs printed the underscore form until gh-159010 (fixed 2026-10-14, 3.14 and
+  3.15 branches), so copies made from them are still in the wild. Use the hyphen.
 - **The variable is ignored under `-E` and `-I`** (they drop every `PYTHON*` variable), so a
   hardened `python -I` entrypoint needs the `-X` form. Any value disables it, even empty.
 - Check it in the running image with the real flags; audit events `sys.remote_exec` (caller)
   and `cpython.remote_debugger_script` (target) record use. Not granting `SYS_PTRACE` to the
-  container is the primary control (`sota-sandboxing`).
+  container is the primary control ([`sota-sandboxing`](../../sota-sandboxing/SKILL.md)).
 
 Dependency and supply-chain hygiene and static-analysis gates (formerly sections 9 and 10)
 moved to [rules/08](08-supply-chain.md) §1–§2 on 2026-09-25.
@@ -375,19 +382,19 @@ library's own warning is that incorrect use "can corrupt data and objects, revea
 information, cause crashes, or otherwise compromise the running process". A wrong `argtypes`,
 a buffer sized from input, or a pointer kept after its owner is freed is a C bug with no C
 file to review. Confine these calls to one module, declare `argtypes`/`restype` on every
-foreign function, and validate lengths before they cross. The class is `sota-code-security` rules/06 §3.
+foreign function, and validate lengths before they cross. The class is [`sota-code-security` rules/06](../../sota-code-security/rules/06-memory-resource-safety.md) §3. Their tests run under `-X dev` in CI ([rules/07](07-frameworks-testing.md) §3).
 
 ## Audit checklist
 
 - [ ] **`ctypes` / `cffi` — HIGH where a size or pointer comes from input** (§11) —
-      `grep -rnE '^[[:space:]]*(import|from)[[:space:]]+(ctypes|cffi)|ctypes\.(CDLL|cdll|string_at|memmove|cast|create_string_buffer)' --include='*.py' .`
-      (each foreign function declares `argtypes`/`restype`; lengths validated before the call)
-- [ ] **Code execution / deserialization [CRITICAL on untrusted data]** —
+      `grep -rlE '^[[:space:]]*(import|from)[[:space:]]+(ctypes|cffi)' --include='*.py' . | xargs -r grep -L 'argtypes'`
+      (a file listed declares no `argtypes`, or is `cffi`: read its `cdef`; each foreign function declares `argtypes`/`restype`; lengths validated before the call)
+- [ ] **Code execution / deserialization [CRITICAL on untrusted data]** (§1) —
       `grep -rn "pickle.loads\|pickle.load\|read_pickle\|joblib.load\|marshal.loads\|dill" --include="*.py" src/`
       ; `grep -rnE 'jsonpickle\.(decode|loads|Unpickler)|from[[:space:]]+jsonpickle[[:space:]]+import' --include='*.py' src/`
       ; `grep -rn "torch.load" --include="*.py" src/ | grep -v "weights_only=True"` (and every
       `weights_only=True` hit is still RCE if the lock resolves torch ≤ 2.5.1:
-      `grep -A1 '^name = "torch"' uv.lock`) ;
+      `grep -A1 '^name = "torch"' uv.lock | grep -E '^version = "(0\.|1\.|2\.[0-5]\.)'`, a hit) ;
       `grep -rn "yaml.load(" --include="*.py" src/ | grep -v "SafeLoader\|safe_load"` ;
       `grep -rn "\beval(\|\bexec(" --include="*.py" src/ | grep -v "literal_eval\|model.eval()"`
       ; `grep -rn "\.format(.*request\|f\".*{.*request" --include="*.py" src/ | head`
@@ -397,46 +404,53 @@ foreign function, and validate lengths before they cross. The class is `sota-cod
       `grep -rnE '(^|[^.[:alnum:]_])(compile|__import__)\(|import_module\(|pydoc\.locate\(|getattr\([^,)]+,[[:space:]]*[^"'"'"'[:space:]]' --include='*.py' src/`
       (a `getattr` whose name is not a literal, or an import by computed name, is reachable
       code the author did not list; replace with a fixed dict of handlers)
-- [ ] **Subprocess [HIGH]** — `grep -rn "shell=True" --include="*.py" src/` ;
+- [ ] **Subprocess [HIGH]** (§2) — `grep -rn "shell=True" --include="*.py" src/` ;
       `grep -rn "os.system\|os.popen" --include="*.py" src/`
-- [ ] **SQL [CRITICAL]** —
+- [ ] **Memory cap via `RLIMIT_AS` (§2) [HIGH when it gates an inspection]** —
+      `grep -rn "RLIMIT_AS" --include="*.py" src/` (use `RLIMIT_DATA` or a cgroup on Linux; on macOS
+      no memory rlimit is settable, so a container or an RSS supervisor)
+- [ ] **Child exit status ignored (§2) [MEDIUM, HIGH when the next step trusts the output]** —
+      `grep -rnE 'subprocess\.(run|call)\(' --include="*.py" src/ | grep -v 'check=True'`
+      (`run` returns a non-zero `returncode` without raising unless `check=True`; each hit
+      must read `.returncode` itself, or the failed command reads as success)
+- [ ] **SQL (§3) [CRITICAL]** —
       `grep -rn 'execute(f"\|execute(".*%s" *%\|execute(.*+ ' --include="*.py" src/` ;
       `grep -rn "\.raw(\|\.extra(\|RawSQL" --include="*.py" src/` (Django edges);
-      `grep -rn 'text(f"' --include="*.py" src/` (SQLAlchemy text+f-string)
+      `grep -rn 'text(f"' --include="*.py" src/` (SQLAlchemy text+f-string) ; `grep -rlE '(^|[^A-Za-z_])I?LIKE[[:space:]]|\.i?like\(' --include='*.py' --exclude-dir=.venv . | xargs -r grep -LE 'escape[_=]|autoescape|ESCAPE|replace\(.[%_]'` (each file listed builds a `LIKE` and escapes nothing: a bound value escapes `%` and `_` first [MEDIUM]; a file that escapes one query and not another is not listed, so read the rest)
 - [ ] **--- t-string consumers that render values raw (§3a) --- [CRITICAL where the value
       is request-derived and the output is SQL or a shell string; HIGH for HTML]** —
       `grep -rlE 'string\.templatelib' --include='*.py' . | while IFS= read -r f; do grep -nE '\.values?([^A-Za-z0-9_]|$)|str\((t|tmpl|template)\)' "$f" | grep -vE 'escape|quote|param|bind' | while IFS= read -r l; do printf '%s:%s\n' "$f" "$l"; done; done`
       (the filter reads only the code, never the file name, so `html_escape.py` is still
       searched; each hit is a value or a whole `Template` used with no escape or binding on that line;
       read it — a value escaped a line earlier is a false positive, `str(template)` is a repr)
-- [ ] **Path traversal & archives [HIGH]** —
-      `grep -rn "extractall\|extract(" --include="*.py" src/ | grep -v 'filter='` ;
-      `grep -rn "request.*filename\|\.filename" --include="*.py" src/` (then check containment);
-      `grep -rn "is_relative_to\|realpath" --include="*.py" src/` (mitigations present?)
-- [ ] **Randomness & secrets [HIGH]** —
+- [ ] **Path traversal & archives (§4, §5) [HIGH]** —
+      `grep -rn "extractall\|extract(" --include="*.py" src/ | grep -v 'filter='` ; `grep -rlE 'zipfile' --include='*.py' --exclude-dir=.venv . | xargs -r grep -LE 'file_size'` (no uncompressed-size budget) ;
+      `grep -rn "request.*filename\|\.filename" --include="*.py" src/` (lists every upload filename use; each hit is read for containment, not a finding);
+      `grep -rqE 'is_relative_to|realpath' --include='*.py' src/ || echo "no path-containment check in src/"` (no mitigation anywhere)
+- [ ] **Randomness & secrets (§6) [HIGH]** —
       `grep -rn "random\.\(choice\|choices\|randint\|random\)" --include="*.py" src/ # security context?`
       ; `grep -rn "== .*token\|token.* ==" --include="*.py" src/ | head` (timing-unsafe
       compare); `grep -rn "verify=False\|_create_unverified" --include="*.py" src/` ;
       `grep -rnE "(api_key|secret|password|token) *= *['\"][A-Za-z0-9_\-]{12,}" --include="*.py" .`
-      (hardcoded); `grep -rn "md5(\|sha1(" --include="*.py" src/ | grep -v usedforsecurity`
-- [ ] **XML / SSRF** —
+      (hardcoded); `grep -rn "md5(\|sha1(" --include="*.py" src/ | grep -v usedforsecurity` ; `grep -rniE '(md5|sha1|sha256|sha512)\([^)]*passw' --include='*.py' --exclude-dir=.venv .` (a password through a bare digest: argon2/bcrypt)
+- [ ] **XML / SSRF** (§7) —
       `grep -rn "lxml.etree\|xml.etree\|xml.dom\|xml.sax" --include="*.py" src/` (defused?
       entities off?); `grep -rn "get(url\|get(request\.\|urlopen(" --include="*.py" src/ | head`
-      (user-controlled URL fetch?)
+      (lists every URL fetch; each hit is read for a user-controlled URL, not a finding)
 - [ ] **--- SSRF: outbound request to a caller-influenced host (§7) --- [HIGH; CRITICAL where
       the metadata endpoint 169.254.169.254 is reachable]** —
       `grep -rnE '(requests|httpx)\.(get|post|put|patch|delete|head|options|request|stream)\(|urlopen\(|(allow|follow)_redirects[[:space:]]*=[[:space:]]*True' --include='*.py' src/`
       (module-level helpers have no connect-time hook, and redirects-on re-opens every
       check; for each hit, and each `requests.Session`, find where the dialled IP is vetted
       after DNS resolution — a hostname check before the call is not it)
-- [ ] **ReDoS / DoS surfaces** —
+- [ ] **ReDoS / DoS surfaces** (§8) —
       `grep -rnE "re\.(match|search|fullmatch|findall|sub)\(" --include="*.py" src/ | head -30`
       (user-controlled subject?);
       `grep -rnE "\((\.\*|\\\\w\+|\[\^?[^]]*\]\+)\)[\*\+]" --include="*.py" src/` (nested
-      quantifiers); `grep -rn "zlib.decompress\|Image.open" --include="*.py" src/` (size budgets
-      present?); `grep -rn "set_int_max_str_digits" --include="*.py" src/` ;
-      `grep -rn "webbrowser.open" --include="*.py" src/` (user-influenced URL? [HIGH]
-      CVE-2026-4519/4786)
+      quantifiers); `grep -rn 'zlib\.decompress(' --include='*.py' src/ ; grep -rqE 'MAX_IMAGE_PIXELS[[:space:]]*=[[:space:]]*[0-9]' --include='*.py' src/ || grep -rn 'Image\.open(' --include='*.py' src/`
+      (a one-shot `zlib.decompress` has no decoded-size budget, `decompressobj().decompress(data, max_length)` does; an `Image.open` is listed only when nothing sets a numeric `Image.MAX_IMAGE_PIXELS`); `grep -rn "set_int_max_str_digits" --include="*.py" src/` ;
+      `grep -rn 'webbrowser\.open' --include='*.py' src/ | grep -vE "webbrowser\.open(_new|_new_tab)?\([[:space:]]*[\"'][^\"']*[\"'][[:space:]]*(,[^)]*)?\)"`
+      (a call whose URL is not one string literal; read whether a user influences it [HIGH] CVE-2026-4519/4786)
 - [ ] **--- Regex as a control: escaping, anchoring, engine (§8) --- [HIGH where the regex
       gates validation or authorization; MEDIUM elsewhere]** —
       `grep -rnE 're\.(match|compile|search|fullmatch|sub|findall)\([[:space:]]*(r?f|fr)["'"'"']|\.match\(|re\.(M|MULTILINE)([^A-Za-z_]|$)' --include='*.py' src/`
@@ -444,9 +458,9 @@ foreign function, and validate lengths before they cross. The class is `sota-cod
       needs `re.fullmatch` or a `\Z`; a MULTILINE validator accepts any one good line)
 - [ ] **--- Temp files and permissions (§4a) ---** — `grep -rn "mktemp(" --include="*.py" src/`
       (TOCTOU [HIGH]); `grep -rnE '"/tmp/|'"'"'/tmp/' --include="*.py" src/` (predictable path
-      [MEDIUM]); `grep -rnE 'chmod\(.*0o(6|7)[0-7][0-7]|umask\(0\)' --include="*.py" src/`
+      [MEDIUM]); `grep -rnE 'chmod\(.*0o[0-7]([1-7][0-7]|[0-7][1-7])|umask\(0\)' --include="*.py" src/`
       (widened perms [HIGH if secrets])
-- [ ] **--- Crypto (§6a) — choice itself is sota-code-security rules/04 ---** —
+- [ ] **--- Crypto (§6a) — choice itself is [sota-code-security rules/04](../../sota-code-security/rules/04-cryptography.md) ---** —
       `grep -rnE '\bmd5\(|\bsha1\(' --include="*.py" src/ | grep -v usedforsecurity` ([MEDIUM]);
       `grep -rn "from Crypto" --include="*.py" src/` (pycrypto vs pycryptodome [MEDIUM])
 - [ ] **--- Remote host trust (§6b) ---** —
@@ -467,9 +481,10 @@ foreign function, and validate lengths before they cross. The class is `sota-cod
       (a start file with no switch, or one whose `-I`/`-E` interpreter makes the variable
       inert; the variable may instead be set in the orchestrator's env, so read it there) ;
       `grep -rnE 'disable_remote_debug' --include='Dockerfile*' --include='*.y*ml' --include='*.sh' --include='*.service' --include='*.toml' --include='Procfile' .`
-      (the underscore spelling, which 3.14.6 ignores)
+      (the underscore spelling, which 3.14.8 and 3.15.0 ignore)
 - [ ] **--- Template autoescape (§1) --- [HIGH where user data renders into HTML]** —
-      `grep -rnE 'Environment\(|Template\(' --include='*.py' src/` (read each for `autoescape=`:
+      `grep -rnE 'Environment\(|Template\(' --include='*.py' src/ | grep -v 'autoescape'` (each
+      hit sets no `autoescape=` on its line; a call wrapped over lines prints too, so read it:
       measured with Jinja2 3.1.6, `Environment().autoescape` is `False` and `{{ x }}` rendered
       `<script>` verbatim, while `select_autoescape()` escaped it) ;
       `grep -rnE 'autoescape[[:space:]]*=[[:space:]]*False|Markup\(|mark_safe\(|\|[[:space:]]*safe' --include='*.py' --include='*.html' --include='*.j2' .`

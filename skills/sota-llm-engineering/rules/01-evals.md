@@ -51,7 +51,7 @@ track the ratio — an eval set that is still >50% synthetic after months in
 production is a Medium finding.
 
 **A classifier that guards the model gets a language column.** An injection or
-content classifier (sota-code-security rules/08) scored only on English cases
+content classifier ([sota-code-security rules/08](../../sota-code-security/rules/08-llm-ai-security.md)) scored only on English cases
 says nothing about the inputs used to slip past it. Its eval set carries the
 same attacks in languages the classifier does not claim to support, in
 low-resource languages, in mixed-script or transliterated text, and
@@ -67,7 +67,7 @@ Order of preference (cheapest/most reliable first):
 | Type | Use for | Notes |
 |---|---|---|
 | **Code assertions** | Format, schema validity, length, required/forbidden strings, citations resolve, latency/cost ceilings, classification vs gold label | Deterministic, free, zero judge bias. Always start here — a surprising fraction of "quality" is assertable. |
-| **Golden-set exact/fuzzy match** | Extraction, classification, SQL/code with executable check | Execute generated code/SQL against fixtures and compare *results*, not strings. |
+| **Golden-set exact/fuzzy match** | Extraction, classification, SQL/code with executable check | Execute generated code/SQL against fixtures and compare *results*, not strings. Scoring generated code in depth — a harness the candidate can attack, pass@k, exploits: [rules/07](07-code-generation-evals.md). |
 | **Rubric scoring (LLM-judge)** | Graded qualities: faithfulness, completeness, tone, helpfulness | Decompose into binary sub-criteria (see below). |
 | **Pairwise comparison (LLM-judge)** | A/B between prompts/models when absolute scores are unstable | Judges are far more reliable at "which is better" than "score 1–10". Use for regression decisions; randomize order (position bias). |
 | **Human review** | Calibrating judges, high-stakes spot checks, novel failure discovery | Too expensive as the routine grader; indispensable as ground truth. |
@@ -85,7 +85,7 @@ Rate this answer's quality from 1 to 10.
 ```
 
 Force the judge to **quote evidence** — it grounds the verdict and makes
-judge errors auditable. Use structured output for the verdict (rules/02).
+judge errors auditable. Use structured output for the verdict ([rules/02](02-prompt-context-engineering.md)).
 
 ## 3. LLM-as-judge: validate the judge or don't trust it
 
@@ -103,8 +103,11 @@ Before judge scores gate anything:
 
 Known judge biases — design around them:
 
-- **Position bias** (pairwise): judges favor the first answer. Run both
-  orderings; a result that flips with order is a tie.
+- **Position bias** (pairwise): judges favor one slot, and which one depends
+  on the judge model — two judges in one study leaned in opposite directions
+  (Bias in the Loop, arXiv 2604.16790, section 4.1). Run both orderings; a result
+  that flips with order is a tie. Report the consistency rate (two runs, same
+  verdict) beside accuracy — it measures repeatability, not correctness.
 - **Verbosity/style bias**: longer, confident, well-formatted answers score
   higher regardless of correctness. Add explicit rubric language ("length
   and formatting are irrelevant") and assert it during validation.
@@ -123,12 +126,26 @@ invalidates every historical score (High finding).
 
 **Offline (pre-merge/pre-deploy):** golden sets + assertions + judges, run on
 demand and in CI. Deterministic harness: pinned model versions, fixed
-seeds/params where supported, retries for transient errors but never silent
+seeds/params where supported, pinned reasoning effort or thinking budget and
+tool availability (both change rankings), retries for transient errors but never silent
 re-grading until pass. Sampling parameters are not a determinism switch:
 `temperature = 0` never guaranteed identical outputs, and some newer models
 reject any non-default `temperature`/`top_p`/`top_k` with a `400` (Anthropic,
 from Opus 4.7 on — verified 2026-09-26 in its migration guide) — repeat runs
-instead (§8).
+instead (§8). Record the date each case set was authored beside every number from it.
+A lift on time-sensitive cases shrinks as the set falls behind the model's training cutoff,
+with nothing in the library changing: this library's own freshness lift read **+0.53** on a
+set authored July 2026 and **+0.30** on the same set re-run once it had aged
+(`evals/results/RESULTS.md`).
+
+**Offline must send the model what production sends.** Build each eval input by calling the
+application's own rendering code — template, role prefixes, provider text extraction,
+normalisation, truncation — never a re-implementation or the bare payload. An eval of the bare
+payload measures a different function and can pass on exactly the case production fails: this
+is train/serve skew ([`sota-ml-engineering` rules/02](../../sota-ml-engineering/rules/02-data-and-features.md) §2) for prompts. Example: a
+judge blocked a prompt injection offline and released it in production; only the gateway's
+exact framing (`user: ` prefix, normalisation) reproduced the release, 3/3. One specimen, so
+the size of the effect is unmeasured; the principle is not.
 
 **Online (production):** sampled judging of live traffic, user signals
 (thumbs, edits, regenerations, abandonment, task completion), canary
@@ -165,12 +182,13 @@ Gate rules that work in practice:
 - **Gate cost and latency too** — a prompt change that doubles tokens "passes"
   quality and fails the budget.
 - **Run the suite against model-deprecation candidates** ahead of forced
-  migrations, and against any model you intend to switch to (rules/05).
+  migrations, and against any model you intend to switch to ([rules/05](05-production-engineering.md)).
 - Keep a `fast` suite (assertions only, minutes) for every PR and a `full`
   suite (judges, larger set) for merge-to-main/nightly if judge cost bites.
 
 Eval results are artifacts: persist run ID, git SHA, model versions, scores
-per case. "We can't reproduce last month's score" means you don't have evals,
+per case, and — where a harness executes anything — the container image digest,
+grader logs and full agent trajectories. "We can't reproduce last month's score" means you don't have evals,
 you have anecdotes.
 
 **A replay harness is not an eval.** Recorded-trace or cassette replay —
@@ -181,10 +199,10 @@ system's behavior. Wired into the gate as if it were the suite above, it yields
 a CI job that stays green through a prompt rewrite, a model swap, or a
 retrieval change, because none of those are on the replayed path — and the
 greenness is indistinguishable from the real thing. Declare per suite what is
-**live** and what is **replayed**, and apply the falsification question
-(`sota/SKILL.md` BUILD step 4): if your quality gate would still pass with the
-model endpoint unreachable, it is measuring the harness (`sota-code-security`
-rules/10).
+**live** and what is **replayed**, and apply the falsification question:
+if your quality gate would still pass with the
+model endpoint unreachable, it is measuring the harness ([`sota-code-security`
+rules/10](../../sota-code-security/rules/10-silent-control-failure.md)).
 
 ## 6. Error analysis discipline
 
@@ -200,8 +218,8 @@ commonly skipped.
   cluster first; one targeted fix to the top cluster beats five speculative
   prompt tweaks.
 - **Attribute the failure to a pipeline stage** before touching the prompt:
-  for RAG, was the right chunk even retrieved (rules/03)? For agents, which
-  tool call diverged (rules/04)? Most "prompt problems" are upstream
+  for RAG, was the right chunk even retrieved ([rules/03](03-rag-retrieval.md))? For agents, which
+  tool call diverged ([rules/04](04-agents-tools.md))? Most "prompt problems" are upstream
   data/retrieval problems.
 - **Each fixed failure becomes a permanent eval case** tagged with its
   taxonomy label and `source: incident`. The eval set is the institutional
@@ -219,15 +237,25 @@ Production is the only honest distribution. Build the loop:
 - **De-duplicate and decay**: cap near-duplicate cases, retire cases that no
   longer reflect the product. Date-stamp every case.
 - Respect privacy: redact PII before a trace enters the eval repo
-  (rules/06, sota-privacy-compliance).
+  ([rules/06](06-data-lifecycle.md), [sota-privacy-compliance](../../sota-privacy-compliance/SKILL.md)).
 
 ## 8. Metric pitfalls
 
+- **An absent or unparsed verdict is its own outcome — never a class label.** A
+  scorer that initialises the prediction to the negative class and swallows
+  exceptions scores every failed call as a negative prediction — a correct rejection
+  on negative cases, a miss on positive ones. Worked example (reproduced 2026-10-02,
+  reported upstream as google/mantis#8): with the model call raising on every case,
+  that toolkit's reviewer eval reported `precision: 1.0` and `noise_admitted: 0`
+  beside `recall: 0.0` — so the failure was visible in one metric and scored as
+  perfect in two. Initialise to `None`, count `no_verdict` and `errors` beside the
+  metrics, and treat precision as undefined when nothing was predicted positive
+  ([`sota-code-security` rules/13](../../sota-code-security/rules/13-context-dependent-silence.md) §4a).
 - **Prove the instrument can *see* the change before you run it.** An eval whose
   treated arm never reads the thing you modified returns `+0.00` — and that null is
   **structural, not a result**, while looking exactly like a real one. Before spending,
   name the file the treatment lives in and show the runner reads it (`grep` the path in
-  the runner; diff the two arms' prompts). Field-reported 2026-09-03: a router change was
+  the runner; diff the two arms' prompts). Example: a router change was
   nearly measured with a runner that builds its catalogue from each skill's *frontmatter
   description* and never loads the router body — its `+0.00` would have been indistinguishable
   from the real `+0.000` the correct runner later produced. The runner's own docstring said
@@ -352,6 +380,11 @@ published claim rested on that 0.00 for several hours.
 
 ## Audit checklist
 
+- [ ] **No-verdict rows** (§8): does the scorer initialise predictions to "none" rather
+      than a class, count failed and unparsed calls as their own outcome, and report that
+      count beside every metric? Kill the model call in one run: it must report
+      `no_verdict == N`, precision as undefined (not 1.0), and the run as invalid. "Some
+      metrics dropped" is not the test — the condemned scorer passes it.
 - [ ] **Can the rubric distinguish "correctly declined" from "omitted"?** (§8a) A
       completeness rubric scores both at zero — measured here, a guided arm scored **0.00**
       for asking a security-relevant clarifying question its own guidance prescribed. If the
@@ -364,39 +397,55 @@ published claim rested on that 0.00 for several hours.
       (the runner's source names the path) — a null from an arm blind to the treatment is
       structural, not a result (§8).
 
-- [ ] Every shipped LLM feature has an eval suite in the repo, runnable by one
+- [ ] Every shipped LLM feature has an eval suite in the repo (§1), runnable by one
       documented command. (Absent → High; absent on consequential output with
       no human gate → Critical.)
-- [ ] Golden set ≥20 cases, includes hard/edge/refusal cases, provenance
+- [ ] Golden set ≥20 cases (§1), includes hard/edge/refusal cases, provenance
       tagged, not majority-synthetic after months in production.
-- [ ] Each case set states **how its cases were chosen**, and that rule cites
+- [ ] Each case set states **how its cases were chosen** (§8), and that rule cites
       properties of the case rather than any model's score on it. (A set whose
       cases were kept because a model failed them reports its own selection —
       treat a missing or outcome-referencing rule as High.)
-- [ ] **Regression cases are separated from measurement cases** — different file or an
+- [ ] **Regression cases are separated from measurement cases** (§8) — different file or an
       explicit tag — and no reported lift averages the two. A regression case may be
       added because something failed; a measurement case may not.
 - [ ] Cheapest-grader rule followed: assertions where assertable; judges only
       for genuinely graded qualities; rubrics decomposed into binary checks
-      with quoted evidence.
+      with quoted evidence and a structured-output verdict; generated code/SQL
+      executed against fixtures and compared on results, not strings (§2).
 - [ ] Any LLM-as-judge validated against ≥50 human labels with measured
       agreement; re-validated on judge model/prompt change; judge model
-      pinned and traced.
+      pinned and traced; judge prompt versioned in the repo; a judge from a
+      different model family where the eval compares providers (§3).
 - [ ] Pairwise comparisons run in both orders; verbosity/position bias
-      addressed.
-- [ ] Evals run automatically in CI on prompt/model/pipeline changes and
-      block merge; baselines stored; zero-regression rule on incident/safety
-      tags; cost/latency gated alongside quality.
+      addressed; the judge's consistency rate is reported beside accuracy (§3).
+- [ ] Evals run automatically in CI on prompt/template/retrieval-config/model/pipeline
+      changes and block merge; baselines stored; zero-regression rule on incident/safety
+      tags; cost/latency gated alongside quality; the suite is run against
+      model-deprecation candidates and any model being switched to (§5).
 - [ ] Eval runs persisted as artifacts (run ID, SHA, model versions,
-      per-case results) and reproducible.
-- [ ] Each suite declares what is **live** vs **replayed**, and the quality
+      per-case results; image digest, grader logs and trajectories where the
+      harness executes anything) and reproducible, with reasoning effort and
+      tool availability pinned alongside the model, and each case set's authoring date
+      recorded (§4).
+- [ ] Each suite declares what is **live** vs **replayed** (§5), and the quality
       gate fails with the model endpoint unreachable — a replay-only gate
       measures the harness, not the model.
-- [ ] Online signal exists (sampled judging and/or user feedback) and is
+- [ ] Online signal exists (sampled judging and/or user feedback) (§4) and is
       distinct from — not a substitute for — offline gates.
-- [ ] Error-analysis loop visible in history: failure taxonomy, incident
-      cases promoted into the set.
-- [ ] Dev set ≠ gating set; no prompt tuning against the held-out set; no
+- [ ] Offline eval inputs are built by the application's own rendering code (template, role
+      prefixes, normalisation), not a re-implementation or the bare payload (§4).
+- [ ] Error-analysis loop visible in history: failed transcripts coded into a
+      failure taxonomy, each failure attributed to a pipeline stage, and every
+      fixed failure promoted as a permanent case tagged with its taxonomy label
+      and `source: incident` (§6).
+- [ ] **Production traffic sampled into the golden set (§7) — Medium** —
+      `grep -rqE 'source:[[:space:]]*(production|incident)' . || echo "no production-sourced eval cases"`
+      ; manual: a random + stratified daily sample feeds a review queue; traces behind
+      complaints, regenerations, escalations and incidents are auto-promoted; near-duplicates
+      capped and every case date-stamped. PII redaction before promotion: the PII item in
+      [rules/06](06-data-lifecycle.md).
+- [ ] Dev set ≠ gating set (§8); no prompt tuning against the held-out set; no
       model selection justified by public benchmarks alone.
 - [ ] Injection and content classifiers evaluated per language, including
       unsupported and low-resource languages and translated attacks, with a

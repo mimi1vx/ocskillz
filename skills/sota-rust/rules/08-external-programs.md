@@ -1,6 +1,6 @@
 # 08 — Running External Programs (`std::process::Command`)
 
-Split out of rules/05 (formerly section 9) on 2026-09-25, when rules/05 reached the 500-line
+Split out of [rules/05](05-security-supply-chain.md) (formerly section 9) on 2026-09-25, when [rules/05](05-security-supply-chain.md) reached the 500-line
 cap; the section is now §1.
 
 ## 1. Running external programs — `std::process::Command`
@@ -30,7 +30,7 @@ Command::new("/usr/bin/convert").arg("--").arg(&path).arg("out.png")
 **R9.2 — Argument injection survives argv.** A value beginning with `-` becomes a
 flag. Pin your own flags first, then `--`, then validated operands; prefer a
 library binding to a CLI wrapper for attacker-influenced parameters.
-`sota-sandboxing` rules/04 §5 lists the exec-capable argument gadgets
+[`sota-sandboxing` rules/04](../../sota-sandboxing/rules/04-process-app-sandboxing.md) §5 lists the exec-capable argument gadgets
 (`find -exec`, `tar --checkpoint-action`, `ssh -o ProxyCommand`, …) to check for.
 
 **R9.3 — Windows `.bat`/`.cmd` is a documented exception (CVE-2024-24576, CVE-2024-43402).**
@@ -117,29 +117,45 @@ libloading 0.9.0 and measured on rustc 1.97.1:
   allowlist of names, or a parser you own for a fixed grammar (no loops, no host calls).
 - **An in-process interpreter is not a security boundary**: an engine bug, or a host
   function you registered, reaches the whole process. Hostile code goes to a separate
-  process or Wasm sandbox (`sota-sandboxing` rules/01, rank 7 is treated as no boundary).
+  process or Wasm sandbox ([`sota-sandboxing` rules/01](../../sota-sandboxing/rules/01-isolation-boundaries.md), rank 7 is treated as no boundary).
 OWASP: Code Review Guide; Proactive Controls 2024 C3; ASVS 5.0 V1.3.
 
 For the isolation the child itself needs — seccomp/Landlock, fd-only interfaces,
-memory budgets — see `sota-sandboxing` rules/04 §5 and rules/02 R7.2a.
+memory budgets — see [`sota-sandboxing` rules/04](../../sota-sandboxing/rules/04-process-app-sandboxing.md) §5 and [rules/02](../../sota-sandboxing/rules/02-linux-os-hardening.md) R7.2a.
+
+**R9.9 — `Ok` is not success.** `status()` and `output()` return `Ok` when the child ran and
+then failed: the docs say they do "not return an error if the child runs and then exits
+unsuccessfully, or is terminated by a signal … the outcome is reflected in the returned
+`ExitStatus`". So `cmd.output()?` propagates only a *spawn* failure. Check
+`.status.success()` (a signal is not success) before trusting stdout, and turn a failure
+into an error that carries the code and stderr.
 
 ## Audit checklist
 
-- [ ] Subprocess: `rg 'Command::new\("(sh|bash|cmd|powershell)"' -t rust` and
+- [ ] Subprocess (§1): `rg 'Command::new\("(sh|bash|cmd|powershell)"' -t rust` and
       `rg '\.arg\("-c"\)' -t rust` — a shell with any interpolated value = Critical.
       `rg 'Command::new\(' -t rust` for non-absolute program names on
-      attacker-reachable paths = Medium (R9.1, R9.7).
+      attacker-reachable paths = Medium (R9.1, R9.7). Argument injection (R9.2):
+      `grep -rlE 'Command::new\(' --include='*.rs' . | while IFS= read -r f; do grep -q '"--"' "$f" || echo "$f"; done`
+      lists files that spawn programs and never pass `--`; an input-derived operand there that
+      can begin with `-` = Medium.
+- [ ] Exit status read, not just the `Result` (§1 R9.9) — Medium, High when the output is
+      trusted: `rg -l '\.(output|status)\(\)' -t rust | while IFS= read -r f; do grep -q 'success()' "$f" || echo "$f"; done`
+      (each file printed treats `Ok` as success; read it — a helper may check elsewhere).
 - [ ] Every spawned `Child` is killed **and** waited on every exit path, including
       `?` early-returns and cancellation — `rg 'spawn\(\)' -t rust` and read the
       error paths; a dropped `Child` keeps running and then becomes a zombie
-      (R9.4). Deployed code targeting Windows declares MSRV **≥ 1.81.0** (R9.3;
+      (§1 R9.4). Deployed code targeting Windows declares MSRV **≥ 1.81.0** (R9.3;
       1.77.2 fixed CVE-2024-24576 but not its bypass CVE-2024-43402).
 - [ ] Every subprocess wait has a deadline **and** a kill: a bare
       `wait()`/`wait_with_output()` = High on any attacker-influenced child, and a
       `tokio::time::timeout` without `.kill_on_drop(true)` (or an explicit kill)
-      leaves the child running when it fires (R9.5).
-- [ ] **Dynamic code evaluation from input (R9.8) — Critical if the text is
+      leaves the child running when it fires (§1 R9.5).
+- [ ] **Dynamic code evaluation from input (§1 R9.8) — Critical if the text is
       caller-influenced, else Medium** —
       `rg -n -t rust 'Lua::(new|new_with|unsafe_new)\(|rhai::|Engine::new(_raw)?\(|\.eval(_with_scope|_expression)?(::<[^>]*>)?\(|Library::new\(' .`
       — each hit: where the text or path comes from, which stdlib/limits are set, and why
       a dispatch table would not do. An in-process engine counts as no sandbox.
+- [ ] Child output bounded (§1 R9.6): `rg 'output\(\)|wait_with_output' -t rust` where the
+      child's output size is not bounded by the caller = Medium. `pre_exec` (§1 R9.7):
+      `rg 'pre_exec' -t rust` — the closure must be async-signal-safe.

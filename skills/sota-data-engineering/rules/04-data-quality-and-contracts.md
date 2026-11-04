@@ -4,7 +4,7 @@ Bad data that flows is worse than no data: dashboards stay green, decisions
 get made, and trust — the only real product of a data platform — erodes.
 Quality is enforced at boundaries and tiered by consequence.
 
-## Data contracts at the producer boundary
+## 1. Data contracts at the producer boundary
 
 A contract is **schema + semantics + SLOs**, owned by the producer, enforced
 mechanically. Schema alone is half a contract.
@@ -42,7 +42,7 @@ models:
         data_type: bigint
 ```
 
-## Expectation testing — the core battery
+## 2. Expectation testing — the core battery
 
 Every core/mart model carries checks from this battery; critical ones carry
 all that apply.
@@ -105,7 +105,7 @@ models:
               arguments: {to: ref('dim_customer'), field: customer_id}
 ```
 
-## Severity tiers: block vs warn
+## 3. Severity tiers: block vs warn
 
 Two failure modes to avoid: everything blocks (one flaky check halts the
 platform nightly, team starts ignoring red) and nothing blocks (corrupt data
@@ -123,7 +123,7 @@ flows downstream while a Slack channel nobody reads fills up).
 - Implement tiers natively: dbt test `severity: error|warn`, Great
   Expectations / Soda / pandera equivalents all support it.
 
-## Anomaly detection caution
+## 4. Anomaly detection caution
 
 ML-based anomaly detection on data metrics (auto-thresholds on volume,
 freshness, distributions) is a **supplement, not a substitute** for explicit
@@ -137,19 +137,19 @@ checks.
   detection for the unknown-unknowns on a *small* set of business-critical
   tables.
 
-## Lineage
+## 5. Lineage
 
 - Table-level lineage is table stakes — it falls out of dbt/orchestrator
   graphs. Use it for impact analysis ("what breaks if I change this?") and
   incident blast-radius.
 - **Column-level lineage pays where:** PII propagation must be traced
-  (which marts contain `email`? — see `sota-privacy-compliance`),
+  (which marts contain `email`? — see [`sota-privacy-compliance`](../../sota-privacy-compliance/SKILL.md)),
   regulated-metric provenance, and deprecating wide legacy tables. Don't
   buy/maintain column-level everywhere for its own sake.
 - Lineage that requires manual upkeep will rot; derive it from code
   (parsed SQL, orchestrator metadata) or don't claim it.
 
-## Data incident response
+## 6. Data incident response
 
 When bad data ships, the order is: **stop the spread → communicate →
 quarantine → fix → reprocess → verify → postmortem.**
@@ -161,8 +161,8 @@ quarantine → fix → reprocess → verify → postmortem.**
    debugging. Consumers acting on known-bad data is the real damage.
 3. **Quarantine:** snapshot/copy bad partitions for forensics; with
    Iceberg/Delta, note the pre-incident snapshot ID — time travel is your
-   forensic record (until retention expires it; act fast, see rules/05).
-4. **Fix and reprocess** through the normal backfill path (rules/02) —
+   forensic record (until retention expires it; act fast, see [rules/05](05-storage-and-performance.md)).
+4. **Fix and reprocess** through the normal backfill path ([rules/02](02-pipelines-and-orchestration.md)) —
    never hand-`UPDATE` a mart; if raw is intact, re-derive. This is where
    idempotency pays its rent.
 5. **Verify** with the same checks that should have caught it — and add the
@@ -173,7 +173,7 @@ quarantine → fix → reprocess → verify → postmortem.**
   known-bad to consumers = MEDIUM; becomes HIGH for platforms feeding
   financial or operational decisions.
 
-## Testing pipelines (CI)
+## 7. Testing pipelines (CI)
 
 Quality checks validate *data in production*; tests validate *logic before
 merge*. You need both — a check can't catch a bug that produces plausible
@@ -205,31 +205,40 @@ unit_tests:
 - **CI on sample data:** build changed models + downstream against
   representative samples; full-volume runs are for staging, not per-PR.
 - Pure functions are testable functions: keep transforms free of hidden
-  `NOW()`/env reads (rules/02's logical-time rule makes this automatic).
+  `NOW()`/env reads ([rules/02](02-pipelines-and-orchestration.md)'s logical-time rule makes this automatic).
 - **AUDIT:** A transform repo with zero tests where a one-character SQL
   change can silently flip a company metric = HIGH.
 
 ## Audit checklist
 
 - [ ] Producer-boundary contracts exist (schema + semantics + SLOs) and are
-      CI-enforced, not wiki-only?
+      CI-enforced, not wiki-only, placed where ownership changes hands
+      (source→platform, mart→consumer)? Consumers breaking on producer deploys
+      despite a contract = HIGH (§1)
 - [ ] Every core/mart model: freshness, volume, unique-key, not-null-key
-      checks at minimum?
+      checks at minimum; on critical models also null-rate jumps, accepted
+      values/ranges and distribution drift (§2)?
 - [ ] Checks explicitly tiered; block-tier actually stops downstream
-      (not just alerts)?
-- [ ] Zero-row and duplicate-key conditions block on critical marts?
-- [ ] Warn alerts owned and triaged — no weeks-old ignored failures?
-- [ ] Referential integrity checked between facts and dimensions?
+      (not just alerts) (§3)?
+- [ ] Zero-row, duplicate-key, null-key and broken referential integrity
+      conditions block on critical marts (§3)?
+- [ ] Warn alerts owned and triaged — no warn-tier check failing 3+ weeks
+      untriaged (MEDIUM) (§3)?
+- [ ] Referential integrity checked between facts and dimensions (§2)?
 - [ ] HIGH: data sets moved between systems reconciled on control totals
       (count + key-measure sums + order-independent key hash), block-tier —
-      not on row count alone? Probe (lists reconciliation files with no
+      not on row count alone (§2)? Probe (lists reconciliation files with no
       sum/hash):
       `grep -rliE 'reconcil|row_?count' --null --include='*.sql' --include='*.py' --include='*.yml' . | xargs -0 -r grep -LiE 'sum\(|hash|checksum|md5|sha'`
-- [ ] Anomaly detection (if any) supplements explicit checks and isn't an
-      alert-fatigue source?
+- [ ] Anomaly detection (if any) supplements explicit checks, never blocks,
+      stays on a small set of business-critical tables, and has an
+      alerts-per-week budget per owner (§4)?
 - [ ] Lineage derivable from code; column-level where PII/regulatory needs
-      it?
-- [ ] Incident path documented: pause downstream, notify, quarantine,
-      reprocess via backfill, verify?
-- [ ] Transform logic unit-tested with fixtures; CI builds changed models
-      pre-merge?
+      it (§5)?
+- [ ] Incident path documented: pause downstream, notify and mark data
+      known-bad to consumers, quarantine, reprocess via backfill (never
+      hand-`UPDATE` a mart), verify, postmortem adding the missing check? None =
+      MEDIUM, HIGH when feeding financial or operational decisions (§6)
+- [ ] Transform logic unit-tested with fixtures (nulls, duplicates, late
+      rows, timezone boundaries, empty input); CI builds changed models plus
+      downstream on sample data pre-merge; zero tests = HIGH (§7)?

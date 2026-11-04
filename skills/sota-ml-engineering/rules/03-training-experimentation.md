@@ -23,13 +23,13 @@ defend.
   report metric variance across seeds rather than a single lucky number.
 - A training run should be a parameterized, version-controlled **pipeline**, not
   a hand-run notebook. Notebooks are fine for exploration; production training is
-  code (`rules/01`).
+  code ([`rules/01`](01-ml-systems-architecture.md)).
 
 ## 3. Configuration management
 
 - Treat experiment config as code: versioned, reviewed, validated (typed config
   — Hydra/pydantic-style). Avoid magic numbers scattered across scripts
-  (configuration debt, `rules/01`).
+  (configuration debt, [`rules/01`](01-ml-systems-architecture.md)).
 - Separate config from code so a run is fully described by (code commit +
   config + data version).
 
@@ -37,7 +37,7 @@ defend.
 
 - Use a principled search (grid for small spaces, random/Bayesian/Optuna-style
   for larger) with a fixed validation protocol; never tune on the test set
-  (`rules/02`). Budget it — log all trials to the tracker.
+  ([`rules/02`](02-data-and-features.md)). Budget it — log all trials to the tracker.
 - Guard against overfitting the validation set through many trials: keep a final
   held-out test untouched until the end; consider nested CV for small data.
 
@@ -53,7 +53,7 @@ defend.
 ## 6. Start simple, iterate inside the pipeline
 
 - First model: simplest thing that beats the baseline, wired through the full
-  pipeline with metrics and monitoring (`rules/01`, `rules/04`). Add complexity
+  pipeline with metrics and monitoring ([`rules/01`](01-ml-systems-architecture.md), [`rules/04`](04-evaluation-validation.md)). Add complexity
   only when the eval (on slices, vs baseline) justifies it. Most gains come from
   better features and data, not fancier models (Rules of ML).
 
@@ -62,18 +62,26 @@ defend.
 - [ ] **Experiment tracking present? — MEDIUM if absent** —
       `out=$(grep -rniE 'mlflow|wandb|neptune|comet|sacred|tensorboard' . 2>&1); rc=$?` ;
       `case $rc in 0) printf '%s\n' "$out" | head ;; 1) echo "no experiment tracking" ;; *) echo "SWEEP FAILED, not a finding about their code: $out" ;; esac`
-- [ ] **Seeds / determinism — MEDIUM (reproducibility)** —
+      ; manual (§1): does each run record commit, data version, feature set, hyperparameters,
+      environment and metrics, with compared runs on the same eval data?
+- [ ] **Seeds / determinism (§2) — MEDIUM (reproducibility); is metric variance across seeds reported, not one run?** —
       `out=$(grep -rniE 'seed|random_state|set_seed|manual_seed|deterministic' --include='*.py' . 2>&1); rc=$?` ;
       `case $rc in 0) printf '%s\n' "$out" | head ;; 1) echo "no seeds set — runs not reproducible" ;; *) echo "SWEEP FAILED, not a finding about their code: $out" ;; esac`
-- [ ] **Config as code — MEDIUM** —
-      `grep -rniE 'hydra|omegaconf|pydantic|argparse|yaml.safe_load|config' --include='*.py' . | head`
+- [ ] **Config as code (§3) — MEDIUM** —
+      `grep -rqiE 'hydra|omegaconf|pydantic|argparse|yaml.safe_load|config' --include='*.py' . || echo "no config-as-code"`
       ;
       `grep -rnE '= ?(0\.[0-9]+|[0-9]{2,})' --include='*.py' . | grep -iE 'lr|rate|epoch|batch|threshold' | head`
       (magic numbers)
-- [ ] **Hyperparameter search hygiene — MEDIUM** —
+- [ ] **Hyperparameter search hygiene (§4) — MEDIUM** —
       `grep -rniE 'GridSearch|RandomizedSearch|optuna|ray.tune|hyperopt' --include='*.py' . | head`
-      (verify search uses validation set, not test)
-- [ ] **Notebook-only training — LOW/MEDIUM (debt)** — `find . -name '*.ipynb' | head` (is
+      — a locator: it lists every hyperparameter-search site; each hit is read, not a finding
+      (verify search uses validation set, not test, and every trial is logged to the tracker)
+- [ ] **Notebook-only training (§2) — LOW/MEDIUM (debt)** — `find . -name '*.ipynb' | head` (is
       production training a notebook?)
-- [ ] **Checkpointing for long/distributed runs — MEDIUM** —
-      `grep -rniE 'checkpoint|save_model|state_dict|ModelCheckpoint' --include='*.py' . | head`
+- [ ] **Checkpointing for long/distributed runs (§5) — MEDIUM** —
+      `grep -rqiE 'checkpoint|save_model|state_dict|ModelCheckpoint' --include='*.py' . || echo "no checkpointing in training code"`
+      ; manual: does a failed run resume from its last checkpoint, is the effective batch size / LR
+      scaling verified, and are GPU-hours tracked?
+- [ ] **Simplest model first (§6) — LOW (manual)** — did a simple model that beats the baseline run
+      end-to-end through the full pipeline, with metrics and monitoring, before complexity was
+      added, and is each added complexity justified by sliced eval against the baseline?

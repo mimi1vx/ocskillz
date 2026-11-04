@@ -44,7 +44,7 @@ def handler(user: User | None) -> str:
 ## 2a. In-band sentinels: `-1` is not `None`
 
 The failure §2 exists to prevent has a second spelling that the type checker cannot
-see. The class is language-neutral and stated once in `sota-architecture` rules/02
+see. The class is language-neutral and stated once in [`sota-architecture` rules/02](../../sota-architecture/rules/02-domain-modeling-and-boundaries.md)
 §8a; this section is the Python instance and the worked example.
 
 Python's own stdlib offers both spellings, which is the cleanest illustration there
@@ -106,29 +106,13 @@ absence — and then it is **per field**, documented with that field's domain, n
 constant applied across a heterogeneous set (see database-engine guidance, *Modeling
 hygiene*, for the persistence half).
 
-### Detecting it — three probes, decreasing precision
+### Detecting it
 
-1. **Producer (near-zero false positives, AST-checkable).** One function returning the
-   *same constant* from a not-found branch and from an `except` branch. That shape is
-   almost never intentional, and it is the declaration — fix it once and every caller
-   is fixed.
-2. **Asymmetric guard (the one that catches the live bug).** A comparison where one
-   operand is filtered against the sentinel and the other is not. Greppable in review
-   and visible in a diff; see the example above.
-3. **Truthiness-as-presence.** `if x:` / `if x and ...` guarding an `int` whose domain
-   includes the sentinel or `0`. High recall, high false-positive rate — use it to
-   build a list to read, not a gate.
-
-**A value-based lint ("flag any `-1` in this field") is only sound where the field's
-domain is stated non-negative, and you cannot assume that per-field from the converter
-— the converter is uniform, the domains are not.** A field where the producer emits
-`-1` legitimately (an index meaning "not an argument", an enum's *unset* member, a
-`ORDER` that is genuinely signed) makes such a lint 100% false positive, and the code
-*cannot recover* which meaning a stored `-1` had. So: key the rule on the
-**declaration**, and add a value lint only on the subset that carries an explicit
-non-negative domain declaration — which usually does not exist yet, and writing it
-down is part of the fix. Measure the per-field distribution before you lint: a field
-where the sentinel is 99% of rows and one where it is 0% are different problems.
+The three probes (producer, asymmetric guard, truthiness-as-presence) and when a value lint
+is sound are in [`sota-architecture` rules/02](../../sota-architecture/rules/02-domain-modeling-and-boundaries.md) §8a. In Python the producer probe is
+AST-checkable: one function returning the same constant from a not-found branch and from an
+`except` branch. Truthiness-as-presence is `if x:` or `if x and ...` on an `int` whose domain
+includes the sentinel or `0`.
 
 ## 3. No `Any` leaks
 
@@ -185,7 +169,7 @@ Rules of thumb:
   validation semantics (coercion!) surprise you. `model_construct()` everywhere is a smell that
   you wanted a dataclass.
 - Default to `frozen=True, slots=True` dataclasses; mutability and dynamic attributes are
-  opt-in exceptions, not defaults (details in rules/03).
+  opt-in exceptions, not defaults (details in [rules/03](03-idioms-pitfalls.md)).
 
 ## 6. Runtime validation at boundaries — pydantic v2
 
@@ -208,7 +192,7 @@ users = TypeAdapter(list[CreateUser]).validate_python(payload)
 - Know coercion: lax mode turns `"3"` into `3`. For protocol-strict boundaries use
   `strict=True` per-field or model-wide.
 - Don't catch `ValidationError` and return a vague 500 — surface field paths (FastAPI does
-  this for you; see rules/07).
+  this for you; see [rules/07](07-frameworks-testing.md)).
 
 ## 7. Exhaustiveness with `assert_never`
 
@@ -311,38 +295,56 @@ Keep overload sets small (2–4); a 10-overload function wants a redesign. Typed
 
 ## Audit checklist
 
-- [ ] **Any leakage [MEDIUM where it crosses module boundaries]** —
+- [ ] **Any leakage (§3) [MEDIUM where it crosses module boundaries]** —
       `grep -rn "-> Any\|: Any" --include="*.py" src/ | grep -v "test_" | head -50` ;
       `grep -rn "dict\[str, Any\]" --include="*.py" src/ | wc -l` (boundary-only is OK;
       everywhere is not); `grep -rn "Callable\[\.\.\., " --include="*.py" src/`
-      (signature-erasing decorators?)
-- [ ] **Bare/unscoped ignores [LOW each, MEDIUM in aggregate]** —
-      `grep -rn "type: ignore$" --include="*.py" .` ; `grep -rn "# noqa$" --include="*.py" .`
-- [ ] **Legacy typing forms — ruff UP should be clean** —
+      (signature-erasing decorators: `ParamSpec`, §8) ;
+      `grep -rnE '(^|[^A-Za-z_])TypeVar\(' --include='*.py' --exclude-dir=.venv .`
+      (hand-written TypeVars: PEP 695 syntax, used at least twice, `_co` on read-only containers) ;
+      `find . -path ./.venv -prune -o -name '*.py' -exec awk '/^class [A-Za-z_]/{c=$2; sub(/[(:].*/,"",c)} c!="" && /^[[:space:]]+def [A-Za-z_][A-Za-z0-9_]*\((self|cls)/ && ($0 ~ ("-> \"?" c "\"?:")) {print FILENAME":"FNR": "$0}' {} +`
+      (a method returning its own class by name: `Self`) ; un-parameterized `dict`/`list`/`Callable` in signatures
+      surface from the configured strict checker (under mypy, as `[type-arg]` errors of `mypy --strict`; measured, mypy 2.4.0)
+- [ ] **Unannotated APIs and legacy typing forms (§1) — ruff UP and ANN should be clean** —
       `uvx ruff check --select UP,ANN --statistics .` ;
-      `grep -rn "typing.Optional\|typing.List\|typing.Dict\|Optional\[" --include="*.py" src/ | head`
+      `grep -rn "typing.Optional\|typing.List\|typing.Dict\|Optional\[" --include="*.py" src/ | head` ;
+      `grep -rnE 'def [A-Za-z_][A-Za-z0-9_]*\([^)]*:[[:space:]]*list\[' --include='*.py' --exclude-dir=.venv .`
+      (a parameter that demands `list` where `Sequence`/`Iterable` would do [LOW, read each])
 - [ ] **In-band sentinels standing in for None (§2a) [HIGH where the value is compared]** —
       `grep -rnE "return -1|return 0[^.0-9]|= *-1 *(#|$)" --include="*.py" src/` (producer: same
       constant from two branches?);
-      `grep -rnB2 -- "-> int:" --include="*.py" src/ | grep -c "except"` (int-returning fn with
+      `grep -rn -A6 -- '-> int:' --include='*.py' src/ | grep 'except'` (int-returning fn with
       an except arm); `grep -rnE "if [a-z_]+ (and|>) 0.*<|> 0.*if" --include="*.py" src/`
       (asymmetric guard: one operand filtered);
       `grep -rnE "^\s*if [a-z_]*(num|idx|index|count|offset|line|col)[a-z_]*:" --include="*.py" src/`
       (truthiness-as-presence)
-- [ ] **Unhandled Optionals / implicit None returns — run the project's configured checker; for a new project using local defaults: `uv run ty check src/`** —
+- [ ] **Unhandled Optionals / implicit None returns — run the project's configured checker; for a new project using local defaults: `uv run ty check src/` (§2)** —
       `grep -rn "or \[\]\|or {}\|or ''" --include="*.py" src/` (falsy-default smell [LOW,
       verify])
-- [ ] **Exhaustiveness** —
-      `grep -rn "match " --include="*.py" src/ -A1 | grep -B1 "case _" | head` (then check
-      assert_never use);
+- [ ] **Exhaustiveness (§7)** —
+      `grep -rn -A1 -E '^[[:space:]]*case _[[:space:]]*:' --include='*.py' src/ | grep -E '^[^:]+-[0-9]+-' | grep -vE 'assert_never|raise'`
+      (the body of a `case _:` that neither raises nor calls `assert_never`: a wildcard that
+      silently absorbs a new member);
       `grep -rln "assert_never" --include="*.py" src/ || echo "no exhaustiveness guards"`
-- [ ] **Validation layering** — `grep -rn "model_validate\|TypeAdapter" --include="*.py" src/`
-      (should cluster at edges); `grep -rn "model_construct" --include="*.py" src/` (smell:
+- [ ] **Validation layering (§5)** — `grep -rn "model_validate\|TypeAdapter" --include="*.py" src/`
+      (lists every validation call; each hit is read — they should cluster at edges — not a
+      finding); `grep -rn "model_construct" --include="*.py" src/` (smell:
       wanted a dataclass [LOW]); `grep -rn 'extra.*allow\|extra="ignore"' --include="*.py" src/`
-      (permissive input models [LOW-MEDIUM])
-- [ ] **Protocol/ABC hygiene** —
+      (permissive input models [LOW-MEDIUM], §6) ;
+      `grep -rnE 'except[[:space:]]+\(?[A-Za-z_.]*ValidationError' --include='*.py' --exclude-dir=.venv .`
+      (lists every `ValidationError` handler; each hit is read, not a finding: field paths
+      surfaced, not a vague 500 [LOW])
+- [ ] **Protocol/ABC hygiene (§4)** —
       `grep -rn "class.*ABC).*:" --include="*.py" src/ -A3 | grep -c abstractmethod` (1-method
       ABCs → Protocol?); `grep -rn "isinstance.*Protocol" --include="*.py" src/`
       (runtime_checkable misuse)
-- [ ] **cast() density [investigate each]** —
-      `grep -rn "cast(" --include="*.py" src/ | grep -v test`
+- [ ] **Future import, missing `@override` (§10) [LOW]** —
+      `grep -rln 'from __future__ import annotations' --include='*.py' --exclude-dir=.venv .`
+      (on a 3.14+ floor new code must not add it; below 3.14, a hit in a FastAPI/pydantic module needs
+      a read) ; where mypy gates, run it with `--enable-error-code explicit-override` (each
+      `[explicit-override]` is an overriding method without `@override`; measured, mypy 2.4.0) ;
+      `Literal` for closed sets and `NewType` for ids are a read of the signatures
+- [ ] **cast() density, narrowing tools (§3, §9) [investigate each]** —
+      `grep -rn "cast(" --include="*.py" src/ | grep -v test` (a guard written once beats a `cast`
+      after every check) ; `grep -rn 'TypeGuard\[' --include='*.py' --exclude-dir=.venv .` (prefer `TypeIs` [LOW]) ;
+      `grep -rnE '\*\*kwargs:[[:space:]]*(Any|object)' --include='*.py' --exclude-dir=.venv .` (typed `**kwargs` take `Unpack[TypedDict]` [LOW])

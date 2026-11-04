@@ -16,18 +16,20 @@ description: >-
   Spark, DuckDB, data contract, medallion, dimensional model.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@a02c19971ad39254846890f87300a46b19e3e82e
+  source: martinholovsky/SOTA-skills@4c4837e3f891b4194623e467fec6294df4ff8d0a
   adapted-for: opencode
 ---
 
 # SOTA Data Engineering
 
+## Purpose
+
 Expert rules for analytical data systems: pipelines, streaming, warehousing,
-lakehouse storage, data quality, and operations. OLTP schema craft lives with the
-database engine — reference it, do not duplicate it. Outbox and event-driven
-service patterns live in `sota-architecture`; backpressure mechanics in
-`sota-async-concurrency`. PII handling lives in
-`sota-privacy-compliance` and security controls in `sota-code-security`.
+lakehouse storage, data quality, and operations. OLTP schema/query/index craft
+lives with the database engine — reference it, do not duplicate it. Outbox and
+event-driven service patterns live in `sota-architecture`; backpressure mechanics
+in `sota-async-concurrency`. PII handling lives in `sota-privacy-compliance` and
+security controls in `sota-code-security`.
 
 Read repository instructions and preserve its established data stack unless a
 migration is requested. `sota-observability` owns generic telemetry; this skill
@@ -40,27 +42,29 @@ Two modes. Pick by intent, then load only the `rules/` files the task needs.
 Use when designing or implementing pipelines, models, streaming jobs, or
 storage layouts.
 
-1. **Size the problem first.** Read `rules/01-architecture-and-modeling.md`
+1. **Size the problem first.** Read [`rules/01-architecture-and-modeling.md`](rules/01-architecture-and-modeling.md)
    before choosing tools. Most "big data" is small data; DuckDB/Polars on one
    node before a distributed engine. ELT into a warehouse/lakehouse is the
    default shape, not a decision to revisit per pipeline.
 2. **Idempotency is the prime directive.** Every pipeline you write must be
    safe to rerun for any interval at any time. No blind appends. Design the
    write strategy (partition overwrite / merge key / insert-overwrite) before
-   the transform logic (`rules/02-pipelines-and-orchestration.md`).
+   the transform logic ([`rules/02-pipelines-and-orchestration.md`](rules/02-pipelines-and-orchestration.md)).
 3. **Batch unless a consumer needs sub-minute data.** Justify streaming in
-   writing before building it (`rules/03-streaming-and-cdc.md`).
+   writing before building it ([`rules/03-streaming-and-cdc.md`](rules/03-streaming-and-cdc.md)).
 4. **Quality checks ship with the pipeline, not after.** Every new model gets
    freshness, volume, uniqueness, and not-null checks tiered block/warn
-   (`rules/04-data-quality-and-contracts.md`).
+   ([`rules/04-data-quality-and-contracts.md`](rules/04-data-quality-and-contracts.md)).
 5. **Decide the physical layout when you create the table.** Partitioning,
    clustering/sort, file sizing, and the maintenance job are part of the
-   table's definition (`rules/05-storage-and-performance.md`).
+   table's definition ([`rules/05-storage-and-performance.md`](rules/05-storage-and-performance.md)).
 6. **Ship with operability.** Dev/prod isolation, write-audit-publish for
    risky changes, freshness alerting, a runbook entry
-   (`rules/06-operations-and-governance.md`).
+   ([`rules/06-operations-and-governance.md`](rules/06-operations-and-governance.md)).
 
 ## AUDIT mode
+
+**Coverage:** every `rules/` file's Audit checklist applies in AUDIT mode. Mark one *not applicable* only with its reason in the report — never skip a file because the thing it checks for is absent, since that absence may be the finding.
 
 Use when reviewing an existing pipeline repo, dbt project, streaming topology,
 or warehouse.
@@ -100,12 +104,12 @@ Fix: <concrete change, smallest safe diff>
 
 | File | Read this when... |
 |---|---|
-| `rules/01-architecture-and-modeling.md` | Choosing engines/architecture (warehouse vs lakehouse vs DuckDB), designing layers (staging/core/mart), dimensional modeling, SCDs, One Big Table, semantic layers, evaluating a data-mesh pitch. |
-| `rules/02-pipelines-and-orchestration.md` | Writing or reviewing any batch pipeline: idempotency, incremental loads, watermarks, late data, backfills, Airflow/orchestrator DAG design, dbt project discipline, scheduling strategy. |
-| `rules/03-streaming-and-cdc.md` | Anything Kafka/Flink/CDC: deciding streaming vs micro-batch, partition keys, consumer groups, offsets, exactly-once claims, schema registry, Debezium, tombstones, DLQs, windowing. |
-| `rules/04-data-quality-and-contracts.md` | Defining data contracts, adding expectation tests, tiering checks block vs warn, drift/anomaly detection, lineage, responding to a data incident, testing transforms in CI. |
-| `rules/05-storage-and-performance.md` | Creating tables, Parquet tuning, partitioning vs clustering, small-files/compaction, Iceberg/Delta features and maintenance, compression, reducing scan cost / warehouse spend. |
-| `rules/06-operations-and-governance.md` | Environments and deployment of pipeline changes, write-audit-publish, blue-green tables, access control, GDPR deletion in lakehouses, pipeline observability, runbooks. |
+| [`rules/01-architecture-and-modeling.md`](rules/01-architecture-and-modeling.md) | Choosing engines/architecture (warehouse vs lakehouse vs DuckDB), designing layers (staging/core/mart), dimensional modeling, SCDs, One Big Table, semantic layers, evaluating a data-mesh pitch. |
+| [`rules/02-pipelines-and-orchestration.md`](rules/02-pipelines-and-orchestration.md) | Writing or reviewing any batch pipeline: idempotency, incremental loads, watermarks, late data, backfills, Airflow/orchestrator DAG design, dbt project discipline, scheduling strategy. |
+| [`rules/03-streaming-and-cdc.md`](rules/03-streaming-and-cdc.md) | Anything Kafka/Flink/CDC: deciding streaming vs micro-batch, partition keys, consumer groups, offsets, exactly-once claims, schema registry, Debezium, tombstones, DLQs, windowing. |
+| [`rules/04-data-quality-and-contracts.md`](rules/04-data-quality-and-contracts.md) | Defining data contracts, adding expectation tests, tiering checks block vs warn, drift/anomaly detection, lineage, responding to a data incident, testing transforms in CI. |
+| [`rules/05-storage-and-performance.md`](rules/05-storage-and-performance.md) | Creating tables, Parquet tuning, partitioning vs clustering, small-files/compaction, Iceberg/Delta features and maintenance, compression, reducing scan cost / warehouse spend. |
+| [`rules/06-operations-and-governance.md`](rules/06-operations-and-governance.md) | Environments and deployment of pipeline changes, write-audit-publish, blue-green tables, access control, GDPR deletion in lakehouses, pipeline observability, runbooks. |
 
 ## Top 10 non-negotiables
 

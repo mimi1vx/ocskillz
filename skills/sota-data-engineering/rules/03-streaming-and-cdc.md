@@ -4,7 +4,7 @@ Streaming is the most expensive way to move data. It buys latency and pays
 in operational complexity, harder testing, and harder reprocessing. Make it
 earn its place.
 
-## When streaming is justified
+## 1. When streaming is justified
 
 - **Require a named consumer with a sub-minute (or low-minutes) latency
   need:** fraud/abuse decisions, operational dashboards driving immediate
@@ -21,7 +21,7 @@ earn its place.
   latency requirement for a streaming component = ask; absence of any
   consumer needing it = finding.
 
-## Kafka-style log fundamentals
+## 2. Kafka-style log fundamentals
 
 (Kafka 4.0 removed ZooKeeper — KRaft-only; the KIP-848 consumer
 rebalance protocol is GA since 4.0 and consumers opt in via
@@ -54,7 +54,7 @@ rebalance protocol is GA since 4.0 and consumers opt in via
   than retention and recover. Lag monitoring with alerts on every production
   group is mandatory; lag approaching retention = imminent data loss.
 
-## Exactly-once reality
+## 3. Exactly-once reality
 
 "Exactly-once" end-to-end is achieved as **effectively-once: at-least-once
 delivery + idempotent application of effects.** Audit the sink, not the
@@ -93,7 +93,7 @@ for batch in consumer.batches():
   table feeds metrics. "We have exactly-once because idempotent producer is
   on" = misunderstanding; check the sink.
 
-## Schema registry & evolution
+## 4. Schema registry & evolution
 
 - **Every production topic has a registered schema** (Avro/Protobuf/JSON
   Schema). Schemaless JSON topics shared across teams = HIGH; every consumer
@@ -106,8 +106,11 @@ for batch in consumer.batches():
   contract-versioned subject) + migration window, not an in-place break.
 - Defaults on new fields; never reuse field IDs/positions (Protobuf/Avro).
 
-## CDC patterns
+## 5. CDC patterns
 
+- **Log-based CDC holds a replication slot on the source**, and an abandoned or lagging slot makes
+  the source retain WAL until its disk fills: alert on slot lag, set `max_slot_wal_keep_size` (its
+  default, `-1`, is unlimited), and drop slots no connector owns.
 - **Log-based CDC (Debezium-class) is the default** for
   replicating OLTP into the analytical platform: reads the WAL/binlog,
   emits ordered change events, near-zero source impact. Query-based
@@ -139,13 +142,13 @@ WHEN MATCHED THEN UPDATE SET ...
 WHEN NOT MATCHED AND s.op != 'd' THEN INSERT ...;
 ```
 - **Outbox pattern** for application-emitted events (avoiding dual-write
-  inconsistency) is owned by `sota-architecture` — use it; don't tail
+  inconsistency) is owned by [`sota-architecture`](../../sota-architecture/SKILL.md) — use it; don't tail
   business tables to fake events.
 - Schema changes on source tables flow through CDC: test ADD COLUMN and
   type-widening paths; alert on incompatible DDL rather than silently
   dropping fields.
 
-## Watermarks, windowing, late data
+## 6. Watermarks, windowing, late data
 
 - **Event time, not processing time,** for any business aggregation.
   Processing-time windows shift numbers whenever the pipeline lags.
@@ -160,7 +163,7 @@ WHEN NOT MATCHED AND s.op != 'd' THEN INSERT ...;
   metrics, session for activity grouping. State for long/huge windows needs
   TTLs — unbounded keyed state is a slow OOM.
 
-## DLQ & poison messages
+## 7. DLQ & poison messages
 
 - **Every streaming consumer has a poison-message policy.** Default: retry
   N times (with backoff), then route the message + error metadata +
@@ -171,33 +174,52 @@ WHEN NOT MATCHED AND s.op != 'd' THEN INSERT ...;
   the source topic after fix. An unmonitored DLQ is a data black hole —
   MEDIUM.
 - Never DLQ-and-forget messages whose absence corrupts aggregates; for
-  those, halt and page instead (block-tier, by analogy with rules/04).
+  those, halt and page instead (block-tier, by analogy with [rules/04](04-data-quality-and-contracts.md)).
 
-## Backpressure
+## 8. Backpressure
 
 Consumers must degrade by slowing intake (pause/resume, bounded buffers),
 not by buffering unboundedly in memory. Mechanics and patterns are owned by
-`sota-async-concurrency`; in Kafka terms: bound in-flight work, watch lag as
+[`sota-async-concurrency`](../../sota-async-concurrency/SKILL.md); in Kafka terms: bound in-flight work, watch lag as
 the system-level backpressure signal, scale consumers before lag approaches
 retention.
 
 ## Audit checklist
 
 - [ ] Each streaming component has a named consumer/latency requirement, or
-      is justified as transport?
-- [ ] Partition keys match the entity whose ordering matters; skew checked?
+      is justified as transport? A streaming job whose only consumer is an
+      hourly dashboard = MEDIUM (§1)
+- [ ] Partition keys match the entity whose ordering matters (random keys
+      where consumers assume per-entity order = CRITICAL); skew checked on
+      partition-level lag; partition count sized with headroom and any increase
+      planned (it reshuffles key→partition); share groups only on true queue
+      workloads (§2)?
 - [ ] Offsets committed only after effects are durable; auto-commit
-      semantics understood?
+      semantics understood; per-poll work bounded under `max.poll.interval.ms`
+      with a cooperative/KIP-848 rebalance protocol (§2)?
 - [ ] Sinks idempotent (merge key / transactional offsets) — exactly-once
-      claims verified at the sink?
+      claims verified at the sink? Warehouse appends with separately committed
+      offsets = CRITICAL if the table feeds metrics (§3)
 - [ ] Consumer lag monitored with alerts on all prod groups; retention >
-      max tolerable downtime?
-- [ ] Schemas registered with enforced compatibility mode; breaking changes
-      via new topic/version?
+      max tolerable downtime (§2)?
+- [ ] Schemas registered with enforced compatibility mode (never `NONE` in
+      prod; schemaless JSON topics shared across teams = HIGH); breaking changes
+      via new topic/version; new fields carry defaults; no reused Protobuf/Avro
+      field IDs or positions (§4)?
 - [ ] CDC: log-based for sources with deletes; deletes/tombstones applied
-      downstream; ordering by LSN not wall-clock; re-snapshot path exists?
-- [ ] Aggregations on event time with explicit watermark/lateness policy;
-      late-drop counted and alerted?
-- [ ] DLQ per consumer, monitored, with replay procedure; no crash-looping
-      on poison messages?
-- [ ] Keyed state has TTLs; consumer memory bounded under lag?
+      downstream (dropped deletes = CRITICAL); ordering by LSN not wall-clock;
+      re-snapshot path exists; incompatible source DDL alerts rather than
+      silently dropping fields; no business tables tailed to fake events (§5)?
+- [ ] CDC replication slots ("CDC patterns" above) — on the source, `SELECT slot_name, active, wal_status,
+      pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) FROM pg_replication_slots;`
+      — an inactive slot no connector owns, or `max_slot_wal_keep_size = -1` with no slot-lag
+      alert = HIGH (the source disk fills) (§5)
+- [ ] Aggregations on event time with explicit watermark/lateness policy,
+      allowed lateness set from measured event-delay p99/p999; late-drop
+      counted and alerted (silent drop = HIGH) (§6)?
+- [ ] DLQ per consumer, monitored (alert on arrival rate), with replay
+      procedure; no crash-looping on poison messages (HIGH); messages whose
+      absence corrupts aggregates halt and page instead of being DLQ'd (§7)?
+- [ ] Keyed state has TTLs (§6); consumer memory bounded under lag:
+      in-flight work bounded (pause/resume, bounded buffers), consumers scaled
+      before lag approaches retention (§8)?

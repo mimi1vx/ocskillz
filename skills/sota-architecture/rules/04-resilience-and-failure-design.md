@@ -29,10 +29,27 @@ BAD: A and B each configured 5000ms while the edge gives up at 1000ms.
 
 ## 2. Retries: bounded, jittered, idempotent-only
 
-**Rule:** Retry only idempotent operations (rules/03 §2), only on retryable
-errors (timeouts, 503, connection reset — never 400/401/422), with **bounded
-attempts** (2–3), **exponential backoff + full jitter**, and a **retry budget**
-(e.g., retries ≤ 10% of requests) so retries can't melt a struggling dependency.
+**Rule:** Retry only idempotent operations ([rules/03](03-distributed-systems-and-events.md) §2), only on retryable
+errors, with **bounded attempts** (at most 3 in total — 2 retries — by default),
+**exponential backoff + full jitter**, and a **retry budget** (e.g., retries ≤ 10%
+of requests) so retries can't melt a struggling dependency. This section is the
+library's one retry policy; other skills point here and add only what their
+platform changes.
+
+**Rule:** Classify before retrying. Retryable: connection errors and timeouts,
+`408`, `429`, `502`, `503`, `504`. On `429` and `503` honour `Retry-After` when
+present (RFC 6585 Section 4, RFC 9110 Section 15.6.4): wait at least that long, whatever the
+computed backoff says. A `429` with no `Retry-After` may be a quota rather than a
+burst — one provider documents exactly that for its spend cap, which "keeps
+failing until access resumes" — so it gets the budget, never an open loop. Every
+other `4xx` is final (`400`, `401`, `403`, `404`, `422`: the request fails the
+same way again), and `500` is retryable only where the API documents it as
+transient. Providers document their own lists and their SDKs differ from this
+default ([`sota-llm-engineering` rules/05](../../sota-llm-engineering/rules/05-production-engineering.md) §2) — follow the provider's
+documented list for its API. Webhook *delivery* is a different policy, not an
+exception to this one: a sender retries a receiver's `4xx` (except `410`) over
+days, because the receiver's state changes while the event waits
+([`sota-api-design` rules/06](../../sota-api-design/rules/06-webhooks.md) §4).
 
 ```text
 delay = random(0, min(cap, base * 2^attempt))   # full jitter
@@ -82,7 +99,7 @@ GOOD: checkout pool: 60, reports pool: 10, admin: 5 — reports saturate alone.
 
 **Rule:** Apply bulkheads at infra level too: critical and batch workloads on
 separate node pools / autoscaling groups; noisy-neighbor isolation for
-multi-tenant systems (rules/05 §7).
+multi-tenant systems ([rules/05](05-scalability-state-and-data.md) §7).
 
 **Rule:** Write down each backing service's connection ceiling and what happens at it.
 For every database, cache, broker and upstream API, the service's docs state the most
@@ -192,7 +209,7 @@ and rollback are in place. Verify SLOs hold and fallbacks fire. Untested
 fallbacks fail when needed; this is the most reliable finding in chaos history.
 
 **Rule:** Start with game days (hypothesis → inject → observe → fix), automate
-the validated experiments into a recurring suite (fitness functions, rules/01
+the validated experiments into a recurring suite (fitness functions, [rules/01](01-architecture-styles-and-decisions.md)
 §5). Every incident's failure mode becomes a permanent chaos experiment.
 
 **Rule:** Define SLOs (availability, latency) per critical user journey with
@@ -219,7 +236,7 @@ single-flight).
 
 **Rule:** Rate-limit at every trust boundary: per-client at the public edge
 (token bucket, keyed by API key/user, with `429 + Retry-After` and documented
-limits), per-tenant inside pooled systems (rules/05 §7), and *outbound* toward
+limits), per-tenant inside pooled systems ([rules/05](05-scalability-state-and-data.md) §7), and *outbound* toward
 third parties whose limits you must respect — a client-side limiter beats
 discovering their limit via a ban.
 
@@ -280,24 +297,24 @@ Don't back into it via "we just added a second region for latency".
 
 ## Audit checklist
 
-- [ ] Does every remote call (HTTP, DB, cache, queue) have an explicit timeout? Grep for client construction sites and verify.
-- [ ] Are timeouts derived from measured callee latency, and do nested timeouts fit within the edge deadline?
-- [ ] Are retries bounded, jittered, restricted to idempotent operations and retryable errors, and owned by exactly one layer per edge?
-- [ ] Is there a retry budget or equivalent guard against retry storms?
-- [ ] Are circuit breakers per-dependency, with alerting on state change and a defined fallback per open circuit?
-- [ ] Are connection/thread pools bulkheaded per dependency and per workload class, or is there one shared pool?
+- [ ] Does every remote call (HTTP, DB, cache, queue) have an explicit timeout? Grep for client construction sites and verify. (§1)
+- [ ] Are timeouts derived from measured callee latency, and do nested timeouts fit within the edge deadline? (§1)
+- [ ] Are retries bounded, jittered, restricted to idempotent operations and retryable errors, and owned by exactly one layer per edge? Is the user's synchronous critical path retried at most once? (§2)
+- [ ] Is there a retry budget or equivalent guard against retry storms? (§2)
+- [ ] Are circuit breakers per-dependency, with alerting on state change and a defined fallback per open circuit? (§3)
+- [ ] Are connection/thread pools bulkheaded per dependency and per workload class (§4), or is there one shared pool?
 - [ ] Where a workload-wide failure is unaffordable: is the system split into cells behind a router with no business logic, is each cell capped at a tested size, and do deploys roll out cell by cell with automatic halt? A single shared stack serving every tenant, or a router that calls business services, is a finding (§4).
-- [ ] Is each dependency of each critical flow classified required/optional, with degradation behavior implemented and tested?
-- [ ] Do security- and money-touching paths fail closed?
-- [ ] **Fail-closed checkers are watched and time-bounded (§5), High:** each external control dependency (screening, policy engine, deny list) has an error-rate alert, a circuit-break of the protected action for long outages, a maximum reference-data age that is enforced, and a version/as-of field in every decision record. Probe: find the decision records with `grep -rnE -i '(screen|sanction|policy|fraud)[a-z_]*(result|decision|record|receipt)' .` and check that each one stores a list version or as-of time. A record with neither cannot show the data was fresh.
-- [ ] **Connection ceilings are documented per backing service (§4), Medium:** list the pool settings with `grep -rnE -i '(maximumPoolSize|SetMaxOpenConns|max_?pool_?size|pool_?size|max_?connections)' .` and, for each, find the doc that states pool × max replicas against the server limit and the at-limit behaviour. A pool with no such doc is a finding. It is High if pool × max replicas is already above the server's limit.
+- [ ] Is each dependency of each critical flow classified required/optional (§5), with degradation behavior implemented and tested?
+- [ ] Do security- and money-touching paths fail closed (§5)?
+- [ ] **Fail-closed checkers are watched and time-bounded (§5), High:** each external control dependency (screening, policy engine, deny list) has an error-rate alert, a circuit-break of the protected action for long outages, a maximum reference-data age that is enforced, and a version/as-of field in every decision record. Probe: find the decision records that name neither a version nor an as-of time on the same line with `grep -rnE -i '(screening|sanction|policy|fraud)[a-z_]*(result|decision|record|receipt)[[:space:]]*[=(]' . | grep -viE 'version|as_?of'` (a record built across several lines still needs reading). A record with neither cannot show the data was fresh.
+- [ ] **Connection ceilings are documented per backing service (§4), Medium:** list the pool settings with `grep -rnE -i '(maximumPoolSize|SetMaxOpenConns|max_?pool_?size|pool_?size|max_?connections)' .` (it lists every pool setting; each hit is read, not a finding) and, for each, find the doc that states pool × max replicas against the server limit and the at-limit behaviour. A pool with no such doc is a finding. It is High if pool × max replicas is already above the server's limit.
 - [ ] **Limited drops use randomised, identity-bound admission (§6), Medium:** a waiting room admits at random and its tokens are bound to session and identity. Probe for FIFO ticketing: `grep -rnE -i '(queue|waiting|wait)[_-]?(position|pos|ticket|number)([^=]*=[^=]*(incr|nextval|[+][+])|[[:space:]]*([+]=[[:space:]]*1|[+][+]))' .` Any hit on a scarce-inventory flow is a finding.
-- [ ] Is there admission control / load shedding with priority ordering, bounded queues, and deadline-aware dropping?
-- [ ] Do liveness probes avoid dependency checks? Does readiness avoid mass-unready on shared-dependency failure?
-- [ ] Are SLOs defined per user journey, and are chaos experiments (latency, errors, instance/AZ kill) run on a schedule with results tracked?
-- [ ] Can every service roll back in minutes, shut down gracefully, and start while its dependencies are down?
-- [ ] Are cache TTLs/crons jittered, and is stampede protection (single-flight) in place for hot keys?
-- [ ] Is rate limiting present at the public edge (per client), per tenant internally, and outbound toward third-party limits?
-- [ ] Is hedging, if used, restricted to idempotent reads with a load cap?
-- [ ] Does each critical flow have a failure-mode table (slow/down/garbage per dependency) with designed responses, and are dependencies tiered T0/T1/T2?
-- [ ] Are RTO/RPO defined per datastore, backups restore-tested on a schedule, and the cross-region posture an explicit ADR?
+- [ ] Is there admission control / load shedding (§6) with priority ordering, bounded queues, and deadline-aware dropping?
+- [ ] Do liveness probes avoid dependency checks? Does readiness avoid mass-unready on shared-dependency failure? Are health endpoints cheap (<10 ms, no fan-out), unauthenticated only on internal interfaces, and exempt from load shedding? (§7)
+- [ ] Are SLOs defined per user journey, and are chaos experiments (latency, errors, instance/AZ kill) run on a schedule with results tracked? Has each incident's failure mode become a permanent chaos experiment? (§8)
+- [ ] Can every service roll back in minutes, shut down gracefully, and start while its dependencies are down? Are schema changes expand/contract so a code rollback never needs a schema rollback, and are startup migrations idempotent and lock-guarded? (§9)
+- [ ] Are cache TTLs/crons jittered, and is stampede protection (single-flight) in place for hot keys? (§9)
+- [ ] Is rate limiting present at the public edge (per client), per tenant internally, and outbound toward third-party limits? Do internal hops use adaptive concurrency limits rather than fixed RPS, and is the burst policy (token vs leaky bucket) written down per edge? (§10)
+- [ ] Is hedging, if used, restricted to idempotent reads with a load cap? (§11)
+- [ ] Does each critical flow have a failure-mode table (slow/down/garbage per dependency) with designed responses, and are dependencies tiered T0/T1/T2? Does every T0 dependency have at least timeout + breaker + tested fallback-or-fail-closed + page? (§12)
+- [ ] Are RTO/RPO defined per datastore, backups restore-tested on a schedule, and the cross-region posture an explicit ADR? Is any active-active multi-region setup backed by its own Type 1 ADR covering conflict resolution, residency and ID generation? (§13)

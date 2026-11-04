@@ -4,7 +4,7 @@ Decisions in this file are made once per platform, not once per pipeline.
 When auditing, mismatches between the platform's stated architecture and what
 the code actually does are findings in themselves.
 
-## Size the problem honestly
+## 1. Size the problem honestly
 
 - **Default to single-node engines below ~100 GB working set.** DuckDB or
   Polars on one machine outperforms a Spark cluster on
@@ -33,7 +33,7 @@ duckdb.sql("""
 """)
 ```
 
-## ELT over ETL — and the exceptions
+## 2. ELT over ETL — and the exceptions
 
 - **Default: extract-load raw, transform in the warehouse/lakehouse (ELT).**
   Raw data lands unmodified; transformations are versioned SQL run where the
@@ -44,17 +44,17 @@ duckdb.sql("""
   transform and rerun.
 - **Transform before load (ETL) only when justified:** PII must be
   masked/tokenized before it touches the analytical store (see
-  `sota-privacy-compliance`); the source format is pathological (mainframe
+  [`sota-privacy-compliance`](../../sota-privacy-compliance/SKILL.md)); the source format is pathological (mainframe
   copybooks, multi-GB XML) and pre-parsing is cheaper than in-warehouse
   parsing; volume reduction at the edge materially cuts transfer/storage cost.
 - **Never transform-in-flight as an excuse to skip raw retention.** If the
   transform is wrong, untransformed data is gone.
 
-## Warehouse vs lakehouse
+## 3. Warehouse vs lakehouse
 
 Decide by ownership and access patterns, not fashion. Both converge: every
-major warehouse reads/writes Iceberg (v3 is GA on Snowflake/Databricks and
-Spark 4.0; verify your engine — Trino v3 support still lagged as of writing),
+major warehouse reads/writes Iceberg (format v3 support is uneven across engines — the
+dated status is in [rules/05](05-storage-and-performance.md) §3; verify your engine),
 and lakehouse engines speak SQL.
 
 - **Choose a managed warehouse (Snowflake/BigQuery/Redshift-class) when:**
@@ -76,7 +76,7 @@ and lakehouse engines speak SQL.
   transform stacks = HIGH (divergence is inevitable). Two table formats with
   no stated rationale = MEDIUM.
 
-## Layered modeling (medallion / staging-core-mart)
+## 4. Layered modeling (medallion / staging-core-mart)
 
 Names differ (bronze/silver/gold ≈ raw/staging/core/mart); the contract is
 what matters:
@@ -112,7 +112,7 @@ FROM raw.orders
 QUALIFY row_number() OVER (PARTITION BY order_id ORDER BY _loaded_at DESC) = 1
 ```
 
-## Dimensional modeling still matters
+## 5. Dimensional modeling still matters
 
 Star schemas remain the right core-layer shape for business processes:
 cheap-to-scan fact tables plus reusable conformed dimensions. Columnar
@@ -146,7 +146,7 @@ engines did not obsolete them — they made the joins cheap.
   Type 1 dimension = HIGH (numbers are silently wrong for any historical
   period).
 
-## One Big Table pragmatism
+## 6. One Big Table pragmatism
 
 Wide denormalized tables (OBT) are legitimate **mart-layer** artifacts:
 build the star in core, then flatten into OBT where a BI tool or consumer
@@ -157,7 +157,7 @@ benefits. Columnar storage makes width nearly free to store and scan-prune.
 - Never maintain the same metric logic in two OBTs. Derive both from one
   core model.
 
-## Semantic layers
+## 7. Semantic layers
 
 - Define each business metric **once** — in a semantic layer (dbt MetricFlow,
   Cube, LookML-class) if you have multiple BI/consumer surfaces, or simply in
@@ -170,7 +170,7 @@ benefits. Columnar storage makes width nearly free to store and scan-prune.
   definitions. Divergent definitions of one metric = HIGH (trust erosion is
   the most expensive data failure).
 
-## Data mesh caution
+## 8. Data mesh caution
 
 Data mesh is an **org pattern** (domain ownership, data-as-a-product,
 federated governance), not a technology purchase. Apply it only when multiple
@@ -179,7 +179,7 @@ domain teams *already* have engineers who can own pipelines end-to-end.
 - A central 4-person data team "adopting mesh" is a red flag: it produces
   fragmentation without ownership.
 - The durable, steal-able ideas regardless of mesh: producer-owned data
-  contracts (rules/04), domain-aligned mart ownership, self-serve platform
+  contracts ([rules/04](04-data-quality-and-contracts.md)), domain-aligned mart ownership, self-serve platform
   tooling.
 - **AUDIT:** "Mesh" with no contracts, no per-domain owners on call for their
   data products, and one shared platform team doing all the work = the label
@@ -188,20 +188,38 @@ domain teams *already* have engineers who can own pipelines end-to-end.
 ## Audit checklist
 
 - [ ] Engine size vs data size: any distributed cluster processing < 50
-      GB/day without rationale?
-- [ ] Raw layer exists, is append-only/immutable, and is not queried by
-      consumers or BI tools?
+      GB/day without rationale? MEDIUM; quantify rows/bytes per run vs cluster
+      size (§1)
+- [ ] Raw layer exists, is append-only/immutable (partitioned by load time;
+      never "fixed" in place: fix the transform and rerun), and is not queried
+      by consumers or BI tools (§2, §4)? Any transform-before-load (ETL) is
+      justified by PII masking, a pathological source format or edge volume
+      reduction, and never skips raw retention (§2)?
 - [ ] Staging models: 1:1 with sources, columns enumerated (no `SELECT *`),
-      typed, deduped, no joins/business logic?
-- [ ] Layer discipline: no consumer reads below mart/core; no
-      layer-skipping or circular references?
-- [ ] Each fact table has a documented, single grain?
+      typed, deduped, no joins/business logic? Business logic in staging =
+      MEDIUM (§4)
+- [ ] Layer discipline: no consumer reads below mart/core; no layer reads
+      from a layer above itself; no model reads raw except its own staging
+      model; no layer-skipping or circular references? Dashboards on raw/bronze
+      = HIGH; layer-skipping/circular refs = MEDIUM (§4)
+- [ ] Each fact table has a documented, single grain? Mixed-grain facts =
+      MEDIUM (§5)
 - [ ] Dimensions conformed (one copy) and SCD strategy explicit per
-      dimension; point-in-time analyses backed by Type 2 or snapshots?
-- [ ] Surrogate keys stable under full rebuild?
-- [ ] Key metrics defined exactly once; no divergent copies in
-      dashboards/marts?
+      dimension; point-in-time analyses backed by Type 2 or snapshots (a Type 1
+      join for point-in-time = HIGH)? Hand-written SCD2 MERGEs checked for
+      delete and rerun handling (§5)?
+- [ ] Surrogate keys stable under full rebuild (deterministic hashes of the
+      natural key, not sequence-generated) (§5)?
+- [ ] Key metrics defined exactly once (one semantic layer, or one mart
+      model when there is a single consumer surface); no divergent copies in
+      dashboards/notebooks/marts, nor the same metric logic in two OBTs?
+      Grep dashboards/notebooks for re-implemented revenue/active-user
+      definitions; divergent definitions = HIGH (§7). Any One Big Table is a
+      mart flattened from a dimensional core, not the only model (MEDIUM) (§6)?
 - [ ] Single canonical table format; no unjustified duplicate storage of the
-      same dataset across lake and warehouse?
+      same dataset across lake and warehouse? Same dataset in both with two
+      transform stacks = HIGH; two table formats with no stated rationale =
+      MEDIUM (§3)
 - [ ] If "data mesh" is claimed: named domain owners, contracts, and
-      operational responsibility actually exist?
+      operational responsibility actually exist? If not, assess it as a
+      centralized platform (§8)
