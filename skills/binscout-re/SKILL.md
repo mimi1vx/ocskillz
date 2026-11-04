@@ -1,6 +1,6 @@
 ---
 name: binscout-re
-description: "Static reverse engineering of native binaries (ELF, PE, Mach-O including fat/universal, Go, raw firmware blobs) with binscout, a headless agent-first analyzer exposed as an MCP server and a CLI. Use when asked to reverse engineer, analyze, triage, or understand a compiled binary, executable, library, malware sample, crackme, or firmware image; to find where a string, import, crypto constant, or byte pattern is used; to recover what a function does; to rename functions or annotate addresses; to diff two builds or analyze a patch; or to export a patch. Trigger keywords: reverse engineering, RE, binary analysis, disassemble, disassembly, decompile, pseudo-C, CFG, xrefs, cross-references, call graph, imports, exports, strings, stack strings, crypto constants, YARA, FLIRT, patch diff, binary diff, crackme, malware triage, firmware, Go binary, x86_64, aarch64, ARM, Thumb, RISC-V, MIPS, PowerPC, binscout. Not for source-level debugging or dynamic analysis (running the sample)."
+description: "Static reverse engineering of native binaries (ELF, PE, COFF objects, LE, Mach-O including fat/universal, Go, raw firmware blobs) with binscout, a headless agent-first analyzer exposed as an MCP server and a CLI. Use when asked to reverse engineer, analyze, triage, or understand a compiled binary, executable, library, malware sample, crackme, or firmware image; to find where a string, import, crypto constant, or byte pattern is used; to recover what a function does; to rename functions or annotate addresses; to diff two builds or analyze a patch; or to export a patch. Trigger keywords: reverse engineering, RE, binary analysis, disassemble, disassembly, decompile, pseudo-C, CFG, xrefs, cross-references, call graph, imports, exports, strings, stack strings, crypto constants, YARA, FLIRT, patch diff, binary diff, crackme, malware triage, firmware, Go binary, x86_64, aarch64, ARM, Thumb, RISC-V, MIPS, PowerPC, binscout. Not for source-level debugging or dynamic analysis (running the sample)."
 ---
 
 # Reverse engineering with binscout
@@ -20,11 +20,15 @@ Every tool takes `binary` (path). The same operations exist as MCP tools
 | `rename`, `comment`, `annotation` (read) | `binscout annotate <binary> <addr> [--rename <name> \| --comment <text>]`; no flag reads |
 | `set_type_hint`, `get_type_hint` | `binscout type-hint` |
 
-Prefer the MCP; use the CLI for scripting or when the MCP is not connected.
-CLI argument shapes differ from the MCP: `disasm` takes `len` positionally,
-`bytes` takes `--len`, and `functions` takes `--range LO HI` (inclusive).
+Prefer the MCP; use the CLI for scripting or when the MCP is not connected
+(`cargo install binscout` installs both `binscout` and the stdio server
+`binscout-mcp`). CLI argument shapes differ from the MCP: `disasm` takes `len`
+positionally, `bytes` takes `--len`, `functions` takes `--range LO HI`
+(inclusive), and `strings` pages with `--start`. The CLI always prints one
+JSON value; runtime failures are `{"error": "…"}` with exit 1, and bad flags
+are a clap usage error on stderr with exit 2.
 Check `binscout --version` when behavior differs from this skill (verified
-against 0.9.0). On 0.8.x and older, list shapes differ; see Gotchas.
+against 0.9.1). On 0.8.x and older, list shapes differ; see Gotchas.
 
 ## Ground rules
 
@@ -46,7 +50,9 @@ against 0.9.0). On 0.8.x and older, list shapes differ; see Gotchas.
   tool returns the same envelope, `{items, total, next_offset, limit, offset,
   protocol}`, including `strings`, `functions`, `xrefs`, `stack_strings`, and
   `go_funcs`. `next_offset: null` means the last page. Never assume a first
-  page is complete. (The `envelope` argument is deprecated and ignored.)
+  page is complete. Pass `next_offset` back as `offset`, except on `strings`,
+  which takes `start` (`offset` there is a deprecated alias). (The `envelope`
+  argument is deprecated and ignored.)
 - **Repeat the mapping on every call.** `fat_arch` (fat Mach-O), `raw`
   (headerless blobs), and `pdb`/`debug_file` (debug info) are per-call
   arguments, not session state. Pass the same values on every call against
@@ -103,8 +109,9 @@ Work from anchors to code, not top-down from the entry:
 - **String → code:** `xrefs` with `to: <string vaddr_hex>` (add
   `kind: "string"` to drop the duplicate `Data` row; rows carry `from_func_name`
   and `to_string`), or `slice` with `addr: <string vaddr_hex>` for every
-  instruction that reaches it. `kind` is one of `code`, `data`, `string`,
-  `import`, `inferred-code`.
+  instruction that reaches it. The `kind` filter is lowercase (`code`,
+  `data`, `string`, `import`, `inferred-code`); rows report it capitalized
+  (`Code`, `Data`, `String`, …).
 - **Import → code:** `symbols` gives each import an `address_hex` (on Mach-O
   this is the stub). Then `callers` on it, or `xrefs` with `to` and
   `kind: "import"`.
@@ -135,7 +142,10 @@ Go cheapest to most detailed, and stop when the question is answered:
 4. `pseudo` — a quick lossy read. Resolved address computations carry a
    `// => 0x…` suffix naming the target (a string, global, or GOT slot).
 5. `blocks` then `block_insns` (or `disasm` with `addr`+`len`) — ground
-   truth for anything you will report.
+   truth for anything you will report. `disasm` (and `ir`) return the valid
+   prefix plus `error_at` for the first undecodable byte (`null` when clean);
+   an `error_at` at the very start means data, a wrong arch, or the wrong
+   ARM/Thumb mode.
 6. `cfg` — the full graph, only when you need all edges at once.
 7. `ir` — the lifted IR for a range; check `ir_coverage` for the arch first
    if the lift looks incomplete.
@@ -149,7 +159,8 @@ answer "how is this reached".
 ### 4. Record what you learn
 
 - `rename` a function (`addr` = entry, `name`; empty name clears) once its
-  purpose is clear. Later `functions`/`pseudo` output shows the new name,
+  purpose is clear. It only accepts a known function entry; seed one with
+  `define_func` first, or use `comment` for any other address. Later `functions`/`pseudo` output shows the new name,
   which compounds understanding.
 - `comment` any address (empty string clears) for evidence and open
   questions. `annotation` reads both back.
@@ -165,16 +176,25 @@ answer "how is this reached".
 - `annotations_export` emits a portable document (bound to the binary's
   sha256); `annotations_import` merges one. Import fails on conflicting fields
   unless `overwrite: true` — do not overwrite without the user's consent.
+  For a large document, prefer the CLI `annotations-import --input <file>`
+  over pasting it into an MCP call.
 
 Ask before writing to a project DB you did not create; it may be someone's
-work. The default DB sits next to the binary as `<binary>.rsdbg.redb`; pass an
-explicit `db` when that directory is read-only or must stay clean.
+work. The default DB sits next to the binary as `<binary>.rsdbg.redb`. Read
+tools never create it (`project_info` only reports `db_path`); `load` and the
+write tools do. Pass an explicit `db` when that directory is read-only or must
+stay clean. The sidecar caches analysis but also holds the only copy of the
+annotations: deleting it loses them, so `annotations_export` first. Keep
+`*.rsdbg.redb` out of version control.
 
 ### 5. Compare builds
 
 `diff` with `binary_a` (baseline) and `binary_b`: functions come back
-`matched` (byte-identical), `changed` (with `reason`, e.g. `ir-match`), `added`,
-or `removed`; `summary` has the counts. Each list pages on its own through
+`matched` (byte-identical), `changed`, `added`, or `removed`; `summary` has
+the counts. A `changed` row's `reason` ranks its strength: `ir-match` (same
+lifted IR) > `name-match` > `fuzzy` (with a Jaccard `similarity`) >
+`propagated` (paired only via matched call-graph neighbours). Confirm a
+`fuzzy` or `propagated` pair with `diff_func` before building on it. Each list pages on its own through
 `offset`/`limit`. Both projects open read-only, so pass `db_a`/`db_b` (not
 `db`). `fat_arch` and `raw` apply to both sides.
 
@@ -192,7 +212,8 @@ or `removed`; `summary` has the counts. Each list pages on its own through
 exactly one of `asm` or `bytes` (hex pairs). `asm` accepts a short list:
 x86 `nop`, `ret`, `int3`, `jmp ADDR`, `call ADDR`; aarch64 `nop`, `ret`,
 `brk #IMM`, `b ADDR`, `bl ADDR`. Anything else (`mov x0, #1`) fails with
-`invalid opcode`; assemble elsewhere and pass `bytes`. Shorter replacements
+`invalid opcode`; assemble elsewhere and pass `bytes`. On aarch64, `addr`
+must be 4-aligned and `bytes` a multiple of 4. Shorter replacements
 are NOP-padded to the instruction boundary; `size_ok: false` means it does
 not fit. `out` writes a `json` or `ips` patch file (`format`), which must
 differ from the binary; the binary is never written. Applying the patch is
@@ -266,6 +287,11 @@ selection lists the available slices.
   `envelope: true`. `slice` did not error on an unmapped root, `patch` was x86
   only, and `pdb`/`debug_file` were CLI only. If a response has no `items`
   key, check `binscout --version`.
+- **0.9.0 MCP drops oversized requests.** An `annotations_import` call with a
+  large `document` can exceed the server's stdio line cap and get no response
+  at all. Fixed in 0.9.1; on 0.9.0 use the CLI `--input` path.
+- **`offset` on a `strings` row is a file offset**, not a paging cursor. Page
+  with the envelope's `next_offset` passed as `start`.
 - **aarch64 `adrp` leaves page-base noise.** Each `adrp` adds a `Data` xref
   to the 4 KiB page base (often the image base, e.g. `0x100000000`, or a GOT
   page such as `0x100004000`). The real target is the `Data`/`String` xref on
