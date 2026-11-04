@@ -1,105 +1,87 @@
 ---
 name: changelog-generator
-description: Automatically creates user-facing changelogs from git commits by analyzing commit history, categorizing changes, and transforming technical commits into clear, customer-friendly release notes. Turns hours of manual changelog writing into minutes of automated generation.
+description: Creates user-facing changelogs and release notes from git history. Collects commits (and PR titles when available) for a range, groups them into categories, drops internal noise, and rewrites technical commits in plain user language, matching the project's existing CHANGELOG format. Use for "create a changelog", "release notes", "what changed since v1.2", "update CHANGELOG.md".
 license: MIT
 ---
 
 # Changelog Generator
 
-This skill transforms technical git commits into polished, user-friendly changelogs that your customers and users will actually understand and appreciate.
+Turn commit history into release notes that users understand. A changelog is
+change-relative and dated; for docs that describe the current state, use
+`readme-reviser` instead.
 
-## When to Use This Skill
+## 1. Establish the range
 
-- Preparing release notes for a new version
-- Creating weekly or monthly product update summaries
-- Documenting changes for customers
-- Writing changelog entries for app store submissions
-- Generating update notifications
-- Creating internal release documentation
-- Maintaining a public changelog/product updates page
+Use the range, tag, version, or dates the user gives. Otherwise default to
+"since the last release tag" and say so.
 
-## What This Skill Does
-
-1. **Scans Git History**: Analyzes commits from a specific time period or between versions
-2. **Categorizes Changes**: Groups commits into logical categories (features, improvements, bug fixes, breaking changes, security)
-3. **Translates Technical → User-Friendly**: Converts developer commits into customer language
-4. **Formats Professionally**: Creates clean, structured changelog entries
-5. **Filters Noise**: Excludes internal commits (refactoring, tests, etc.)
-6. **Follows Best Practices**: Applies changelog guidelines and your brand voice
-
-## How to Use
-
-### Basic Usage
-
-From your project repository:
-
-```
-Create a changelog from commits since last release
+```bash
+git describe --tags --abbrev=0                 # last tag
+git log --no-merges --format='%h %s%n%b%n---' <last-tag>..HEAD
+git log --merges --format='%h %s' <last-tag>..HEAD   # PR merge titles
 ```
 
-```
-Generate changelog for all commits from the past week
-```
+If the GitHub CLI is available and the repo uses PRs, PR titles and labels are
+often better source text than raw commits:
+`gh pr list --state merged --search "merged:>=<date>" --json number,title,labels`.
 
-```
-Create release notes for version 2.5.0
-```
+## 2. Match the existing format
 
-### With Specific Date Range
+If `CHANGELOG.md` exists, copy its structure exactly: heading style, version
+and date format, category names, link style, emoji or not. If a style guide
+exists (`CHANGELOG_STYLE.md`, `CONTRIBUTING.md`), follow it. With no existing
+file, use [Keep a Changelog](https://keepachangelog.com/) categories.
 
-```
-Create a changelog for all commits between March 1 and March 15
-```
+## 3. Categorize
 
-### With Custom Guidelines
+Map Conventional Commit types where present; read the diff when the subject is
+unclear.
 
-```
-Create a changelog for commits since v2.4.0, using my changelog 
-guidelines from CHANGELOG_STYLE.md
-```
+| Source | Category |
+|--------|----------|
+| `feat` | Added |
+| behavior change, `perf`, user-visible `refactor` | Changed |
+| `fix` | Fixed |
+| removed feature or flag | Removed |
+| `deprecate` notice | Deprecated |
+| CVE, security fix, dependency bump fixing a vuln | Security |
+| `!` after type, `BREAKING CHANGE:` footer | **Breaking** — list first, with a migration note |
+
+Drop internal noise unless it affects users: `test`, `ci`, `chore`, `style`,
+`docs` for contributor docs, pure refactors, lockfile churn, reverted pairs.
+
+## 4. Rewrite for users
+
+- Describe the effect, not the implementation: "Search includes file
+  contents" — not "add content index to SearchService".
+- One entry per user-visible change; merge commits that are one change.
+- Keep issue/PR references if the project's changelog uses them.
+- Never invent benefits, numbers ("2x faster"), or features. Every entry must
+  trace to at least one commit; if the impact is unclear, ask or flag it.
+
+## 5. Deliver
+
+Show the draft in chat first. Write to `CHANGELOG.md` (newest version on top,
+under any `Unreleased` section convention) only when the user asks. Close
+with the commit range used and a list of commits you dropped as internal, so
+the user can rescue any that matter.
 
 ## Example
 
-**User**: "Create a changelog for commits from the past 7 days"
-
-**Output**:
 ```markdown
-# Updates - Week of March 10, 2024
+## [2.5.0] - 2026-03-15
 
-## ✨ New Features
+### Breaking
+- The `--format` flag is replaced by `--output`. Rename it in scripts;
+  `--format` now exits with an error.
 
-- **Team Workspaces**: Create separate workspaces for different 
-  projects. Invite team members and keep everything organized.
+### Added
+- Team workspaces: group projects and invite members per workspace.
+- Press `?` to see all keyboard shortcuts.
 
-- **Keyboard Shortcuts**: Press ? to see all available shortcuts. 
-  Navigate faster without touching your mouse.
-
-## 🔧 Improvements
-
-- **Faster Sync**: Files now sync 2x faster across devices
-- **Better Search**: Search now includes file contents, not just titles
-
-## 🐛 Fixes
-
-- Fixed issue where large images wouldn't upload
-- Resolved timezone confusion in scheduled posts
-- Corrected notification badge count
+### Fixed
+- Large images no longer fail to upload.
+- Scheduled posts use the account's time zone.
 ```
 
-**Inspired by:** Manik Aggarwal's use case from Lenny's Newsletter
-
-## Tips
-
-- Run from your git repository root
-- Specify date ranges for focused changelogs
-- Use your CHANGELOG_STYLE.md for consistent formatting
-- Review and adjust the generated changelog before publishing
-- Save output directly to CHANGELOG.md
-
-## Related Use Cases
-
-- Creating GitHub release notes
-- Writing app store update descriptions
-- Generating email updates for users
-- Creating social media announcement posts
-
+Inspired by Manik Aggarwal's use case from Lenny's Newsletter.

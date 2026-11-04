@@ -1,14 +1,59 @@
 ---
 name: idea-wizard
-description: Generate, evaluate, and implement ideas to improve the project. Generates 30 ideas, filters them, plans the top ideas, and implements them.
+description: Generate, evaluate, and plan ideas to improve the project. Brainstorms 30 one-line ideas, critically filters them, ranks the survivors by impact, confidence, and effort, writes concrete plans for the best, and implements only the ones the user approves. Use for "generate ideas", "how could we improve this project", "brainstorm improvements".
 ---
 
 # Idea Wizard
 
-Come up with your very best ideas for improving this project.
+Find the few improvements that are clearly worth doing, and prove it before
+writing code.
 
-First generate a list of 30 ideas (brief one-liner for each).
+## 0. Understand the project first
 
-Then go through each one systematically and critically evaluate it, rejecting the ones that are not excellent choices for good reasons and keeping the ones that pass your scrutiny.
+If you have not primed on this project in the current session, run
+`deep-project-primer` first. Ideas that ignore the project's purpose,
+conventions, or AGENTS.md rules are noise.
 
-Then, for each idea that passed your test, explain in detail exactly what the idea is (in the form of a concrete, specific, actionable plan with detailed code snippets where relevant), why it would be a good improvement, what are the possible downsides, and how confident you are that it actually improves the project (0-100%). Make sure to actually implement the top ideas now.
+Ask the user for a focus if none was given and the project is large
+(performance, DX, reliability, UX, docs, tests, security). Otherwise cover all.
+
+## 1. Generate — 30 one-liners
+
+List 30 ideas, one line each, numbered. Aim for breadth: bugs and sharp edges,
+missing tests, performance, simplification and deletion, developer experience,
+docs, security, observability, user-facing features. Ground each in something
+you actually saw in the code (cite `file` when possible). No duplicates, no
+generic advice ("add more tests").
+
+## 2. Filter — be ruthless
+
+Evaluate every idea and reject those that are:
+
+- speculative ("might be useful someday") or add unrequested configurability
+- already done, or contradicted by the code or AGENTS.md
+- high churn for low gain, or a migration away from the established toolchain
+- unverifiable — no way to tell whether it worked
+
+Show the verdict compactly: `#n keep|reject — reason`. Expect most to fail.
+
+## 3. Rank the survivors
+
+Score each kept idea and sort by `(Impact × Confidence) / Effort`:
+
+| # | Idea | Impact 1–5 | Confidence % | Effort S/M/L | Downside |
+|---|------|-----------|--------------|--------------|----------|
+
+Confidence is your honest probability that it measurably improves the project.
+
+## 4. Plan the top ideas
+
+For the top 3–5, give a concrete plan: files to touch, the change (snippets
+where they clarify), how success is verified (test, benchmark, command), the
+risks, and what you would deliberately not do.
+
+## 5. Implement only with approval
+
+Stop and ask which ideas to implement — never implement on your own initiative.
+Then build each approved idea as its own surgical change, following
+`karpathy-guidelines`: one idea per change, verify it against its success
+check, run the project's gates, and report the result before moving on.

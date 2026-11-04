@@ -1,38 +1,80 @@
 ---
 name: deep-performance-audit
-description: Hyper-intensively investigate and study the codebase to identify gross inefficiencies, propose isomorphic performance improvements, and strictly follow a methodology of baselining, profiling, and proving equivalence.
+description: Measure-first performance audit of a codebase. Baselines a representative workload, profiles to find the real hotspots, proposes behavior-preserving (isomorphic) optimizations ranked by impact, confidence, and effort, and proves each one keeps outputs identical. Use for "performance audit", "optimize the codebase", "why is this slow", "find inefficiencies", latency/throughput/memory work.
 ---
 
 # Deep Performance Audit
 
 This skill is the canonical owner of measure-first performance methodology:
 baselines, profiles, equivalence proofs, opportunity ranking, and regression
-guardrails. Language and domain skills provide hotspot-specific techniques;
-do not duplicate this workflow from them.
+guardrails. Language and domain skills provide hotspot-specific techniques
+(`sota-python`, `sota-rust`, `sota-typescript`, …); do not duplicate this
+workflow from them.
 
-First read ALL of the AGENTS.md file and README.md file super carefully and understand ALL of both! Then use your code investigation agent mode to fully understand the code, and technical architecture and purpose of the project. Then, once you've done an extremely thorough and meticulous job at all that and deeply understood the entire existing system and what it does, its purpose, and how it is implemented and how all the pieces connect with each other, I need you to hyper-intensively investigate and study and ruminate on these questions as they pertain to this project: are there any other gross inefficiencies in the core system? places in the codebase where 1) changes would actually move the needle in terms of overall latency/responsiveness and throughput; 2) such that our changes would be provably isomorphic in terms of functionality so that we would know for sure that it wouldn't change the resulting outputs given the same inputs; 3) where you have a clear vision to an obviously better approach in terms of algorithms or data structures.
+## 0. Understand the system
 
-Consider these optimization patterns:
-- N+1 query/fetch pattern elimination
-- zero-copy / buffer reuse / scatter-gather I/O
-- serialization format costs (parse/encode overhead)
-- bounded queues + backpressure
-- sharding / striped locks to reduce contention
-- memoization with cache invalidation strategies
-- dynamic programming techniques
-- lazy evaluation / deferred computation
-- streaming/chunked processing for memory-bounded work
-- pre-computation and lookup tables
-- index-based lookup vs linear scan recognition
-- binary search (on data and on answer space)
-- two-pointer and sliding window techniques
-- prefix sums / cumulative aggregates
+Run `deep-project-primer` if you have not primed on this project in the current
+session. You cannot judge what matters for latency or throughput without
+knowing what the system does, how the pieces connect, and which paths are hot
+in real use.
 
-METHODOLOGY REQUIREMENTS:
-A) Baseline first: Run the test suite and a representative workload; record p50/p95/p99 latency, throughput, and peak memory with exact commands.
-B) Profile before proposing: Capture CPU + allocation + I/O profiles; identify the top 3-5 hotspots by % time before suggesting changes.
-C) Equivalence oracle: Define explicit golden outputs + invariants.
-D) Isomorphism proof per change: Every proposed diff must include a short proof sketch explaining why outputs cannot change.
-E) Opportunity matrix: Rank candidates by (Impact x Confidence) / Effort before implementing.
-F) Minimal diffs: One performance lever per change. No unrelated refactors.
-G) Regression guardrails: Add benchmark thresholds or monitoring hooks.
+## 1. What qualifies
+
+Only pursue changes that meet all three:
+
+1. **Moves the needle** — measurably improves end-to-end latency,
+   responsiveness, throughput, or peak memory for a realistic workload, not
+   a micro-benchmark nobody runs.
+2. **Provably isomorphic** — identical outputs for identical inputs
+   (including ordering, error behavior, and side effects), so the change is
+   safe by construction.
+3. **Clearly better** — a better algorithm or data structure you can name and
+   justify, not a hunch.
+
+## 2. Methodology (do these in order)
+
+- **A) Baseline first.** Run the test suite and a representative workload.
+  Record p50/p95/p99 latency, throughput, and peak memory with the exact
+  commands, inputs, machine, and number of runs. Repeat enough to know the
+  noise floor.
+- **B) Profile before proposing.** Capture CPU, allocation, and I/O profiles;
+  name the top 3–5 hotspots by % of time or bytes. No proposal without a
+  profile line that justifies it.
+- **C) Equivalence oracle.** Define golden outputs and invariants (sorted
+  order, totals, error cases) that any change must preserve; capture them from
+  the baseline build.
+- **D) Isomorphism proof per change.** Every proposed diff carries a short
+  proof sketch of why outputs cannot change.
+- **E) Opportunity matrix.** Rank candidates by `(Impact × Confidence) / Effort`
+  before implementing anything; show the table.
+- **F) Minimal diffs.** One performance lever per change, no unrelated
+  refactors. Re-measure after each; revert anything inside the noise floor.
+- **G) Regression guardrails.** Add a benchmark threshold, CI check, or
+  monitoring hook so the gain cannot silently erode.
+
+## 3. Patterns to look for
+
+- N+1 query/fetch patterns → batching, joins, prefetch
+- Linear scans where an index, hash map, or set lookup fits
+- Repeated work → memoization (with a correct invalidation story),
+  pre-computation, lookup tables
+- Serialization and parse/encode overhead; needless copies → zero-copy,
+  buffer reuse, scatter-gather I/O
+- Unbounded buffering → streaming/chunked processing, bounded queues with
+  backpressure
+- Lock contention → sharding, striped locks, lock-free reads
+- Eager work whose result is often unused → lazy/deferred evaluation
+- Algorithmic: dynamic programming, binary search (on data and on the answer
+  space), two pointers / sliding window, prefix sums
+
+## 4. Report
+
+1. Baseline table (commands, metrics, noise floor).
+2. Hotspots with profile evidence.
+3. Opportunity matrix.
+4. Per implemented change: diff summary, isomorphism proof, before/after
+   numbers, guardrail added.
+5. Rejected or deferred candidates, with the reason.
+
+Do not implement beyond the analysis without the user's go-ahead when the
+change set is large or touches public behavior.

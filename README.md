@@ -43,9 +43,9 @@ Requires OpenCode V2. V1 is no longer supported — see [Installation](#installa
 | [sota-architecture](./skills/sota-architecture/SKILL.md) | Architecture, boundaries, DDD, events, or resilience | System architecture styles, boundaries, distributed systems, and resilience design. |
 | [apple-container](./skills/apple-container/SKILL.md) | Apple `container` CLI on macOS, arm64 pinning | Command reference plus forcing `linux/arm64`, catching silent amd64 fallback, and verifying image architecture. |
 | [binscout-re](./skills/binscout-re/SKILL.md) | "reverse engineer", binary analysis, disassembly, xrefs, binary diff | Static RE workflow over the binscout MCP/CLI: orient, anchor on strings/imports/bytes, read functions cheapest-first, record renames and comments, plus known binscout gaps. |
-| [deep-performance-audit](./skills/deep-performance-audit/SKILL.md) | "performance audit", "optimize codebase" | Hyper-intensively investigate the codebase to identify gross inefficiencies and propose isomorphic improvements. |
-| [deep-project-primer](./skills/deep-project-primer/SKILL.md) | "project primer", "initialize project" | Initialization instructions for any project. Investigates code to understand architecture and purpose. |
-| [idea-wizard](./skills/idea-wizard/SKILL.md) | "generate ideas", "improve project" | Generate, evaluate, and implement ideas to improve the project. Generates 30 ideas, filters and plans the top ones. |
+| [deep-performance-audit](./skills/deep-performance-audit/SKILL.md) | "performance audit", "optimize codebase" | Measure-first audit: baseline, profile, rank opportunities, and prove each optimization keeps outputs identical. |
+| [deep-project-primer](./skills/deep-project-primer/SKILL.md) | "project primer", "initialize project" | Read AGENTS.md and README in full, map purpose, entry points, flow, and gates, and report a short primer. |
+| [idea-wizard](./skills/idea-wizard/SKILL.md) | "generate ideas", "improve project" | Brainstorm 30 ideas, filter and rank them, plan the best, and implement only the ones the user approves. |
 | [readme-reviser](./skills/readme-reviser/SKILL.md) | "update readme", "revise docs", "sync docs", "stale docs" | Add, correct, and remove documentation to match the current code, written in timeless voice. |
 | [ste-english](./skills/ste-english/SKILL.md) | "STE", "simplified technical english", "rewrite in STE" | Write or audit text in ASD-STE100 style: short sentences, simple verbs, a short substitution table. |
 

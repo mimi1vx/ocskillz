@@ -6,9 +6,11 @@ description: "Use when working with Apple's `container` CLI on macOS (container 
 # Apple Container, pinned to arm64
 
 Apple's `container` is a macOS-native container runtime. Each container gets its
-own lightweight VM. It is **not** Docker: no `docker` compatibility layer, no
-`compose`, no daemon socket. Flags overlap with Docker but diverge — check
-`container <cmd> --help` before assuming a flag exists.
+own lightweight VM. It is **not** Docker: no `docker` compatibility layer and no
+daemon socket. It has its own `container compose` with only `up` and `down`.
+Flags overlap with Docker but diverge — check `container <cmd> --help` before
+assuming a flag exists. Verify the installed version with
+`container system version`.
 
 ## The arch naming that trips everyone up
 
@@ -41,7 +43,7 @@ Put it in `~/.zshrc` so every shell and every subprocess inherits it. When it
 takes effect, `container run` prints a confirming line:
 
 ```
-using platform from environment variable: ["variable": CONTAINER_DEFAULT_PLATFORM, "platform": linux/arm64/v8]
+using platform from environment variable: ["variable": CONTAINER_DEFAULT_PLATFORM, "platform": linux/arm64]
 ```
 
 If that line is absent, the env var is not reaching the CLI — fix that before
@@ -103,9 +105,21 @@ container run --rm "$IMAGE" uname -m
 default. Rosetta is what lets amd64 content run at all, which is exactly the
 failure mode you are trying to make loud. For an arm64-only workflow:
 
-- Never pass `--rosetta` to `container run`.
+- Turn it off for the builder in `~/.config/container/config.toml`, then
+  restart the services (`container system stop && container system start`;
+  the file is read only at startup):
+
+  ```toml
+  [build]
+  rosetta = false
+  ```
+
+- Never pass `--rosetta` to `container run` or `container create`.
+- Never pass more than one `--arch` to `container build`
+  (`--arch arm64 --arch amd64` builds a multi-arch image on purpose).
 - Treat any need for Rosetta as a bug in your image selection, not a solution.
-- Inspect current settings with `container system property ls`.
+- Confirm the effective settings with `container system property ls`. There is
+  no `property set` subcommand; `config.toml` is the only way to change them.
 
 ## Base images must be arm64-capable
 
@@ -130,8 +144,8 @@ is far better than shipping a silently emulated image.
 
 ## Command reference
 
-Real subcommands as of CLI 1.2.0. Nested help needs `container <group> <sub> -h`
-(note: `container help <group> <sub>` does **not** work).
+Real subcommands as of CLI 1.6.1. Both `container <group> <sub> --help` and
+`container help <group> <sub>` work.
 
 ### Lifecycle
 
@@ -139,9 +153,12 @@ Real subcommands as of CLI 1.2.0. Nested help needs `container <group> <sub> -h`
 container system start        # start services; required before anything else
 container system status
 container system stop
+container system version
 container system df           # disk usage
-container system property ls
-container system logs
+container system property ls  # effective config (config.toml + defaults)
+container system logs [-f] [--last 10m]
+container system dns create|delete|ls <domain>   # create/delete need sudo
+container system kernel set --recommended
 ```
 
 ### Containers
@@ -150,19 +167,21 @@ container system logs
 container run [opts] <image> [args]
 container create / start / stop / kill / delete / prune
 container exec -it <id> <cmd>
-container ls [-a] [--format json|table|yaml|toml]
-container logs <id>
+container ls [-a] [-q] [--format json|table|yaml|toml]
+container logs [-f] [-n N] [--boot] <id>
 container inspect <id>
-container stats
-container cp <src> <dst>
-container export <id>
+container stats [--no-stream] [--format json]
+container cp <src> <id>:<dst>       # alias of `container copy`
+container commit <id> <image:tag>   # snapshot a container into an image
+container export [-o file.tar] <id>
+container clean <id>                # reclaim free space in a running container
 ```
 
 Useful `run` flags: `--rm`, `-d`, `-i`, `-t`, `-e KEY=VAL`, `--env-file`,
 `-v <host>:<guest>`, `--mount type=,source=,target=,readonly`, `-p <h>:<c>`,
 `-w <dir>`, `-u <user>`, `-c <cpus>`, `-m <mem>`, `--name`, `--network`,
 `--entrypoint`, `--init`, `--read-only`, `--tmpfs`, `--shm-size`, `--ssh`,
-`--cap-add` / `--cap-drop`.
+`--cap-add` / `--cap-drop`, `--ulimit`, `--dns`.
 
 ### Images
 
@@ -172,42 +191,60 @@ container image ls / inspect / delete / prune
 container image pull  --platform linux/arm64 <ref>
 container image push  --platform linux/arm64 <ref>
 container image tag <src> <dst>
-container image save / load          # OCI tar archives
-container registry login <host>
+container image save --platform linux/arm64 -o app.tar <ref>
+container image load -i app.tar
+container registry login [-u <user> --password-stdin] <host>
+container registry logout <host> / ls
 ```
 
 `build` also takes `--build-arg`, `--secret id=<key>[,env=|,src=]`, `--target`,
-`--no-cache`, `--output type=oci|tar|local[,dest=]`, `-c/--cpus`, `-m/--memory`.
+`--no-cache`, `--pull`, `--ssh default`, `--output type=oci|tar|local[,dest=]`,
+`-c/--cpus`, `-m/--memory`. Without `-f` it looks for `Dockerfile`, then
+`Containerfile`.
 
 ### Builder, volumes, networks
 
 ```sh
-container builder start [-c <cpus>] [-m <mem>]
+container builder start [-c <cpus>] [-m <mem>] [--dns <ip>]
 container builder status / stop / delete
 
-container volume create [-s <size>] <name>
+container volume create [-s <size>] [--opt journal=ordered] <name>
 container volume ls / inspect / delete / prune
 
-container network create [--subnet <cidr>] [--internal] <name>
+container network create [--subnet <cidr>] [--internal] <name>   # macOS 26+
 container network ls / inspect / delete / prune
 ```
 
 The builder is a container itself. If builds fail oddly after an upgrade, or
 hang, restart it: `container builder stop && container builder start`.
 
+### Compose, machines, clusters
+
+```sh
+container compose up / down [-v]    # only these two subcommands
+container machine create --name dev --cpus 4 --memory 8G <image>
+container machine run -n dev [-- cmd]   # persistent Linux dev VM, home mounted rw by default
+container machine ls / set / stop / delete
+container cluster create            # EXPERIMENTAL local Kubernetes (kind node image)
+```
+
+`machine create` and `cluster create` honor `--platform` and
+`CONTAINER_DEFAULT_PLATFORM` too; check their images the same way.
+
 ## Resource sizing
 
-Default CPU/memory is minimal and shows on lightweight workloads. For anything
-compute-heavy — compiling, running test suites — size up explicitly with
-`-c`/`-m` on `run`/`build`, or `-c`/`-m` on `container builder start`. 4 CPUs /
-4GB RAM is a reasonable floor for those workflows; bump further if builds or
-tests still thrash.
+Defaults are small: 4 CPUs / 1 GiB per container and 2 CPUs / 2 GiB for the
+builder (see `container system property ls`). For anything compute-heavy —
+compiling, running test suites — size up explicitly with `-c`/`-m` on
+`run`/`build`, or `-c`/`-m` on `container builder start`. 4 CPUs / 4GB RAM is a
+reasonable floor for those workflows; bump further if builds or tests still
+thrash. To change the defaults persistently, set `[container]` and `[build]`
+`cpus`/`memory` in `~/.config/container/config.toml` and restart the services.
 
 ## Troubleshooting
 
 - **"Plugin 'container-<x> <y>' not found"** — usually means services are down.
-  Run `container system start`. It also appears when you use `--help` on a
-  nested subcommand; use `-h` instead.
+  Run `container system start`.
 - **Build cannot resolve DNS** — the builder has its own DNS config. Pass
   `--dns` to `container builder start`, not just to `build`.
 - **Image runs but behaves oddly / slowly** — check for an amd64 variant with
@@ -223,4 +260,5 @@ tests still thrash.
 3. Confirm the base image publishes arm64 before adopting it.
 4. Guard the Containerfile with an `aarch64` check.
 5. Assert `image inspect` reports `arm64` and only `arm64`.
-6. Never pass `--rosetta`; treat needing it as a defect.
+6. Set `[build] rosetta = false` in `~/.config/container/config.toml`.
+7. Never pass `--rosetta`; treat needing it as a defect.

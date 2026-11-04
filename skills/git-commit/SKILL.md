@@ -1,7 +1,7 @@
 ---
 name: git-commit
 description: Generates storytelling-focused Conventional Commits messages then commits. Use when the user says "commit", "git commit", or asks to commit changes, wants to create a commit, or when work is complete and ready to commit.
-allowed-tools: bash(git status:*), bash(git diff:*), bash(git add:*), bash(git branch:*), bash(git log:*), AskUserQuestion
+allowed-tools: bash(git status:*), bash(git diff:*), bash(git add:*), bash(git branch:*), bash(git log:*), question
 license: MIT
 ---
 
@@ -28,9 +28,11 @@ git log --oneline -5
 git branch --show-current
 ```
 
+If nothing is staged, show the unstaged changes and ask which files to stage by name; never stage everything. If the staged diff mixes unrelated changes, propose splitting it into separate commits. Match the subject style visible in `git log`.
+
 ### 2. Ask WHY (Human-in-the-Loop)
 
-**ALWAYS use AskUserQuestion to ask why the change was made.** Generate 3–4 plausible options based on the diff — be specific, not generic. The user can always pick "Other".
+**ALWAYS use the `question` tool to ask why the change was made.** Generate 3–4 plausible options based on the diff — be specific, not generic. The tool adds a free-form answer option automatically.
 
 Wait for the answer and incorporate it into the message.
 
