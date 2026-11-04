@@ -5,6 +5,7 @@
 #  - file exists and is non-empty
 #  - frontmatter contains `name:` and `description:`
 #  - frontmatter `name` matches the directory name
+#  - every relative Markdown link in the skill's .md files resolves
 #
 # Phase 2 - agents/<name>.md and commands/<name>.md:
 #  - frontmatter parses and carries a non-empty `description:`
@@ -65,6 +66,25 @@ fm_has_key() {
 	printf '%s\n' "$1" | grep -qE "^$2:"
 }
 
+# Print "file: target" for every relative Markdown link under a skill
+# directory whose target does not exist. Fenced blocks and inline code spans
+# are skipped, so regexes in code samples are not mistaken for links.
+broken_links_in() {
+	# shellcheck disable=SC2016 # perl code, not shell expansions
+	find "$1" -name '*.md' -print0 | xargs -0 perl -ne '
+		if ($ARGV ne $prev) { $fence = 0; $prev = $ARGV }
+		if (/^\s*(```|~~~)/) { $fence = !$fence; next }
+		next if $fence;
+		s/`[^`]*`//g;
+		while (/\]\(([^)\s]+)\)/g) {
+			my $link = $1;
+			next if $link =~ m{^(?:[a-z][a-z0-9+.-]*:|#|/)}i;
+			(my $t = $link) =~ s/#.*//;
+			(my $d = $ARGV) =~ s{/[^/]*$}{};
+			print "  $ARGV: $link\n" unless -e "$d/$t";
+		}' | sed "s|$ROOT/||"
+}
+
 is_blank() {
 	[[ -z "$(printf '%s' "$1" | tr -d '[:space:]')" ]]
 }
@@ -113,6 +133,13 @@ for dir in "$SKILLS_DIR"/*/; do
 
 	if [[ "$fm_name" != "$skill_name" ]]; then
 		echo "FAIL [$skill_name]: frontmatter name '$fm_name' != directory '$skill_name'"
+		errors=$((errors + 1))
+		continue
+	fi
+
+	broken="$(broken_links_in "$dir")"
+	if [[ -n "$broken" ]]; then
+		printf 'FAIL [%s]: broken relative link(s):\n%s\n' "$skill_name" "$broken"
 		errors=$((errors + 1))
 		continue
 	fi
