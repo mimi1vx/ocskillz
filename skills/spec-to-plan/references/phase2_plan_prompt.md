@@ -17,6 +17,8 @@ Requirements for the plan:
 - Steps should be modular, elegant, minimal, and integrate seamlessly within the existing codebase.
 - Include important implementation details within the plan.
 - List files and parts of files that need to be changed.
+- Map every acceptance criterion to a test, command, or reproducible procedure and its expected result.
+- Mark every coverage surface as covered or "N/A — reason".
 
 Markdown Template Example:
 
@@ -46,6 +48,24 @@ Markdown Template Example:
   - [ ] 🟥 Set up session cookies securely
   - [ ] 🟥 Implement session renewal logic
   - [ ] 🟥 Handle session expiry and logout process
+
+## Acceptance Criteria & Verification
+
+| # | Criterion | Verification | Expected |
+|---|-----------|--------------|----------|
+| AC1 | Valid credentials return a session | `bun test auth.login` | passes |
+| AC2 | Wrong password is rejected | `bun test auth.login.invalid` | passes; 401, no cookie set |
+| AC3 | Existing signup still works | `bun test signup` | passes (regression) |
+
+## Coverage
+
+- Functional / failure paths: Steps 1–2 (AC1, AC2)
+- Regression: AC3
+- User workflow: Step 2
+- Documentation: N/A — no public docs for this flow
+- Compatibility / migration: N/A — no schema change
+- Operations: N/A — no new config or deploy step
+- Security / privacy: Step 3 (secure cookies, session expiry)
 
 ## Important Implementation Details
 

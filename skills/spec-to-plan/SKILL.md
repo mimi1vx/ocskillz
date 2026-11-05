@@ -20,6 +20,19 @@ The skill follows a five-phase workflow:
 
 **Final deliverables:** Both specification and plan content are provided as markdown in the conversation.
 
+## Scale to the Task
+
+Always agree on outcome, scope, non-goals, acceptance evidence, and stopping
+point before work starts. How much more you do depends on the size of the task:
+
+- **Small** (one prompt, one implement-and-verify loop): a short summary of
+  those five items is the spec and the plan. Skip the full phases.
+- **Medium**: run all phases, keeping the documents brief.
+- **Large** (multiple loops or checkpoints, likely to outlive one session): run
+  all phases and add the traceability checks in Phase 5.
+
+If the size is unclear, ask the user which depth they want.
+
 ## Phase 1: Initial Specification
 
 Load the prompt template from `references/phase1_spec_prompt.md` and fill in the feature description provided by the user.
@@ -71,6 +84,22 @@ Generate a detailed task breakdown that includes:
 - Important implementation details
 - File-level changes (Add/Modify/Keep sections)
 - Progress calculations
+- Acceptance criteria, each with its verification and expected result
+- Coverage review
+
+**Verification plan.** Map every acceptance criterion to an automated test,
+command, or reproducible procedure, plus its expected result
+(`cmd` → exit 0, `GET /x` → 404). Include negative and regression cases. Prefer
+controlled inputs and machine-checkable output. Where automation isn't
+practical, say why, name the most objective repeatable evidence, and flag any
+criterion that needs human judgment. Human review must not replace a check that
+could reasonably be automated.
+
+**Coverage review.** Go through each surface — functional behavior, failure
+paths, regression, user workflow, documentation, compatibility or migration,
+operations, and security or privacy. Mark each one as covered by a step or "N/A —
+<reason>". Never skip one silently. This checks completeness; it does not
+permit adding scope.
 
 **Critical:** Do NOT add extra scope or unnecessary complexity beyond what was explicitly clarified.
 
@@ -84,6 +113,14 @@ Create the final `plan.md` content and present it in the chat:
 - Dynamic progress tracking
 - Implementation details section
 - File changes section listing specific files and modifications needed
+
+**Traceability (large tasks).** Before presenting the plan, run four checks:
+1. **Forward** — every goal reaches at least one criterion, its verification, and a task.
+2. **Reverse** — every task maps to a confirmed goal; anything else is scope creep.
+3. **Coverage** — the coverage review has no blank surfaces.
+4. **Orphan** — no goal, criterion, decision, risk, or open question is left unmapped.
+
+Fix any gap, or list it as an open question.
 
 **Output:**
 - Present the complete `plan.md` content directly in the chat
