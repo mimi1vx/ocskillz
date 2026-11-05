@@ -85,6 +85,9 @@ If the project keeps a CHANGELOG.md or release notes:
 
 Don't let CI tell you what `bun run ci` or `make check` could have told you 2 minutes ago.
 
+Report each gate as **passed**, **failed**, **blocked**, or **not run** — never
+"should pass". A gate you couldn't run locally is "not run", with the reason.
+
 ### 6. Self-review the diff
 
 Read your own diff top to bottom. You'll catch 30% of issues yourself.
@@ -103,7 +106,7 @@ Read your own diff top to bottom. You'll catch 30% of issues yourself.
 <none / list with migration notes>
 
 ## Testing
-<how was this verified — tests added, manual steps, screenshots>
+<per claim: `command or procedure` → observed result (passed / failed / not run + reason)>
 
 ## Related
 <issue links, design docs, prior PRs>

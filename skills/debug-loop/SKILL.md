@@ -122,6 +122,29 @@ If you can't write this test, you can't verify your fix. Either:
 
 If anything is red, **revert and rethink**. Don't pile on more changes.
 
+## When a Hypothesis Fails
+
+Returning to step 2 or 3 is normal. Going round in circles is not.
+
+- **Never rerun an unchanged attempt.** Every new cycle must change something:
+  the hypothesis, input, code, environment, or diagnostic. Say why that change
+  could give a different result.
+- **Keep a short attempt log**: hypothesis → action → result. It stops you
+  retrying dead ends and becomes the handoff if you have to stop.
+- **Choose the next step for what it tells you.** Prefer the experiment that
+  separates two remaining explanations (a bisect step, a log line, a smaller
+  input) over the one that is merely the next thing to try.
+- **A hard bug is not a blocker.** Exhaust reasonable options first.
+
+Stop and hand back to the user when a missing input, credential, environment,
+or decision is needed; when the remaining options would grow the fix beyond the
+bug; when several materially different attempts produce no new evidence; or
+when the cost is out of proportion to the bug. Report the attempt log, what
+remains untested, and your recommendation.
+
+If you find a different bug along the way, record its repro and propose it as
+separate work instead of folding it into this fix.
+
 ## Step 7 — Document
 
 **Goal:** Future-you (or the next dev) can understand what happened.
@@ -141,12 +164,16 @@ Use the `git-commit` skill for the commit message.
 | Big refactor as part of the fix | Untestable; reviewers can't tell what fixed the bug |
 | Changing multiple variables to see what helps | Loses the signal; you won't know the real cause |
 | Skipping reproduction because "it's obvious" | Often it isn't, and you fix the wrong thing |
+| Rerunning the same attempt hoping it passes | Produces no new evidence; flaky passes hide the bug |
 
 ## Output Template (for handoff)
 
 ```
 ## Bug
 <one-line symptom>
+
+## Status
+<passed | failed | blocked | not run | partial>
 
 ## Root cause
 <one-paragraph explanation>
@@ -164,4 +191,7 @@ Use the `git-commit` skill for the commit message.
 - [ ] New test passes
 - [ ] Full suite passes
 - [ ] Original repro no longer fails
+
+## Attempts (if not passed)
+<hypothesis → action → result, one line each; what remains untested>
 ```

@@ -52,6 +52,14 @@ When your changes create orphans:
 
 The test: Every changed line should trace directly to the user's request.
 
+When you find a real defect outside the requested scope:
+- Don't fix it silently, and don't stop at a vague "should I fix this too?".
+- Record the reproduction, observed vs expected result, impact, and whether it
+  blocks the current task.
+- Propose it as separate work: the fix, its scope, and how it will be verified.
+  Approval of the current task does not cover it.
+- If it blocks the current task, report the task as blocked or partial — not done.
+
 ## 4. Goal-Driven Execution
 
 **Define success criteria. Loop until verified.**
@@ -69,3 +77,27 @@ For multi-step tasks, state a brief plan:
 ```
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+**Loop without spinning.** Never repeat an unchanged attempt. Each retry must
+change a hypothesis, input, implementation, environment, or diagnostic — and you
+should be able to say why that change could alter the result. When an approach
+stalls, keep its evidence and pick the in-scope action most likely to tell the
+competing explanations apart. Difficulty alone is not a reason to stop. Stop and
+report back when:
+- a decision, credential, permission, or dependency only the user can supply is missing;
+- every remaining option would expand scope, risk, or external effects;
+- materially different attempts keep producing no new evidence;
+- the cost is out of proportion to the task; or
+- no credible in-scope option remains.
+
+At that point, report what was tried, what each attempt showed, what options
+remain, and your recommendation.
+
+**Report status precisely.** Use one of:
+- **passed** — every required check ran and succeeded;
+- **failed** — at least one required check ran and failed;
+- **blocked** — something external prevents running it;
+- **not run** — verification hasn't happened;
+- **partial** — useful progress, but work or checks remain.
+
+Time spent, lines written, or "the main path works" does not make a task passed.
