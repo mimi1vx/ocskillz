@@ -28,8 +28,8 @@ function makeAgentEditor(declared) {
     get: (id) => items.get(id),
     default: () => {},
     update: (id, fn) => {
-      const agent = items.get(id)
-      if (!agent) return
+      const agent = items.get(id) ?? Agent.Info.default(id)
+      items.set(id, agent)
       fn(agent)
     },
     remove: (id) => items.delete(id),
@@ -49,8 +49,8 @@ function readFrontmatter(file) {
 }
 
 /**
- * Build a mock V2 plugin context. `declaredAgents` simulates user config
- * (`agents: {...}` stubs); `builtinAgents` simulates agents that exist
+ * Build a mock V2 plugin context. `declaredAgents` simulates agents that already
+ * exist in user config; `builtinAgents` simulates agents that exist
  * regardless of user declarations (built-ins referenced by commands).
  */
 function makeContext({ existingSkills = [], declaredAgents = {}, builtinAgents = {}, existingCommandNames = [] } = {}) {
@@ -100,23 +100,23 @@ test("does not replace a pre-existing skill with the same ID", async () => {
   assert.equal(gitCommit.content, "keep me")
 })
 
-test("hydrates only agent IDs the user already declared", async () => {
+test("registers the bundled agents without config stubs", async () => {
   const { ctx, agentEditor } = makeContext({
-    declaredAgents: {
-      "code-reviewer": Agent.Info.default("code-reviewer"),
-      unrelated: Agent.Info.default("unrelated"),
-    },
+    declaredAgents: { unrelated: Agent.Info.default("unrelated") },
   })
   await ocskillz.setup(ctx)
 
-  const reviewer = agentEditor.get("code-reviewer")
-  assert.ok(reviewer.description.length > 0)
-  assert.ok(reviewer.system.length > 0)
-  assert.ok(Array.isArray(reviewer.permissions) && reviewer.permissions.length > 0)
+  const modes = { "code-reviewer": "primary", planner: "primary", refactor: "subagent" }
+  for (const [id, mode] of Object.entries(modes)) {
+    const agent = agentEditor.get(id)
+    assert.ok(agent, `${id} was not created`)
+    assert.ok(agent.system.length > 0, `${id} has no system prompt`)
+    assert.equal(agent.mode, mode)
+    assert.ok(Array.isArray(agent.permissions) && agent.permissions.length > 0, `${id} has no permissions`)
+  }
 
   assert.deepEqual(agentEditor.get("unrelated"), Agent.Info.default("unrelated"))
-  assert.equal(agentEditor.get("planner"), undefined)
-  assert.equal(agentEditor.get("refactor"), undefined)
+  assert.deepEqual([...agentEditor.items.keys()].sort(), ["code-reviewer", "planner", "refactor", "unrelated"])
 })
 
 test("preserves a meaningful user override instead of the bundled value", async () => {

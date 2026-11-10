@@ -1,13 +1,13 @@
 /**
  * ocskillz plugin for opencode V2.
  *
- * Registers this package's skills, commands, and agent stubs through V2
+ * Registers this package's skills, commands, and agents through V2
  * transforms, so installing the plugin is enough — no symlinking of
  * ~/.config/opencode required.
  *
- * V2 plugins cannot create agents, only update ones the user already declared
- * (see README for the required `agents` stubs). Skills and commands are
- * registered outright, but existing definitions always win: if a skill or
+ * Agents are created when missing; an existing agent with the same ID only
+ * gets the fields that still hold OpenCode's defaults. Skills and commands
+ * are registered outright, but existing definitions always win: if a skill or
  * command with the same ID is already registered, this plugin leaves it
  * alone.
  */
@@ -147,14 +147,10 @@ export default Plugin.define({
       }
     })
 
-    // Only hydrate agent IDs the user already declared (V2 plugins cannot create agents).
-    // A field is filled only when it still matches the V2 empty-stub default, so a
-    // meaningful user override is never clobbered.
+    // update() creates a missing agent from Agent.Info.default(id). A field is filled
+    // only while it still equals that default, so a user override is never clobbered.
     await ctx.agent.transform((editor) => {
       for (const [id, fields] of Object.entries(loadHydratedAgents())) {
-        const current = editor.get(id)
-        if (!current) continue
-
         const empty = Agent.Info.default(id)
         editor.update(id, (agent) => {
           if (agent.description === empty.description) agent.description = fields.description

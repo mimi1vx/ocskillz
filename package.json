@@ -17,7 +17,7 @@
     "commands"
   ],
   "dependencies": {
-    "@opencode/plugin": "^2.0.12",
+    "@opencode/plugin": "^2.2.6",
     "yaml": "^2.7.0"
   },
   "scripts": {
