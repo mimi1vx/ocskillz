@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { Agent } from "@opencode/plugin"
@@ -159,6 +160,17 @@ test("converts agent permission maps into native ordered rules", async () => {
   const rules = agentEditor.get("refactor").permissions
   assert.ok(rules.every((rule) => "action" in rule && "resource" in rule && "effect" in rule))
   assert.ok(!rules.some((rule) => rule.action === "bash" || rule.action === "write" || rule.action === "patch"))
+})
+
+test("expands ~/ in path-action permission resources", async () => {
+  const { ctx, agentEditor } = makeContext()
+  await ocskillz.setup(ctx)
+  const planDir = path.join(os.homedir(), ".opencode", "plan", "*")
+  const rules = agentEditor.get("planner").permissions
+  for (const action of ["edit", "external_directory"]) {
+    assert.ok(rules.some((rule) => rule.action === action && rule.resource === planDir && rule.effect === "allow"))
+  }
+  assert.ok(!rules.some((rule) => rule.action !== "shell" && String(rule.resource).startsWith("~")))
 })
 
 test("skips a command name that already exists", async () => {

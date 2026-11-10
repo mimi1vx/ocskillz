@@ -13,6 +13,7 @@
  */
 
 import fs from "fs"
+import os from "os"
 import path from "path"
 import { fileURLToPath } from "url"
 import { parse as parseYaml } from "yaml"
@@ -24,6 +25,18 @@ const AGENTS_DIR = path.join(ROOT, "agents")
 const COMMANDS_DIR = path.join(ROOT, "commands")
 
 const HYDRATED_AGENT_IDS = ["code-reviewer", "planner", "refactor"]
+
+const PATH_ACTIONS = new Set(["read", "edit", "external_directory"])
+
+// Host path rules are matched literally, and only its own config loader expands `~/`.
+const expandHome = (permissions) =>
+  Array.isArray(permissions)
+    ? permissions.map((rule) =>
+        PATH_ACTIONS.has(rule.action) && typeof rule.resource === "string" && rule.resource.startsWith("~/")
+          ? { ...rule, resource: path.join(os.homedir(), rule.resource.slice(2)) }
+          : rule,
+      )
+    : permissions
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/
 
@@ -108,7 +121,7 @@ const loadHydratedAgents = () => {
     agents[id] = {
       description: doc.frontmatter.description,
       mode: doc.frontmatter.mode,
-      permissions: doc.frontmatter.permissions,
+      permissions: expandHome(doc.frontmatter.permissions),
       system: doc.body,
     }
   }
