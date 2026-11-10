@@ -4,23 +4,28 @@ ocskillz supports OpenCode V2 only. Its package entrypoint uses `@opencode/plugi
 
 ## Installation
 
-Declare the package and all three agent stubs in global or project `opencode.json(c)`:
+Add the package to `plugins` in global or project `opencode.json(c)`:
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["ocskillz@git+https://github.com/mimi1vx/ocskillz"],
+  "plugins": ["ocskillz@git+https://github.com/mimi1vx/ocskillz"]
+}
+```
+
+The plugin registers `code-reviewer`, `planner`, and `refactor` itself. `AgentEditor.update(id, fn)` creates a missing agent from `Agent.Info.default(id)` before running `fn`, so no `agents` entry is needed. For an agent that already exists, the plugin fills the description, system prompt, mode, and permissions that still equal that default and preserves every field that differs.
+
+To override a bundled agent, declare it in config; the fields you set win:
+
+```jsonc
+{
   "agents": {
-    "code-reviewer": { "mode": "primary" },
-    "planner": { "mode": "primary" },
-    "refactor": { "mode": "subagent" }
+    "planner": { "description": "My planner" }
   }
 }
 ```
 
-The stubs are required because the V2 `AgentEditor` can update and remove existing agents but cannot create them. The plugin hydrates each stub's description, system prompt, mode, and permissions while preserving values that differ from OpenCode's empty-agent defaults.
-
-An explicit override equal to an empty-agent default is indistinguishable from an omitted value and can therefore be hydrated. This is a V2 plugin API limitation.
+An explicit value equal to the default is indistinguishable from an omitted value and can therefore be filled. This is a V2 plugin API limitation.
 
 ## Agent behavior
 
@@ -48,10 +53,6 @@ Use native V2 plural fields and ordered permission rules:
 
 V2 still accepts many V1 file definitions, but the ocskillz plugin implementation itself is V2-only. Preserve unrelated settings when converting configuration.
 
-## Skill schema discrepancy
-
-The V2 plugin guide currently demonstrates `Skill.Info.location`. The released `@opencode/schema` used by `@opencode/plugin` 2.0.12 defines this field as `path`. ocskillz uses `path` so it remains compatible with the installed release. Check the installed type declaration before changing this field for a newer dependency.
-
 ## Verification
 
 Install dependencies and run:
@@ -61,9 +62,9 @@ npm test
 ./scripts/validate-skills.sh
 ```
 
-The validator checks native frontmatter, explicit agent modes, command-to-agent compatibility, and the six bundled commands. When local OpenCode API inspection is available, it also verifies the hydrated registry. A clearly reported skip means live registry state was unavailable; the static checks still ran.
+The validator checks native frontmatter, explicit agent modes, command-to-agent compatibility, and the six bundled commands. When local OpenCode API inspection is available, it also verifies the registered skills, agents, and commands. A clearly reported skip means live registry state was unavailable; the static checks still ran.
 
-For direct inspection, start OpenCode in a directory whose configuration contains the stubs above and run:
+For direct inspection, start OpenCode in a project whose configuration loads the plugin and run:
 
 ```sh
 opencode debug agents

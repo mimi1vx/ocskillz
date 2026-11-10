@@ -16,7 +16,7 @@
 #  - commands: `agent` names a known primary-capable agent
 #
 # Phase 3 - live registration through the opencode V2 plugin API:
-#  - the plugin is active and every skill, agent stub, and command actually
+#  - the plugin is active and every skill, agent, and command actually
 #    reaches opencode's registries. Skipped with a notice when its
 #    prerequisites are missing or the environment can't confirm live state.
 #
@@ -317,12 +317,7 @@ else
 	cat >"$workdir/opencode.json" <<EOF
 {
   "\$schema": "https://opencode.ai/config.json",
-  "plugins": ["$ROOT"],
-  "agents": {
-    "code-reviewer": { "mode": "primary" },
-    "planner": { "mode": "primary" },
-    "refactor": { "mode": "subagent" }
-  }
+  "plugins": ["$ROOT"]
 }
 EOF
 
@@ -410,7 +405,7 @@ for name, mode in expected_agents.items():
         print(f"FAIL [registration] agent: '{name}' did not reach opencode's registry")
         failures += 1
     elif not agent.get("system"):
-        print(f"FAIL [registration] agent: '{name}' was not hydrated with a system prompt")
+        print(f"FAIL [registration] agent: '{name}' has no system prompt")
         failures += 1
     elif agent.get("mode") != mode:
         print(

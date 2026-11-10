@@ -87,7 +87,7 @@ Launch `refactor` through the `subagent` tool rather than selecting it as the se
 
 | File | Purpose |
 |------|---------|
-| [ocskillz.js](./plugin/ocskillz.js) | opencode V2 plugin that registers this repo's skills and commands through V2 transforms, and hydrates the three agent stubs below. Used by the plugin install below. |
+| [ocskillz.js](./plugin/ocskillz.js) | opencode V2 plugin that registers this repo's skills and commands through V2 transforms, and registers the three agents below. Used by the plugin install below. |
 
 ## Validation
 
@@ -114,31 +114,26 @@ Three phases run:
 
 1. **Skills** — `skills/*/SKILL.md` has `name` and `description`, and `name` matches the directory.
 2. **Agents and commands** — frontmatter has a `description`, the body is non-empty, no legacy V1 fields remain (`name`, `permission`, `disable`, `prompt`, `tools`, `maxSteps`, `temperature`, `top_p`, `variant`), `permissions` (if present) is a native ordered sequence of current V2 `{action, resource, effect}` rules, every agent has its intended explicit `mode`, and commands target only primary-capable agents.
-3. **Registration** — loads the plugin into a throwaway project and asserts it's active and every skill, agent stub, and command reaches opencode's V2 registries with the expected agent modes via `opencode api get /api/plugin|/api/skill|/api/agent|/api/command`.
+3. **Registration** — loads the plugin into a throwaway project and asserts it's active and every skill, agent, and command reaches opencode's V2 registries with the expected agent modes via `opencode api get /api/plugin|/api/skill|/api/agent|/api/command`.
 
 Phase 3 is skipped with a notice — not a failure — when `opencode` or `python3` is not on `PATH`, when dependencies are not installed, or when the local opencode instance can't report live plugin state. Install dependencies with `npm install` to enable it.
 
 ## Installation
 
-Requires OpenCode V2. Add ocskillz to the `plugins` array in your `opencode.json` (global or project), and declare stubs for the three bundled agents so the plugin can hydrate them — V2 plugins can update an agent you've declared, but cannot create one from scratch:
+Requires OpenCode V2. Add ocskillz to the `plugins` array in your `opencode.json` (global or project):
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["ocskillz@git+https://github.com/mimi1vx/ocskillz"],
-  "agents": {
-    "code-reviewer": { "mode": "primary" },
-    "planner": { "mode": "primary" },
-    "refactor": { "mode": "subagent" }
-  }
+  "plugins": ["ocskillz@git+https://github.com/mimi1vx/ocskillz"]
 }
 ```
 
-Restart opencode. The plugin registers all skills and commands from wherever opencode cached the package, and fills in the `description`, `system` prompt, `mode`, and `permissions` for the three declared agent stubs above — leaving `~/.config/opencode/` free for your own configuration.
+Restart opencode. The plugin registers all skills, commands, and the three bundled agents from wherever opencode cached the package — leaving `~/.config/opencode/` free for your own configuration. Each agent gets its `description`, `system` prompt, `mode`, and `permissions`.
 
 `code-reviewer` and `planner` are selectable primary agents. `refactor` is subagent-only; ask a primary agent to launch it with the `subagent` tool.
 
-Anything meaningful you define yourself wins: a skill or command with the same ID is left alone, and any agent field you set to something other than opencode's empty-stub default is preserved instead of being overwritten by the bundled value. V2 does not let a plugin distinguish an explicit value that equals the empty-stub default from an omitted value.
+Anything you define yourself wins: a skill or command with the same ID is left alone. An agent with the same ID that you define in config or in an agents directory keeps every field you changed; only fields still at opencode's defaults are filled from the bundled agent. Declaring `code-reviewer`, `planner`, or `refactor` in config is therefore optional and harmless. V2 does not let a plugin distinguish an explicit value that equals the default from an omitted value.
 
 See [OpenCode V2 compatibility](./docs/opencode-v2.md) for plugin limitations, migration details, and verification steps. V1 is not supported by this package.
 
