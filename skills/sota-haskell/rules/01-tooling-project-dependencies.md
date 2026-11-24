@@ -196,6 +196,17 @@ hlint app src test
   exception timing, readability, and asymptotic differences before applying.
 - Keep ignored hints narrow and documented. Never auto-apply every hint across
   security-sensitive, concurrent, or performance-critical code.
+- Suppressions go stale: `ANN`/`HLINT ignore` pragmas, `.hlint.yaml` `ignore:`
+  entries, and `{-# OPTIONS_GHC -Wno-... #-}` keep silencing nothing after the code
+  or the tool changes, and then hide the next real finding. HLint documents no
+  stale-ignore report, so review by hand on a schedule and on every HLint or GHC
+  upgrade: `hlint --show` lists what ignores currently suppress (an entry that
+  never appears is dead), `hlint --default` regenerates a baseline whose
+  `# N hints` counts can be diffed against the committed file, and deleting one
+  suppression and re-running (`hlint`, or `cabal build` for a `-Wno-` flag)
+  shows whether it still has an effect. Every suppression keeps a scope
+  (`within:`, per-definition pragma) and a reason. HLint's "Unused LANGUAGE
+  pragma" hint reports stale extension pragmas; do not ignore it wholesale.
 - Scope `-Wall` and warning policy to local components. A designated strict job
   can use `-Werror`; avoid forcing warning flags onto dependencies.
 
@@ -271,6 +282,10 @@ cabal outdated
 rg -n '(fourmolu|ormolu|brittany|stylish-haskell|hlint|haskell-language-server|tested-with|ghc-version)' . --glob '*.{cabal,project,yaml,yml,json,md}'
 fourmolu --mode check app src test 2>/dev/null
 hlint app src test 2>/dev/null
+
+# Suppressions that may no longer suppress anything: delete one, re-run the tool, keep it only if the output changes
+rg -n 'HLint: ignore|HLINT ignore|ignore:|OPTIONS_GHC[^\n]*-Wno-|ghc-options:[^\n]*-Wno-' --glob '*.{hs,lhs,yaml,yml,cabal,project}'
+hlint --show app src test 2>/dev/null
 ```
 
 Command failures and grep hits are leads, not findings. Establish whether the

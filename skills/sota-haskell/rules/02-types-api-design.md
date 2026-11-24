@@ -267,6 +267,48 @@ parseAmount :: Text -> Either AmountError Amount
 - Run `cabal haddock all --haddock-all`; broken links and missing modules are API
   defects, not cosmetic warnings.
 
+## 12. Represent money, quantities, and identifiers exactly
+
+Never use `Double` or `Float` for money, balances, or amounts that must
+reconcile, nor for identifiers. Binary floating point cannot represent most
+decimal fractions, sums depend on association order, and integers above 2^53
+are not all representable.
+
+```haskell
+-- BAD: 0.1 + 0.2 /= 0.3; large amounts and IDs round.
+data Price = Price { amount :: Double, currency :: Text }
+
+-- GOOD: exact minor units; the currency fixes the scale.
+newtype Minor = Minor Int64 deriving stock (Eq, Ord)
+data Money = Money { minor :: !Minor, currency :: Currency }
+```
+
+- Default to integer minor units in a newtype. Minor-unit digits differ by
+  currency, so carry the currency with the amount and refuse cross-currency
+  arithmetic. `Int64` wraps silently on overflow: range-check input and use
+  checked arithmetic or `Integer` for aggregates.
+- Decimal alternatives need an explicit rounding policy. `Data.Fixed` (`Centi`
+  is `Fixed E2`) is exact for `+` and `-` at its resolution, but `*` is not
+  associative or distributive (base docs). `Rational` is exact but unbounded
+  and must be rounded to settle. Choose one rounding mode (half-even or
+  half-up) in one function, applied at defined points.
+- `Scientific` is an exact decimal, suited to parsing and holding decoded
+  numbers. `toRealFloat` and `realToFrac` convert to binary floating point and
+  are lossy. Its arithmetic, `toRational`, and `floatingOrInteger` can exhaust
+  memory on a huge untrusted exponent (package docs); convert with
+  `toBoundedInteger`.
+- Splitting, tax, and interest must conserve the total: assign remainders
+  deterministically and test that the parts sum to the whole.
+- Decoding: aeson represents JSON numbers as `Number !Scientific`. Decoding an
+  amount or identifier into `Double` rounds to the nearest double and corrupts
+  64-bit values above 2^53. Parse with `withScientific` (or a string field)
+  into minor units, reject fractional minor units, out-of-range values, and
+  exponents beyond policy. Consumers that read JSON numbers as doubles corrupt
+  wide integers too: carry 64-bit identifiers and large amounts as strings in
+  external formats.
+- Identifiers are newtypes over `Int64`, `Word64`, `Text`, or `UUID`, never over
+  `Double` or `Float`, and have no `Num` instance (§2).
+
 ## References
 
 - https://downloads.haskell.org/ghc/latest/docs/users_guide/exts.html
@@ -277,6 +319,9 @@ parseAmount :: Text -> Either AmountError Amount
 - https://haskell-haddock.readthedocs.io/
 - https://hackage.haskell.org/package/base/docs/Data-Coerce.html
 - https://hackage.haskell.org/package/base/docs/Data-List-NonEmpty.html
+- https://hackage.haskell.org/package/base/docs/Data-Fixed.html
+- https://hackage.haskell.org/package/scientific/docs/Data-Scientific.html
+- https://hackage.haskell.org/package/aeson/docs/Data-Aeson.html
 
 ## Audit checklist
 
@@ -292,6 +337,10 @@ rg -n 'Non-exhaustive|incomplete-(patterns|uni-patterns)|-Wno-incomplete' . --gl
 # Deriving, classes, orphans, coercion, and roles
 rg -n 'deriving (stock|newtype|anyclass|via)|DeriveAnyClass|GeneralizedNewtypeDeriving|StandaloneDeriving' --glob '*.{hs,lhs}'
 rg -n '^instance |OVERLAPP|INCOHERENT|UndecidableInstances|type role|\bcoerce\b|unsafeCoerce' --glob '*.{hs,lhs}'
+
+# Money and identifiers: floating point or lossy conversion near monetary/ID names; decoders should go through withScientific or strings
+rg -n -i '(price|amount|balance|total|cost|fee|rate|money|cents|[a-z]id)\b[^\n]*(Double|Float)\b|(Double|Float)\b[^\n]*(price|amount|balance|money|cents)' --glob '*.{hs,lhs}'
+rg -n '\b(realToFrac|toRealFloat|toRational|fromRational|floatingOrInteger|toBoundedInteger|withScientific|Scientific|Centi)\b|Data\.Fixed' --glob '*.{hs,lhs}'
 
 # Extension policy and documentation evidence
 rg -n 'LANGUAGE|default-extensions:|other-extensions:|StrictData|TemplateHaskell|-fplugin' --glob '*.{hs,lhs,cabal}'

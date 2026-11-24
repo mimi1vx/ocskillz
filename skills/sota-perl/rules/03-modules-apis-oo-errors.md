@@ -176,7 +176,46 @@ die $error unless $ok;
 - Scope guards are useful for local rollback, but process death still requires
   external transactional/idempotent design.
 
-## 8. Logging and diagnostics
+## 8. Failures that bypass catch and recover
+
+`eval`, `try`/`catch`, and Try::Tiny catch only `die`. Some failures skip them,
+and some recovery code never runs:
+
+- `exit` inside `eval` is not an exception: it leaves the program, running
+  destructors and `END` blocks first. Libraries use `die`, never `exit`; only
+  the top-level script decides the exit code.
+- `END` blocks run after `die` and `exit` but not after `exec`, a fatal signal,
+  or `POSIX::_exit`. Inside `END`, `$?` is the pending exit status and any
+  assignment, including from a stray `system` or `close`, changes it. Save and
+  restore `$?` in cleanup code, and never rely on `END` for durable state.
+- A `die` inside `DESTROY` does not propagate. It becomes a warning
+  prefixed `(in cleanup)` (category `misc`, so visible only under
+  `use warnings`; emitted once per distinct message). Cleanup failures vanish
+  unless the destructor logs them. Start destructors with
+  `local($., $@, $!, $^E, $?);` so cleanup cannot clobber the caller's state.
+- Before Perl 5.14, an `eval` or `local $@` run by a destructor during unwinding
+  could overwrite the exception being thrown. On a floor below 5.14, check the
+  `eval` return value rather than `$@` alone, and keep destructors free of
+  `eval` and `local $@`.
+- `$SIG{__DIE__}` runs for every `die`, including ones an enclosing `eval`
+  will catch, and can rewrite the exception. Keep handlers for last-resort
+  logging only, test `$^S` before acting, and prefer the framework's error hook.
+- A signal handler that `die`s unwinds to whatever `eval` is active when the
+  signal is delivered. An `alarm` that fires outside the `eval` it was meant
+  for terminates the program or lands in unrelated code. Arm and clear the
+  alarm inside the same `eval` (see rules/04 §6).
+- A child created by `fork` inside an `eval` inherits that `eval`: if the child
+  dies there, the `eval` catches it and the child continues into the parent's
+  code. In the child, wrap work so every path ends in `POSIX::_exit` (rules/04
+  §2).
+- `warn` never stops execution, and a `__WARN__` handler that returns does not
+  either. Do not use warnings for failures a caller must handle.
+- Some errors are not recoverable: `Out of memory!` makes Perl exit
+  immediately, and a crash in XS code or a `SIGKILL` skips every handler.
+  Correctness there comes from idempotent, transactional external state, not
+  from cleanup code.
+
+## 9. Logging and diagnostics
 
 - Libraries do not configure global logging; applications own handlers,
   levels, destinations, and structured context.
@@ -188,7 +227,7 @@ die $error unless $ok;
 - Bound and sanitize user-controlled fields to prevent multiline/terminal log
   injection; structured fields are preferable to interpolated prose.
 
-## 9. Compatibility and release discipline
+## 10. Compatibility and release discipline
 
 Public CPAN module behavior includes exports, method signatures, accepted
 input, return context, exceptions, metadata, feature flags, and minimum Perl.
@@ -213,6 +252,12 @@ rg -n '\beval\s*\{|\btry\s*\{|Try::Tiny|Feature::Compat::Try|\$@' --glob '*.{pl,
 rg -n 'eval\s*\{[^}]*\};\s*$|warn\s+\$@|return\s+undef|or\s+return\b' --glob '*.{pl,pm,t}'
 rg -n '\b(DESTROY|DEMOLISH)\b|\bdie\b|\bcroak\b|\bconfess\b' lib --glob '*.pm'
 
+# Failures that bypass catch/recover: review each hit in context
+rg -n '\bexit\b|POSIX::_exit|\b_exit\b|^\s*END\s*\{|\$\?\s*=[^=~]' lib --glob '*.pm'
+rg -n -A8 'sub (DESTROY|DEMOLISH)\b' lib --glob '*.pm'   # die/eval/system/close inside a destructor, missing local($@, $?)
+rg -n '\$SIG\{(__DIE__|ALRM|INT|TERM)\}|\balarm\b|local \$SIG' --glob '*.{pl,pm,t}'
+rg -n -B3 -A12 '\bfork\b' --glob '*.{pl,pm}'   # a fork reachable from inside eval/try without _exit on every child path
+
 # Mutable defaults and representation exposure
 rg -n "default\s*=>\s*[\[{]|sub\s+new\b|\{\$self\}|\$self->\{" lib --glob '*.pm'
 
@@ -233,3 +278,8 @@ contract, not the token itself.
 - https://perldoc.perl.org/perlclass
 - https://perldoc.perl.org/Carp
 - https://perldoc.perl.org/perlsyn#Try-Catch-Exception-Handling
+- https://perldoc.perl.org/perlobj#Destructors
+- https://perldoc.perl.org/perlmod#BEGIN,-UNITCHECK,-CHECK,-INIT-and-END
+- https://perldoc.perl.org/functions/exit
+- https://perldoc.perl.org/perlvar#%25SIG
+- https://perldoc.perl.org/perl5140delta#Exception-Handling

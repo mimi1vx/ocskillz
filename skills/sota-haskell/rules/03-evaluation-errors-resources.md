@@ -286,11 +286,54 @@ meaningful exit status, and release owned resources before exit.
 - Test failures during acquisition, use, forced evaluation, cleanup, streaming
   early termination, and cancellation.
 
+## 12. Failures that bypass the handler you wrote
+
+A handler covers only exceptions of its type raised while its action runs, in
+its thread. Check these escape routes (§1, §6, §8, and 04 §1-3 cover the rest).
+
+```haskell
+-- BAD: pure/return hands back a thunk; the exception fires at the caller's use.
+r <- try (pure (parseConfig bytes)) :: IO (Either ParseError Config)
+
+-- GOOD: force at the boundary that owns the failure.
+r <- try (evaluate (force (parseConfig bytes)))
+```
+
+- `evaluate` reaches WHNF only; `evaluate (force x)` needs `NFData` (§1).
+  Prefer `evaluate` to `return $! x`: the latter raises while the action is
+  built, and which exception wins is imprecise. `safe-exceptions` offers
+  `tryAnyDeep`/`catchAnyDeep`, which force the result.
+- Identify asynchronous exceptions by type: `AsyncException` (`ThreadKilled`,
+  `UserInterrupt`, `StackOverflow`, `HeapOverflow`), `System.Timeout.Timeout`,
+  `AllocationLimitExceeded`, and `async`'s `AsyncCancelled` are all raised
+  wrapped in `SomeAsyncException`. A `SomeException` handler must rethrow when
+  `fromException e :: Maybe SomeAsyncException` is `Just`. Swallowing `Timeout`
+  makes the deadline silently inoperative.
+- `Control.Exception.Safe` (`safe-exceptions`): `catch`, `try`, and `handle`
+  do not catch asynchronous exceptions; `catchAny`/`tryAny` catch all synchronous
+  ones; `catchAsync`/`tryAsync` remove the protection. These still catch
+  `ExitCode` and `ErrorCall`.
+- `HeapOverflow` from `-M` is delivered as an exception; the RTS re-raises only
+  after a grace period (`-Mgrace`), and a program that keeps catching or masks
+  the receiving thread can exceed the limit. Do not resume normal work after it.
+- `exitWith`, `exitFailure`, `exitSuccess`, and `die` throw `ExitCode`, an
+  ordinary `Exception`: a broad handler intercepts the exit (`bracket` cleanup
+  still runs). Called outside the main thread, they throw but do not end the
+  process. Return a result to the owner and exit from `main`; let a broad
+  handler rethrow `fromException e :: Maybe ExitCode`.
+- A `forkIO` child discards `BlockedIndefinitelyOnMVar`,
+  `BlockedIndefinitelyOnSTM`, and `ThreadKilled`, and sends every other
+  exception to the uncaught-exception handler; the creator never sees it, and a
+  dead worker looks like an idle one. Use `withAsync`/`link` (04 §1) or
+  `forkFinally` with explicit reporting.
+
 ## References
 
 - https://downloads.haskell.org/ghc/latest/docs/users_guide/using-optimisation.html#strictness
 - https://downloads.haskell.org/ghc/latest/docs/users_guide/runtime_control.html
 - https://hackage.haskell.org/package/base/docs/Control-Exception.html
+- https://hackage.haskell.org/package/base/docs/System-Exit.html
+- https://hackage.haskell.org/package/safe-exceptions
 - https://hackage.haskell.org/package/deepseq
 - https://hackage.haskell.org/package/text
 - https://hackage.haskell.org/package/bytestring
@@ -312,6 +355,11 @@ rg -n 'hGetContents|unsafeInterleaveIO|lazy|toList|sinkList|cache|memo|ByteStrin
 # Exception breadth, masking, and resource scopes
 rg -n '\b(catch|catches|try|handle|throw|throwIO|SomeException|AsyncException)\b' --glob '*.{hs,lhs}'
 rg -n '\b(bracket|bracketOnError|finally|onException|mask|mask_|uninterruptibleMask|withFile|openFile|hClose)\b' --glob '*.{hs,lhs}'
+
+# Handler bypass: lazy results under try/catch, async or exit swallowed by broad handlers, unobserved workers
+# Each SomeException/catchAny handler must rethrow SomeAsyncException and ExitCode; each try over pure/return needs evaluate
+rg -n '\b(try|catch|handle)\b[^\n]*\b(pure|return)\b|\b(catchAny|tryAny|catchAsync|tryAsync|SomeAsyncException|fromException|ExitCode)\b' --glob '*.{hs,lhs}'
+rg -n '\b(exitWith|exitFailure|exitSuccess|die|forkIO|forkFinally|tryAnyDeep|catchAnyDeep)\b' --glob '*.{hs,lhs}'
 
 # Text/bytes conversion and explicit streaming bounds
 rg -n '\b(String|Text|ByteString|Lazy\.Text|Lazy\.ByteString|encodeUtf8|decodeUtf8|decodeUtf8With|Builder)\b' --glob '*.{hs,lhs}'

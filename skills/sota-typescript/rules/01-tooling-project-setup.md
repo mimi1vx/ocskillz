@@ -298,8 +298,34 @@ Each is a separate step so the failure name tells you what broke. A single
 `bun run ci` chain is fine locally; in CI, separate steps give separate
 diagnostics.
 
+## 1.11 Suppressions must fail when they go stale
+
+A suppression comment outlives the problem it hid. Once the code is fixed,
+the comment silently pre-excuses the next real defect on that line. Make each
+tool report unused suppressions **as a CI failure**, not a note in the log.
+
+| Tool | Unused-suppression behavior | Make it fail CI |
+|---|---|---|
+| TypeScript | `// @ts-expect-error` reports `Unused '@ts-expect-error' directive` when no error follows; `// @ts-ignore` never reports | Use `@ts-expect-error` only; `tsc --noEmit` is already the gate (§1.4) |
+| Biome | `// biome-ignore …` (also `-all`, `-start`/`-end`) that suppresses nothing emits a **warning**-level `suppressions/unused` diagnostic | `biome ci --error-on-warnings .` |
+| ESLint | `linterOptions.reportUnusedDisableDirectives` reports `eslint-disable` comments that suppress nothing; the documented default is `"warn"` | set it to `"error"` in `eslint.config.js`, or pass `--report-unused-disable-directives-severity error` |
+
+- **A warning does not fail a run by default** in either linter (ESLint also
+  needs `--max-warnings 0` to turn warnings into a failure). Set the severity
+  or the flag explicitly; relying on the default leaves stale suppressions
+  green.
+- Every suppression carries a reason: `// biome-ignore lint/rule: why`,
+  `// eslint-disable-next-line rule -- why`, `// @ts-expect-error why`.
+- Prefer a scoped config override for a whole class of files (generated code)
+  over a per-line comment repeated across the tree.
+
 ## Audit checklist
 
+- [ ] Stale suppressions can pass CI: `rg -n 'error-on-warnings' .github/ package.json`
+      (Biome) and `rg -n 'reportUnusedDisableDirectives|report-unused-disable' eslint.config.* .github/ package.json`
+      (ESLint); suppression comments present
+      (`rg -c 'biome-ignore|eslint-disable|@ts-ignore'`) with neither gate →
+      MEDIUM. `@ts-ignore` present anywhere → see `rules/02` checklist.
 - [ ] Two package managers? `ls` for `bun.lock`, `package-lock.json`,
       `pnpm-lock.yaml`, `yarn.lock` in one repo → HIGH (divergent graphs).
 - [ ] Is the type gate in CI? `rg -n 'tsc --noEmit|tsc --build' .github/ package.json`

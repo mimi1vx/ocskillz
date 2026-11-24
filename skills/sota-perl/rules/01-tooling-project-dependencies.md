@@ -176,6 +176,22 @@ perlcritic --profile .perlcriticrc lib script
   suppression diff during focused work.
 - `## no critic` names the policy, covers the smallest possible scope, and has
   a reason. Bare file-wide suppressions are debt, not compliance.
+- Report suppressions that no longer suppress anything.
+  `Miscellanea::ProhibitUselessNoCritic` flags a `## no critic` that suppresses
+  no violation under the current profile, or names a pattern broader than the
+  violations it covers. `Miscellanea::ProhibitUnrestrictedNoCritic` flags a bare
+  `## no critic` and malformed policy lists that silently disable every policy.
+  Both are core policies with low and medium default severity, below
+  perlcritic's default threshold of 5, so they do nothing unless the profile
+  enables them (`severity` in `.perlcriticrc`, `--include`, or a lower
+  `--severity`). Run them as CI steps, one `perlcritic -s ProhibitUselessNoCritic lib`
+  and one `perlcritic -s ProhibitUnrestrictedNoCritic lib`; `--single-policy`
+  overrides severity and theme settings but its pattern must match exactly one
+  policy.
+- Recheck a suppression after changing `.perlcriticrc` or the severity level;
+  either change can make an old annotation useless or reveal a new one.
+- `perlcritic --force` ignores all `## no critic` annotations; use it
+  occasionally to list what suppressions hide.
 - Do not enable unsafe policies while scanning untrusted source.
 
 ## 7. Documentation and dependency review
@@ -211,6 +227,10 @@ rg -n -- '--force|--notest|cpanm .*http://' .github .gitlab-ci.yml Dockerfile* 2
 ls .perltidyrc .perlcriticrc 2>/dev/null
 rg -n 'perltidy|perlcritic|prove|cpan-audit' .github .gitlab-ci.yml Makefile.PL dist.ini 2>/dev/null
 rg -n '## no critic' --glob '*.{pl,pm,t}'
+rg -n '##\s*no critic\s*($|[^(q])' --glob '*.{pl,pm,t}'
+perlcritic --profile .perlcriticrc -s ProhibitUselessNoCritic lib script
+perlcritic --profile .perlcriticrc -s ProhibitUnrestrictedNoCritic lib script
+perlcritic --profile .perlcriticrc --force lib script   # suppressed violations; compare to the normal run
 
 # Namespace/layout and generated distribution hygiene
 rg -n '^package ' lib --glob '*.pm'
@@ -228,3 +248,5 @@ repository lacks an equivalent enforced control.
 - https://metacpan.org/pod/Carton
 - https://perldoc.perl.org/ExtUtils::MakeMaker
 - https://metacpan.org/pod/Perl::Critic
+- https://metacpan.org/pod/Perl::Critic::Policy::Miscellanea::ProhibitUselessNoCritic
+- https://metacpan.org/pod/Perl::Critic::Policy::Miscellanea::ProhibitUnrestrictedNoCritic

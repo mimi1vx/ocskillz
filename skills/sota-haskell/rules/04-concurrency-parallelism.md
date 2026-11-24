@@ -110,6 +110,12 @@ withLease pool = bracket (acquire pool) (release pool)
   foreign calls.
 - `throwTo` waits until the target receives the exception. It can block the
   sender and should not be used as an unbounded request/response mechanism.
+- `throwTo`, `killThread`, `cancel`, and `timeout` deliver only when the target
+  reaches a safe point (allocation). A tight non-allocating loop is not
+  interrupted (`-fomit-yields` is on by default; `-fno-omit-yields` adds yield
+  points, also needed in libraries), and a running foreign call is not
+  interrupted until it returns unless it is `interruptible`. Bound such work
+  by input size or run it in a killable subprocess.
 - Cleanup must be idempotent where duplicate shutdown paths are possible, and
   it must not wait forever.
 

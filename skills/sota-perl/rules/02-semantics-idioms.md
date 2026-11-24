@@ -179,6 +179,37 @@ my $wire = encode('UTF-8', $text, FB_CROAK);
 - Keep complex transformations in named subroutines and label nested loops
   when labels clarify multi-level `next`/`last` behavior.
 
+## 11. Money, precision, and numeric identifiers
+
+Native Perl numbers with a fractional part are binary floating point. Most
+decimal fractions are not exactly representable:
+
+```perl
+0.1 + 0.2 == 0.3;       # false
+sprintf '%.2f', 2.675;  # "2.67", not "2.68"
+int(19.99 * 100);       # 1998
+```
+
+- Store money as integer minor units (cents, pence) plus a currency code, and
+  convert only at the display and parse boundaries. Parse decimal text by
+  string/integer splitting, never `$text * 100`.
+- When fractions are inherent (rates, proration), use `Math::BigInt` or
+  `Math::BigFloat` (both core) with an explicit rounding mode, or a reviewed
+  decimal module. Round once, at a documented step, not after every operation.
+- Never compare floats with `==`/`!=`. Compare integer minor units, or compare
+  with an explicit tolerance for measurements that are not money.
+- `sprintf '%.Nf'` is formatting, not decimal rounding: it rounds the binary
+  value, so half-way cases land on either side.
+- JSON decoding can lose precision: integers beyond the native range may come
+  back as floats or strings, and fractional numbers as floats. `JSON::PP` and
+  `Cpanel::JSON::XS` offer `allow_bignum`, which decodes such values to
+  `Math::BigInt`/`Math::BigFloat`; enable it where exact values matter.
+- JavaScript consumers read JSON numbers as doubles, exact only to 2^53. Emit
+  64-bit IDs, snowflake IDs, and monetary amounts as JSON strings, and treat
+  identifiers as opaque strings in Perl (`eq`, never `==` or arithmetic).
+- Format with a numeric type in mind: `"$n"` of a float can drop digits or
+  switch to exponent form (`1e+15`) in logs, URLs, and signed payloads.
+
 ## Audit checklist
 
 ```bash
@@ -205,6 +236,10 @@ rg -n '>:utf8|<:utf8|use utf8' --glob '*.{pl,pm,t}'
 
 # Regex whole-string and interpolation review
 rg -n '=~\s*m?[{/].*\$|\^.*\$|\$\w+.*[+*}]' --glob '*.{pl,pm,t}'
+
+# Float arithmetic or equality on money; review each hit [HIGH when it moves money]
+rg -ni '\$\w*(amount|price|total|balance|cost|fee|tax|subtotal|discount)\w*\s*([-+*/]=?|==|!=)|[-+*/]\s*\$\w*(amount|price|total|balance|cost|fee|tax|subtotal|discount)|\*\s*100\b|sprintf\s*\(?\s*.%\.\d+f' --glob '*.{pl,pm,t}'
+rg -n 'decode_json|JSON(::PP|::XS)?->new|allow_bignum' --glob '*.{pl,pm}'
 ```
 
 The bulk compile command may need repository-specific include paths, generated
@@ -219,3 +254,6 @@ defects.
 - https://perldoc.perl.org/perlref
 - https://perldoc.perl.org/perlunicode
 - https://perldoc.perl.org/perlre
+- https://perldoc.perl.org/perlnumber
+- https://perldoc.perl.org/Math::BigFloat
+- https://metacpan.org/pod/JSON::PP#allow_bignum

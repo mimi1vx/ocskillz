@@ -187,6 +187,35 @@ load rather than a clean error.
 - Do not mix callback and promise styles in one API; wrap callbacks once at the
   boundary (`node:util.promisify` or a hand-written adapter).
 
+## 4.9 Failures that bypass your `try`/`catch`
+
+A `catch` only sees synchronous throws and rejections of promises it awaits.
+Each of these skips it. Floating promises (§4.1) and `Promise.all` siblings
+(§4.2) are covered above; the rest:
+
+- **Callbacks scheduled for later.** An error thrown inside a `setTimeout`,
+  `setInterval`, or event-listener callback unwinds into the event loop, not
+  into the `try` that registered it. In Node it surfaces as
+  `uncaughtException`. Put the `try`/`catch` (or a `.catch`) inside the
+  callback.
+- **`EventEmitter` `'error'` with no listener.** Emitting `'error'` with no
+  listener throws, and the process exits if nothing catches it. Attach an
+  `'error'` listener to every emitter and stream you create or receive —
+  sockets, child processes, and streams included.
+- **Async listeners.** `emitter.on("x", async () => { … })` turns a throw into
+  a rejection nobody holds; handle failure inside the listener.
+- **Non-promise callback APIs.** A callback-style function reports failure
+  through its `err` argument; a `throw` inside that callback is not caught by
+  the call site. Wrap once with `promisify` (§4.8) and `await` it.
+- **`process.exit()` terminates synchronously.** It does not wait for pending
+  async work (including stdout/stderr writes), and `finally` blocks that have
+  not yet run do not run. Set `process.exitCode` and let the loop drain, or run
+  the shutdown sequence (§4.7) and then exit.
+- **`uncaughtException` handlers that carry on.** Node documents the event as
+  a last resort: the application is in an undefined state, and resuming normal
+  operation can cause further unpredictable failures. The handler logs,
+  flushes, and exits non-zero — it is not an error-recovery path.
+
 ## Audit checklist
 
 - [ ] Floating promises: is the linter's no-floating-promises rule enabled?
@@ -225,5 +254,13 @@ load rather than a clean error.
 - [ ] Request context in module-level mutable state instead of
       `AsyncLocalStorage`: `rg -n '^(let|var) (current|active|request)' src/`
       → HIGH (cross-request bleed).
+- [ ] Errors that skip the `catch`: `rg -n -A4 'setTimeout\(|setInterval\(|\.on\(\s*["\x27]\w+["\x27],\s*async' --glob '**/*.ts'`
+      for a throwing or rejecting body with no inner `try`/`.catch` → MEDIUM,
+      HIGH in a long-running server (process crash or silent drop);
+      `rg -n 'new EventEmitter|extends EventEmitter|spawn\(|createReadStream\(|createWriteStream\(|\.pipe\(' --glob '**/*.ts'`
+      with no `.on("error"` nearby → HIGH (unhandled `'error'` exits the
+      process); `rg -n 'process\.exit\(' --glob '**/*.ts'` outside the
+      top-level entry or after un-flushed work → MEDIUM;
+      `rg -n "on\('uncaughtException'" -A5` that does not exit → HIGH.
 - [ ] `try` around an un-awaited async call:
       `rg -n -A3 'try \{' --glob '**/*.ts' | rg -n '^\s+\w+\([^)]*\);'` → MEDIUM.

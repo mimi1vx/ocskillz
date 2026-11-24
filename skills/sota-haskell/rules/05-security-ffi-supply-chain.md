@@ -131,6 +131,16 @@ reviewed `unix`/FFI wrappers for these OS primitives.
   restrictive permissions. Predictable temp names and check-then-create are
   races; use `openBinaryTempFileWithDefaultPermissions` only after reviewing
   its permission and directory guarantees for the deployment.
+- `openTempFile`/`openBinaryTempFile` create a uniquely named file with
+  owner-only permissions (`O_CREAT|O_EXCL` on Unix; exclusivity may not hold on
+  NFS) and never delete it. The `...WithDefaultPermissions` variants and
+  `temporary`'s `openNewBinaryFile` use default permissions (666 instead of
+  600): never for secrets or anything another local user must not read.
+- Prefer `withSystemTempFile`/`withSystemTempDirectory` (or `withTempFile`/
+  `withTempDirectory`) from `temporary`: the path is removed after use, also on
+  exceptions. Use `createTempDirectory` for a directory (owner-only on POSIX)
+  and create files inside it. Do not invent names under `/tmp` for `writeFile`,
+  `createDirectory`, or `renameFile`.
 - Archive extraction must reject absolute/traversing member names, links and
   special files unless explicitly supported, and enforce total decoded limits.
 - Permission checks and the eventual operation should use the same open object
@@ -145,6 +155,14 @@ reviewed `unix`/FFI wrappers for these OS primitives.
 - Do not derive `Show`, `Generic`-based logging, JSON encoders, or broad record
   dumps for secret-bearing types. Define redacted instances and explicit
   serialization.
+- A secret leaks by value through whatever default rendering reaches it:
+  `show`/`displayException` of an exception that embeds a request or URL,
+  `Debug.Trace`, `printf`/`show` of a config record, and `SomeException`
+  logged by a catch-all. Keep secrets out of URLs and query strings, wrap them
+  in a newtype whose `Show` prints a fixed marker, and render caught errors
+  through a function that picks fields, not through `show`. Check what a
+  library's error type prints before logging it (reproduce one failure with a
+  fake secret and read the output).
 - Keep secret lifetime and copies small. Immutable `ByteString`/`Text` values
   may be copied, retained by thunks, or preserved in heap/core dumps; garbage
   collection is not secure erasure.
@@ -283,12 +301,192 @@ cabal list --installed
 - Use least-privilege CI tokens, pin third-party CI actions by immutable commit,
   and separate dependency builds from release-signing credentials.
 
+Run these checks on every added package, not only on the first one:
+
+- **Identity.** On the Hackage page, confirm that the name, maintainers, home
+  page, and source-repository link belong to the project you intend; look-alike
+  names, abandoned forks, and re-uploads are common. `cabal get <pkg>-<version>`
+  and read the `.cabal` file, `Setup.hs`, and any foreign sources of the exact
+  tarball you will build.
+- **History.** Check upload dates, release cadence, changelog, maintainer
+  changes, deprecation, and open advisories. Reverse-dependency count is a
+  scrutiny signal (a popular-sounding name with almost none is suspicious; many
+  dependents do not prove safety).
+- **Plan delta.** Diff the solver plan before and after the change. Every new
+  transitive package, flag flip, and bound change gets the same review.
+- **Insecure defaults.** Read what the library does when left unconfigured.
+  `http-client`'s `defaultManagerSettings` has no TLS (`https` requests fail
+  with `TlsNotSupported`; use `http-client-tls`), its response timeout defaults
+  to 30 s for response headers, `redirectCount` defaults to 10, and `httpLbs`
+  reads the whole body. A TLS settings value with
+  `settingDisableCertificateValidation = True` (`crypton-connection`) turns
+  certificate checking off. Warp's default `setHost` is a wildcard preference.
+  `Data.Scientific` arithmetic on untrusted exponents can exhaust memory.
+  Configure limits, timeouts, and TLS once in a small wrapper module.
+
+## 11. Outbound requests and SSRF
+
+A URL, host, or port that originates outside the trust boundary can steer a
+server-side request at loopback, private networks, or cloud metadata
+(`169.254.169.254`). Authorize the destination, not the URL string.
+
+```haskell
+-- BAD: validates text only; DNS answers, redirects, and proxies are unchecked.
+unless (allowedUrl url) (throwIO Forbidden)
+req <- parseRequest (T.unpack url)
+httpLbs req manager
+
+-- GOOD: the restriction runs where the connection is made.
+let publicOnly = addressRestriction $ \addr ->
+      if isInternal (addrAddress addr)
+        then Just (connectionRestricted ("blocked address " ++) addr)
+        else Nothing
+(settings, _) <- mkRestrictedManagerSettings publicOnly Nothing Nothing
+manager <- newManager settings
+```
+
+- Allowlist scheme (`http`/`https`), host, and port. Reject userinfo
+  (`allowed.example@evil.example`), parse once, and request the value that was
+  validated. `requestFromURI` accepts only `http`/`https`; never pass a user URL
+  to `curl`, `wget`, converters, or file APIs through `proc`.
+- Judge resolved addresses, for every address a name returns: reject loopback
+  (`127.0.0.0/8`, `::1`), unspecified, RFC 1918, `100.64.0.0/10`, link-local
+  (`169.254.0.0/16`, `fe80::/10`), unique-local (`fc00::/7`), and IPv4-mapped
+  IPv6 forms of those. Compare parsed addresses, not strings.
+- Resolve-then-fetch is racy: DNS rebinding returns a public address to the
+  check and an internal one to the connection. Check and connect with the same
+  address. `ManagerSettings` exposes `managerRawConnection` and
+  `managerTlsConnection` for this; `http-client-restricted`
+  (`addressRestriction`, `mkRestrictedManagerSettings`) connects to the checked
+  address and applies the restriction to each redirect and to the HTTP proxy.
+  Review it like any dependency (§10).
+- Redirects are followed transparently (`redirectCount`, default 10). Either
+  enforce the check inside the connection hook, or set `redirectCount = 0` and
+  re-validate and re-resolve each `Location`. `shouldStripHeaderOnRedirect`
+  keeps all headers by default: strip `Authorization` and cookies before a
+  cross-host hop.
+- `defaultProxy` honours `http_proxy`/`https_proxy`; a connect-time check then
+  sees the proxy, not the target. Use `managerSetProxy noProxy` or enforce policy
+  at the proxy.
+- Bound the response: `managerResponseTimeout` covers response headers only.
+  Use `withResponse` with `brRead`/`brReadSome`, a byte cap, and a deadline
+  instead of `httpLbs`, and do not reflect fetched bodies, status codes, or
+  connection errors to a caller when the target is attacker-chosen.
+- Egress firewalling and a hardened metadata service are the backstop, not a
+  substitute for the checks above.
+
+## 12. Regular expressions on untrusted input
+
+Choose the engine by its worst case and treat the pattern as code.
+
+- `regex-tdfa` is a pure-Haskell POSIX engine without backreferences; its
+  README states matching should take O(N) time with memory bounded by the
+  pattern. Known slow cases: large character classes combined with `{m,n}`.
+  Prefer it for untrusted subjects.
+- PCRE-based libraries (`pcre-light`, `regex-pcre`, `regex-pcre-builtin`) use
+  PCRE's standard matcher, a depth-first backtracking search. Nested
+  quantifiers such as `(a+)+$` can take exponential time on near-matches. Do
+  not use them with attacker-supplied patterns, or with unreviewed patterns on
+  attacker-sized subjects. `regex-pcre-builtin` bundles PCRE sources (§10).
+- Never splice user text into a pattern. Use `T.isInfixOf`/`isPrefixOf` for
+  literals, or keep the pattern constant and pass user text as the subject. If
+  a quoted literal is unavoidable, escape every metacharacter by hand and
+  test it with generated input; neither `regex-tdfa` nor `pcre-light` exports a
+  quoting helper.
+- Invalid patterns: `=~` in `regex-tdfa` calls `error` on a processing failure and
+  `pcre-light`'s `compile` throws. For any non-constant pattern use `=~~` or
+  `makeRegexM` (`MonadFail`), or `compileM`.
+- Validation means matching the whole input. An unanchored match accepts a valid
+  substring of hostile text. With `defaultCompOpt`, `regex-tdfa` has
+  `multiline = True`, so `^`/`$` match at embedded newlines: anchor with
+  `` \` `` and `\'` (start/end of entire text). In PCRE use `\A` and `\z`; `$`
+  also matches before a final newline unless `dollar_endonly` is set.
+- Cap subject length first (§3). `System.Timeout.timeout` is an asynchronous
+  exception: it is delivered only at allocation points, and a foreign call
+  such as a C matcher cannot be timed out. For backtracking or FFI engines it
+  is not a defense; use a linear-time engine or a killable subprocess.
+- For structured grammars (URLs, dates, versions, config, anything nested) use
+  `attoparsec` or `megaparsec` with bounds and a total result type, not a regex.
+
+## 13. Runtime code loading is arbitrary code execution
+
+Code that is loaded, interpreted, or compiled at run time runs with the
+process's privileges, secrets, filesystem, and network.
+
+- Surfaces: `hint` (`Language.Haskell.Interpreter`), `plugins`
+  (`System.Plugins`, `System.Eval`), `dynamic-loader`, the `ghc` package,
+  `System.Posix.DynamicLinker` (`dlopen`/`dlsym`) and `foreign import ccall
+  "dynamic"` calls through the resulting pointers.
+- Never evaluate, interpret, compile, or load user-supplied expressions,
+  modules, library paths, or plugin names. Restricting imports or using Safe
+  Haskell is not a sandbox (§7), and an interpreted expression is unbounded in
+  CPU and memory (`timeout` cannot stop a non-allocating loop, §12).
+- Load native libraries and plugins only from absolute, trusted, non-writable
+  locations; pin path and checksum.
+- `cast` and `fromDynamic` are checked and are not loaders. An external tag
+  that selects a type followed by `unsafeCoerce` is memory misinterpretation
+  (§1).
+- When extensibility is required, prefer data: a total config format, a small
+  language with a total parser and an evaluator limited by fuel and size and
+  without `IO`, or statically linked handlers selected by name. If real
+  plugins are required, run them in a separate process under resource limits
+  and least privilege (`sota-sandboxing`) behind a narrow protocol, and kill
+  from outside on a deadline.
+- Interpreters in build tooling or test harnesses over trusted source are fine;
+  keep them out of release executables (for example behind a Cabal flag).
+
+## 14. Keep debug and profiling surface out of release artifacts
+
+Developer diagnostics write files, expose internals, and leak data.
+
+```cabal
+-- BAD: any caller, or the GHCRTS environment variable, can set any RTS flag.
+ghc-options: -rtsopts
+-- GOOD: fixed flags; callers cannot change them.
+ghc-options: -threaded -rtsopts=none "-with-rtsopts=-N2 -T"
+```
+
+- RTS options can write files with the process's privileges (`-s <file>`,
+  `-S <file>`, `-l`/`-ol`, heap profiles); this is why GHC defaults to
+  `-rtsopts=some` (only `-?` and `--info`). `-rtsopts` means `all`, for argv
+  and `GHCRTS`. `none` aborts on `+RTS` and ignores `GHCRTS` with a warning;
+  `ignoreAll` also ignores `GHCRTS`. `-with-rtsopts` applies regardless. Open
+  RTS options suit internal binaries with trusted argv and environment only.
+- Do not ship `-debug` (debug RTS: assertions, `-D` flags) or profiling builds.
+  `+RTS -xc` prints a stack trace for every exception to stderr and exists only
+  in profiling builds.
+- `Debug.Trace` (`trace`, `traceShow`, `traceShowId`, `traceM`, `traceIO`) is
+  documented as not for production code. Ban it with an HLint `functions` rule
+  (`{name: Debug.Trace.trace, within: []}` per function) or a CI grep.
+- Monitoring listeners: `ekg`'s `forkServer host port` is reachable by anyone on
+  the network unless bound to `"localhost"` or an equivalent; Warp's default
+  `setHost` is `HostIPv4`, a wildcard. Bind admin, metrics, and debug listeners
+  to `"127.0.0.1"` or an internal interface and authenticate them.
+- Error bodies: Warp's `defaultOnExceptionResponse` sends generic 400/500
+  responses; `exceptionResponseForDebug` returns the shown exception as a
+  `text/plain` 500. Keep it out of release (`setOnExceptionResponse`), and do not
+  render `show`/`displayException` output into response bodies; log it with a
+  correlation id (03 §11).
+- Test the artifact, not the flags: run the release binary with
+  `+RTS -s -RTS`; it must abort unless open RTS options are intended.
+
 ## References
 
 - https://downloads.haskell.org/ghc/latest/docs/users_guide/exts/safe_haskell.html
 - https://downloads.haskell.org/ghc/latest/docs/users_guide/exts/ffi.html
 - https://hackage.haskell.org/package/process
 - https://hackage.haskell.org/package/directory
+- https://hackage.haskell.org/package/temporary
+- https://hackage.haskell.org/package/http-client
+- https://hackage.haskell.org/package/http-client-restricted
+- https://hackage.haskell.org/package/regex-tdfa
+- https://hackage.haskell.org/package/pcre-light
+- https://hackage.haskell.org/package/base/docs/System-Timeout.html
+- https://hackage.haskell.org/package/hint
+- https://hackage.haskell.org/package/warp
+- https://hackage.haskell.org/package/ekg
+- https://downloads.haskell.org/ghc/latest/docs/users_guide/phases.html
+- https://downloads.haskell.org/ghc/latest/docs/users_guide/runtime_control.html
 - https://github.com/haskell/hackage-security
 - https://github.com/haskell/security-advisories
 - https://www.haskell.org/ghcup/about/#security
@@ -300,6 +498,10 @@ cabal list --installed
 rg -n '\b(unsafePerformIO|unsafeDupablePerformIO|unsafeInterleaveIO|unsafeCoerce)\b' --glob '*.{hs,lhs}'
 rg -n 'LANGUAGE.*(TemplateHaskell|Unsafe)|OPTIONS_GHC.*-fplugin|Trustworthy|Safe-Inferred' --glob '*.{hs,lhs}'
 
+# Secret printed by value: derived Show on secret-bearing types, errors rendered with show
+rg -n 'deriving.*Show' --glob '*.{hs,lhs}' | rg -i 'secret|token|password|apikey|credential'
+rg -n '\bshow\b.*(SomeException|\be\b)|displayException' --glob '*.{hs,lhs}'
+
 # Shell/argv and secret-bearing process surfaces
 rg -n '\b(callCommand|readCreateProcess|createProcess|proc|shell|system|rawSystem)\b' --glob '*.{hs,lhs}'
 rg -ni "(api[_-]?key|secret|password|token).*[=:].*['\"][^'\"]{8,}" --glob '*.{hs,lhs,cabal,project,yaml,yml,json}'
@@ -307,6 +509,25 @@ rg -ni "(api[_-]?key|secret|password|token).*[=:].*['\"][^'\"]{8,}" --glob '*.{h
 # Partial parsing, unbounded input, paths, archives, and temp files
 rg -n '\b(read|head|tail|init|last|fromJust)\b|!!|hGetContents|readFile|decode|decompress|extract' --glob '*.{hs,lhs}'
 rg -n 'canonicalizePath|normalise|makeRelative|isPrefixOf|\.\./|openTempFile|createDirectory|renameFile' --glob '*.{hs,lhs}'
+
+# Temp files: reject fixed names, default-permission variants holding secrets, and paths without scoped cleanup
+rg -n 'openTempFile|openBinaryTempFile|WithDefaultPermissions|openNewBinaryFile|createTempDirectory|withSystemTemp|withTempFile|getTemporaryDirectory|"/tmp' --glob '*.{hs,lhs}'
+
+# Outbound requests (SSRF): trace every URL, host, and port to its origin; confirm the check runs at connect time
+rg -n 'parseRequest|requestFromURI|parseUrl|httpLbs|httpNoBody|withResponse|newManager|defaultManagerSettings|tlsManagerSettings|redirectCount|managerRawConnection|managerTlsConnection|addressRestriction|managerSetProxy|defaultProxy' --glob '*.{hs,lhs}'
+rg -n '\b(proc|shell|callCommand)\b[^\n]*\b(curl|wget)\b' --glob '*.{hs,lhs}'
+
+# Regexes: each non-literal pattern needs an origin; each validation needs whole-text anchors; timeout is not a bound
+rg -n 'Text\.Regex|regex-(tdfa|pcre)|pcre-light|\b(makeRegex|makeRegexM|compile|compileM|matchTest)\b|=~~?' --glob '*.{hs,lhs,cabal}'
+rg -n 'newSyntax|multiline|dollar_endonly|dotall|\\A|\\z|\\`' --glob '*.{hs,lhs}'
+rg -n '\btimeout\b' --glob '*.{hs,lhs}'
+
+# Runtime code loading: every hit needs a trusted-source argument for the code, path, or name loaded
+rg -n 'Language\.Haskell\.Interpreter|System\.Plugins|System\.Eval|System\.Posix\.DynamicLinker|\b(dlopen|dlsym)\b|dynamic-loader|build-depends:[^\n]*\b(hint|plugins|ghc)\b|foreign import ccall +"dynamic"|\b(fromDynamic|cast)\b' --glob '*.{hs,lhs,cabal}'
+
+# Debug and profiling surface: open RTS options, trace calls, wildcard listeners, debug error bodies
+rg -n -e '-rtsopts|-with-rtsopts|-debug|-prof\b|enable-profiling|profiling:|-eventlog|-fprof' . --glob '*.{cabal,project,yaml,yml,nix}' --glob '*ockerfile*' --glob 'Makefile'
+rg -n '\bDebug\.Trace\b|\b(trace|traceShow|traceShowId|traceM|traceShowM|traceIO)\b|forkServer|System\.Remote\.Monitoring|setHost|exceptionResponseForDebug|setOnExceptionResponse|displayException' --glob '*.{hs,lhs}'
 
 # FFI declarations and manual lifetime management
 rg -n 'foreign (import|export)|ccall (unsafe|safe|interruptible)|StablePtr|newStablePtr|freeStablePtr|freeHaskellFunPtr' --glob '*.{hs,lhs,hsc,chs}'
@@ -317,6 +538,13 @@ rg -n 'build-type: *Custom|custom-setup|build-tool-depends|TemplateHaskell|-fplu
 rg -n 'source-repository-package|repository |index-state|active-repositories|allow-newer|constraints' --glob 'cabal.project*'
 cabal build all --dry-run
 cabal outdated --freeze-file
+
+# Dependency identity and insecure defaults: for every added package open its Hackage page (name, maintainer, repo, uploads, reverse dependencies) and `cabal get` its source
+git diff -U0 -- '*.cabal' 'cabal.project*' | rg '^\+'
+rg -n 'defaultManagerSettings|settingDisableCertificateValidation|TLSSettingsSimple|managerResponseTimeout|responseTimeout|setTimeout|setHost' --glob '*.{hs,lhs}'
+
+# Release artifact: open RTS options must be rejected (abort) unless intended
+"$RELEASE_BIN" +RTS -s -RTS
 ```
 
 Grep hits are leads, not findings. Trace data origin, bounds, ownership,

@@ -143,6 +143,30 @@ Perl's backtracking regex engine can consume exponential time.
   all leak surfaces.
 - Obtain secrets from a secret manager or narrow environment injection; redact
   by construction and rotate any exposed value.
+- A secret held in a plain scalar prints itself through every default
+  formatter. Typical leak routes:
+  - `Data::Dumper` dumps a blessed hash's fields and ignores `""` overloading.
+  - `Carp` backtraces (`confess`, `cluck`, `$Carp::Verbose`, and any
+    `$SIG{__DIE__}` handler that calls them) print call arguments, by default
+    up to 8 arguments of 64 characters each. Carp stringifies objects without
+    overloading unless the class defines `CARP_TRACE`.
+  - `die $object` stringification, `warn`/`carp` of config or request data,
+    and dumps of `%ENV` or a whole config hash.
+  - DBI `ShowErrorStatement` appends the statement and `ParamValues` (bound
+    values) to `RaiseError`/`PrintError` messages; DBI traces expose them too.
+- Wrap each secret in a small class that holds the value in a closure, overloads
+  `""` to a fixed marker such as `[REDACTED]`, defines `CARP_TRACE` returning
+  the same marker, and exposes the value only through an explicit method called
+  at the point of use. A closure-held value shows in `Data::Dumper` as a
+  placeholder `sub { "DUMMY" }` rather than the secret. This prevents
+  accidental disclosure, not memory inspection. A blessed hash with only an
+  overload is not enough.
+- Redact at the boundaries that serialize: the logger and the error/response
+  renderer. Scrub keys such as `password`, `token`, `secret`, `api_key`,
+  `authorization`, `cookie`, and `set-cookie` before output; do not dump HTTP
+  client request objects or config hashes into logs.
+- Secrets never go in URLs or query strings: they reach access logs, proxies,
+  `Referer`, and error messages. Send them in headers or bodies.
 - Use operating-system CSPRNG-backed maintained modules for tokens; never
   `rand`.
 - Use maintained password-hashing and crypto libraries; no custom crypto,
@@ -189,9 +213,49 @@ without dependency changes.
 - Authenticate webhooks over the exact raw bytes, compare MACs in constant
   time, enforce freshness, and make replay handling explicit.
 
+## 11. Debug surfaces shipped to production
+
+Treat anything that changes behavior or verbosity for debugging as an exposure
+until proven off in the deployed environment.
+
+- Debugger and tracing hooks: a bare `-d` runs the code named by `PERL5DB`
+  (default `perl5db.pl`); `-d:MOD` loads `Devel::MOD`; `PERL5OPT` accepts
+  `-d`, `-D`, `-M` and a few other switches and applies them to every Perl
+  process that inherits the variable (it is ignored under taint mode). Check
+  service units, containers, CI images, and shebang lines. Keep `Devel::*`
+  modules out of the runtime image and load them only for a bounded
+  investigation.
+- Environment toggles (`DEBUG`, `TRACE`, `*_VERBOSE`, `PLACK_ENV`,
+  `MOJO_MODE`, `MOJO_LOG_LEVEL`) must default to the safe value. `plackup`
+  defaults `PLACK_ENV` to `development`, which loads the AccessLog,
+  StackTrace, and Lint middleware; `Plack::Middleware::StackTrace` records
+  every exception, even caught ones, and renders stack traces to the client.
+  Mojolicious defaults `mode` to `development` when neither `MOJO_MODE` nor
+  `PLACK_ENV` is set, and then logs at `trace` level. Deploy with an explicit
+  production mode and assert it at startup.
+- Do not enable `StackTrace`, debug panels, or equivalent middleware in a
+  production app definition. Return an opaque error ID to clients and keep
+  details in server-side logs.
+- Never send `Data::Dumper` or `Carp` output, `%ENV`, config, session, or
+  request data in an HTTP response, email, or externally visible job result.
+- `warn`, `carp`, and debug logging fire in production too. Keep credentials,
+  tokens, and personal data out of them (see §8).
+- Remove leftover `$DB::single = 1`, `local $Data::Dumper::...` debug prints,
+  and `-d`/`Devel::` switches before release.
+
 ## Audit checklist
 
 ```bash
+# Debug hooks and shipped debug modes [HIGH when reachable in production]
+rg -n 'PERL5DB|PERL5OPT|\$DB::single|#!.*perl.*\s-d|-d:\w|Devel::\w+|-MDevel::' . --glob '!local/**'
+rg -n 'PLACK_ENV|MOJO_MODE|MOJO_LOG_LEVEL|\$ENV\{[A-Z_]*DEBUG\w*\}|StackTrace|Plack::Middleware::(Debug|Lint)|plackup.*(-E|--env)\s*development|->mode\s*\(' --glob '*.{pl,pm,psgi,t,conf,yml,yaml}' Dockerfile* .env* 2>/dev/null
+rg -n 'Dumper\s*\(\s*(\$ENV|%ENV|\$req|\$c->req|\$config|\$session|\\%ENV)|(print|render|text|json)\b.*(Dumper|confess|longmess)|\bwarn\b.*(password|token|secret|\$ENV)' --glob '*.{pl,pm,psgi}'
+
+# Secrets printed by default stringification [HIGH when a real credential reaches output]
+rg -n 'Dumper|confess|cluck|longmess|\$Carp::Verbose|use Carp.*verbose|__DIE__|ShowErrorStatement|ParamValues|\bTraceLevel\b|->trace\s*\(' --glob '*.{pl,pm,psgi,t}'
+rg -ni '(password|passwd|secret|token|api_?key|authorization)\w*\s*(=>|=)[^;]*(Dumper|print|warn|log|croak|die)|[?&](token|key|api_?key|password|secret|access_token)=' --glob '*.{pl,pm,psgi,t}'
+rg -n 'overload.*""|CARP_TRACE' --glob '*.pm' lib
+
 # Taint and environment controls
 rg -n '^#!.*perl.*-T|\b-T\b|local %ENV|\$ENV\{(PATH|IFS|CDPATH|ENV|BASH_ENV)\}' --glob '*.{pl,pm,t}'
 
@@ -221,11 +285,24 @@ rg -n 'http://.*cpan|curl.*\|.*perl|--force|--notest' . --glob '!local/**'
 Do not report a regex, `eval`, DBI call, or dynamic require without tracing the
 source and mitigations. Block eval is not string eval.
 
+For the debug and secret probes, a hit in a test, a local-only script, or a
+non-sensitive value is not a finding. Report when the production start path,
+container, or unit file can reach the debug mode, or when a real credential can
+reach a log, response, or trace; check the deployed `PLACK_ENV`/`MOJO_MODE`
+rather than the framework default.
+
 ## References
 
 - https://perldoc.perl.org/perlsec
 - https://security.metacpan.org/
 - https://security.metacpan.org/2025/06/06/two-arg-open.html
 - https://perldoc.perl.org/Storable#SECURITY-WARNING
+- https://perldoc.perl.org/perlrun
+- https://perldoc.perl.org/Carp
+- https://perldoc.perl.org/Data::Dumper
+- https://metacpan.org/pod/DBI#ShowErrorStatement
+- https://metacpan.org/pod/plackup
+- https://metacpan.org/pod/Plack::Middleware::StackTrace
+- https://metacpan.org/pod/Mojolicious#mode
 - https://metacpan.org/pod/DBI#Placeholders-and-Bind-Values
 - https://github.com/briandfoy/cpan-audit

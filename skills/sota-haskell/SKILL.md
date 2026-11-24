@@ -116,7 +116,7 @@ data flow before reporting a defect.
 | CRITICAL | Direct compromise, arbitrary code, memory unsafety, or destructive corruption | shell injection; attacker-controlled build/plugin execution with secrets; proven `unsafeCoerce`/FFI type or lifetime violation; auth bypass |
 | HIGH | Realistic exploit or production-breaking correctness failure | unbounded hostile input/queue causing OOM; async-exception resource leak or deadlock; swallowed cancellation; path traversal/TOCTOU; public partiality reachable from untrusted data; false compatibility causing release failure |
 | MEDIUM | Latent defect or materially weakened defense | orphaned child; lazy state space leak; inaccurate dependency lower bound; unchecked process exit; unreviewed TH/custom setup; missing clean-sdist test for a release |
-| LOW | Maintainability, portability, or hygiene risk | broad exports; undocumented partial invariant; stale extension; unscoped HLint suppression; missing Haddock contract |
+| LOW | Maintainability, portability, or hygiene risk | broad exports; undocumented partial invariant; stale extension; unscoped or stale HLint/`-Wno-` suppression; missing Haddock contract |
 | INFO | Useful observation without required action | optional tooling consolidation; future compiler support opportunity |
 
 Severity scales with reachability, attacker control, data/resource loss, and
@@ -144,10 +144,10 @@ explicitly clean areas, and anything not reviewed.
 | File | Read this when... |
 |---|---|
 | [rules/01-tooling-project-dependencies.md](rules/01-tooling-project-dependencies.md) | Selecting GHC/GHCup/Cabal/HLS; scaffolding packages or workspaces; editing `.cabal`, `cabal.project`, freeze files, bounds, formatter/linter config, or dependency plans |
-| [rules/02-types-api-design.md](rules/02-types-api-design.md) | Designing ADTs, newtypes, classes, instances, modules, export lists, deriving, roles, extensions, public compatibility, or Haddock APIs |
-| [rules/03-evaluation-errors-resources.md](rules/03-evaluation-errors-resources.md) | Reasoning about laziness, strictness, bottom, partial functions, typed errors, exceptions, async exceptions, resource cleanup, streaming, Text, or ByteString |
+| [rules/02-types-api-design.md](rules/02-types-api-design.md) | Designing ADTs, newtypes, classes, instances, modules, export lists, deriving, roles, extensions, public compatibility, Haddock APIs, or money/identifier representation |
+| [rules/03-evaluation-errors-resources.md](rules/03-evaluation-errors-resources.md) | Reasoning about laziness, strictness, bottom, partial functions, typed errors, exceptions, async exceptions, failures that escape handlers, resource cleanup, streaming, Text, or ByteString |
 | [rules/04-concurrency-parallelism.md](rules/04-concurrency-parallelism.md) | Using async/forkIO, STM, MVar, queues, cancellation, masking, parallel strategies, capabilities, worker pools, or graceful shutdown |
-| [rules/05-security-ffi-supply-chain.md](rules/05-security-ffi-supply-chain.md) | Handling hostile input, paths, commands, archives, secrets, unsafe functions, Template Haskell/plugins/custom Setup, Safe Haskell, FFI, native lifetimes, or dependency advisories |
+| [rules/05-security-ffi-supply-chain.md](rules/05-security-ffi-supply-chain.md) | Handling hostile input, paths, temp files, commands, archives, secrets, outbound URLs (SSRF), regexes, runtime code loading, unsafe functions, Template Haskell/plugins/custom Setup, Safe Haskell, FFI, native lifetimes, dependency adoption/advisories, or debug surface in release artifacts |
 | [rules/06-performance.md](rules/06-performance.md) | Investigating CPU, allocation, residency, GC, laziness, data structures, fusion, concurrency scaling, Criterion benchmarks, Core, or performance claims |
 | [rules/07-testing-ci-packaging.md](rules/07-testing-ci-packaging.md) | Writing/running Cabal tests, Hspec/Tasty/HUnit, QuickCheck, golden tests, HPC, doctest/Haddock, compiler matrices, lower bounds, source distributions, Hackage releases, or provenance |
 
@@ -178,7 +178,8 @@ explicitly clean areas, and anything not reviewed.
    sandbox untrusted builds; Safe Haskell alone is not isolation. (rules/05)
 8. **Untrusted data is bounded before expensive work.** Cap bytes, nesting,
    counts, decompression, allocation, process output, and parser time; commands
-   use executable plus argv and paths use capability-safe operations. (rules/05)
+   use executable plus argv, paths use capability-safe operations, and outbound
+   destinations are checked at connect time. (rules/05)
 9. **No optimization without forcing-correct evidence.** Baseline optimized
    representative work, profile the relevant resource, validate equivalent
    output/evaluation, and benchmark before/after; strictness and `INLINE` are

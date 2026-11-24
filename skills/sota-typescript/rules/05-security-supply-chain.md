@@ -42,6 +42,25 @@ if (full !== baseDir && !full.startsWith(baseDir + path.sep)) {
 Checking for `".."` in the input is not sufficient — encodings, absolute paths,
 and symlinks all bypass it. Reject NUL bytes explicitly.
 
+**Temp files.** A predictable name in a shared directory is a race and a
+symlink-planting target. Create a private directory with an unpredictable
+name, then create files inside it exclusively:
+
+```ts
+const dir = await fs.mkdtemp(path.join(os.tmpdir(), "job-"));
+await fs.chmod(dir, 0o700);
+await fs.writeFile(path.join(dir, "out.bin"), data, { flag: "wx", mode: 0o600 });
+// ... use it, then
+await fs.rm(dir, { recursive: true, force: true });   // in finally
+```
+
+- Never `/tmp/<fixed-name>` and never check-then-create (`exists` then write);
+  the `wx` flag makes the create fail if the path already exists, so the check
+  and the create are one step.
+- `mode` only applies to a file the call creates, so pair it with `wx`.
+- Remove the directory in a `finally`; crash-leftover temp data is still data
+  at rest.
+
 **Outbound URLs (SSRF).** A user-supplied URL is a request your server makes
 with your network position. Parse with `new URL()`, allowlist the scheme
 (`https:` only) and the host, resolve the hostname and reject loopback,
@@ -114,6 +133,35 @@ if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
 - Errors returned to clients carry stack traces and SQL fragments if you let
   them. Return a code and a correlation id; log the detail server-side.
 - Compare secrets with a constant-time function, never `===`.
+- **A secret must not print by value.** Default stringification is the leak:
+  `console.log(obj)`, `util.inspect`, `JSON.stringify`, `` `${value}` ``, and
+  an error's stack or `cause` chain (`util.inspect` serializes `cause`
+  recursively) all dump whatever the object holds. HTTP-client errors are the
+  usual carrier — axios exposes the request `config`, headers included, through
+  `error.config` and `error.toJSON()`.
+
+```ts
+const INSPECT = Symbol.for("nodejs.util.inspect.custom");
+
+class Secret {
+  readonly #value: string;
+  constructor(value: string) { this.#value = value; }
+  reveal(): string { return this.#value; }
+  toJSON(): string { return "[REDACTED]"; }
+  toString(): string { return "[REDACTED]"; }
+  [INSPECT](): string { return "Secret([REDACTED])"; }
+}
+```
+
+  - Hold tokens, keys, and passwords in such a wrapper from the moment they are
+    read from env or a vault; unwrap with `reveal()` only at the call that
+    sends them. Bun documents `Bun.inspect.custom` as identical to Node's
+    inspect hook.
+  - Redact in the logger **and** at the point an error is serialized into a
+    response, a log line, or an error-tracker payload. Log a picked subset of
+    an HTTP error (`status`, `code`, `message`) rather than the error object.
+  - Never put secrets in URLs or query strings — they land in access logs,
+    `Referer` headers, and `error.config.url`. Send them in a header or body.
 
 ## 5.6 Dependency and supply-chain hygiene
 
@@ -145,6 +193,15 @@ npm is the largest attack surface most TypeScript projects have.
 - **Regex**: nested quantifiers over user input backtrack catastrophically.
   Avoid `(a+)+`-shaped patterns, prefer explicit parsing, and **escape any
   user-supplied substring** before embedding it in a pattern.
+- **`RegExp` is a backtracking engine**, so ReDoS is possible in any pattern
+  with ambiguous repetition, not only the obvious ones. Cap input length
+  before matching, and for patterns or inputs you do not control use a
+  linear-time matcher or a real parser. Never `new RegExp(userText)`; escape
+  with `RegExp.escape()` (runtime floor permitting) or a vetted helper.
+- **A validation regex must cover the whole input.** `.test()` and `.match()`
+  succeed on any substring, so `/\d+/.test("x1x")` is `true`; anchor with both
+  `^` and `$`. The `m` flag makes `^`/`$` match at every line boundary, so
+  `/^\d+$/m.test("abc\n123")` is `true` — no `m` on validators.
 - **Body and upload limits** are enforced while streaming, not after buffering
   (`rules/04` §4.6). Also limit JSON nesting depth and array lengths in the
   schema.
@@ -165,6 +222,19 @@ npm is the largest attack surface most TypeScript projects have.
   development script that will be copied into a Dockerfile.
 - Keep the runtime patched; a pinned base image that never moves accumulates
   known CVEs.
+- **No debug surface in production.**
+  - The inspector (`--inspect`, `--inspect-brk`, `--inspect-wait`) is remote
+    code execution for whoever can connect. It defaults to `127.0.0.1:9229`;
+    never pass a non-loopback host such as `0.0.0.0`, and keep the port out of
+    `EXPOSE`, port mappings, and security-group rules.
+  - Debug flags and dev mode (`NODE_ENV` other than `production`, `DEBUG`-style
+    switches, verbose-error middleware) must not be the deployed default —
+    derive them from validated config, defaulting to off.
+  - Clients get an error code and a correlation id, never a stack trace
+    (§5.5).
+  - Production bundles do not carry public source maps: bundler `sourcemap` is
+    `none` for browser output, or the `.map` files go to the error tracker and
+    are excluded from the deployed static directory.
 
 ## Audit checklist
 
@@ -206,3 +276,27 @@ npm is the largest attack surface most TypeScript projects have.
 - [ ] ReDoS shapes: `rg -n '\(\[?[^)]*[+*]\)[+*]' --glob '**/*.ts'` and any regex
       built from user input without escaping → HIGH.
 - [ ] Missing body/upload size limits on request parsing → MEDIUM.
+- [ ] Regex built from input or validating only a substring:
+      `rg -n 'new RegExp\(' --glob '**/*.ts'` with a non-literal argument and no
+      `RegExp.escape`/escape helper → HIGH; then read each validation regex
+      (`rg -n '\.test\(|\.match\(' --glob '**/*.ts'`) for missing `^`/`$`, or a
+      trailing `/m` (`rg -n '/[a-z]*m[a-z]*\.test\('`) → MEDIUM, HIGH when it
+      gates authorization, a redirect target, or a filename.
+- [ ] Temp files: `rg -n "/tmp/|tmpdir\(\)|exists\(|existsSync\(" --glob '**/*.ts'`
+      — fixed names under a shared directory, or `mkdtemp` absent where a temp
+      file is written, or `writeFile` without `flag: 'wx'` after an exists
+      check → MEDIUM, HIGH when the path is predictable and the content is
+      sensitive or later executed.
+- [ ] Secrets printed by value: read where config/env secrets are stored — a
+      bare `string` in a config object that is later logged is a finding.
+      `rg -n 'inspect\.custom|toJSON' --glob '**/*.ts'` finds existing
+      wrappers; then `rg -n 'log\w*\.\w+\((err|error|e)\b|console\.\w+\((err|error|e)\b|JSON\.stringify\((err|error|config|options|req)\b'`
+      for whole error/config/request objects reaching output → HIGH when the
+      object can carry an `Authorization` header or token; also
+      `rg -n '[?&](token|api[_-]?key|secret|password)='` → HIGH.
+- [ ] Debug surface shipped: `rg -n -- '--inspect' Dockerfile* package.json docker-compose* .github/`
+      with a host of `0.0.0.0` or a published port → CRITICAL; any `--inspect`
+      in a production start script → HIGH; `rg -n "NODE_ENV|DEBUG" Dockerfile* .env*`
+      for dev values in deploy config → MEDIUM; `rg -n 'sourcemap|--sourcemap'`
+      in build config and `ls dist/**/*.map` in the deploy artifact → MEDIUM
+      for browser bundles served publicly (maps expose source).
