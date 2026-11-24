@@ -2,6 +2,8 @@
 name: pr-review
 description: Pre-PR checklist and reviewer briefing. Summarizes diff scope, flags breaking changes, checks test coverage delta, and suggests changelog entries. Use before opening a pull request or when reviewing one.
 license: MIT
+metadata:
+  adapted-from: mattpocock/skills@abeeaf9 (code-review, pr)
 ---
 
 # PR Review
@@ -96,17 +98,27 @@ Read your own diff top to bottom. You'll catch 30% of issues yourself.
 
 ```markdown
 ## Summary
-<one-paragraph: what and why>
 
-## Changes
-- <bullet>
-- <bullet>
+<smallest visual that makes the key point: pseudocode, call tree, file tree, diff sketch, or Mermaid>
+
+## Evidence
+
+- **Before:** <screenshot / output / failing test run>
+  **After:** <screenshot / output / passing test run>
+  (per claim: `command or procedure` → observed result: passed / failed / not run + reason)
 
 ## Breaking Changes
 <none / list with migration notes>
 
-## Testing
-<per claim: `command or procedure` → observed result (passed / failed / not run + reason)>
+## Merge Danger
+
+**Door:** <one-way or two-way>
+
+<optional: description>
+
+**Blast Radius:** <one-word description>
+
+<optional: potential ramifications of merge>
 
 ## Related
 <issue links, design docs, prior PRs>
@@ -115,30 +127,152 @@ Read your own diff top to bottom. You'll catch 30% of issues yourself.
 <things you want the reviewer to look at carefully>
 ```
 
-Keep the description scannable. Reviewers triage by skimming.
+Skip preambles and keep prose brief. Use the project's domain vocabulary
+(GLOSSARY.md, AGENTS.md or docs, if present). Keep the description scannable;
+reviewers triage by skimming.
+
+### Summary
+
+Pick the smallest view that makes the key point clear, placed next to the short text
+it supports. Keep only the calls, files, props, states, and boundaries the reader
+needs. Use one visual or several; rarely all.
+
+- **Logic or algorithm** → pseudocode:
+
+```text
+on(save)
+  if content is unchanged
+    return cached result
+  write new content
+  return fresh result
+```
+
+- **Runtime control flow** → call tree:
+
+```text
+submitForm
+  createSession
+    persistPrompt
+    launchAgent
+  navigateToSession
+```
+
+- **UI structure** → component tree, including state and module boundaries that matter.
+- **File responsibility or a broad refactor** → shallow file tree:
+
+```text
+src/
+├── commands/       # parses user actions
+├── sessions/       # owns session state
+└── transport/      # sends API requests
+```
+
+- **Component interaction or data flow** → Mermaid:
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant UI
+    participant Daemon
+    User->>UI: choose command
+    UI->>Daemon: send expanded prompt
+    Daemon-->>UI: stream result
+```
+
+- **What changes, when the surrounding shape already exists** → a `diff` sketch in the shape of the topic (component tree, file layout, call tree, or control flow):
+
+```diff
+ on(save)
+-  write content
++  if content is unchanged
++    return cached result
++  write new content
++  invalidate cache
+```
+
+- **Mostly new code, or order and ownership would be hidden by omitted context** → the whole block.
+
+### Evidence
+
+Concrete proof the change works, as a before and after. Screenshots are best when the
+change is visual and the environment allows. Execution evidence is next: test results
+and console output; show the exact test that now fails-then-passes, in pseudocode.
+
+### Merge Danger
+
+A **two-way door** can be walked back; a **one-way door** cannot. A PR that is cheap
+to roll back is lower risk; destructive actions and hard-to-reverse decisions are
+one-way doors. **Blast radius** is the scope of impact: layout shift, consumer
+breakage, mobile responsiveness, and so on. Consider all of it.
 
 ## Reviewing Someone Else's PR
 
-A two-pass approach:
+Review the changes since a fixed point along two axes:
 
-### Pass 1 — Big picture (5 minutes)
+- **Standards**: does the code follow this repo's documented coding standards?
+- **Spec**: does the code match what the originating issue or spec asked for?
 
-- Read the description. Does it answer *what* and *why*?
-- Look at the file tree of changes. Does scope match description?
-- Read the tests. They tell you what behavior is being claimed.
-- Form an opinion: should this PR exist as written?
+A change can pass one axis and fail the other, so each runs separately and neither
+masks the other.
 
-If pass 1 raises structural concerns, raise them **before** doing pass 2. Don't waste time on line-level nitpicks for a PR that needs to be split.
+### 1. Pin the fixed point
 
-### Pass 2 — Line by line
+Use the ref the user gave (commit, branch, tag, `main`, `HEAD~5`); ask if none. Capture
+`git diff <fixed-point>...HEAD` (three-dot: against the merge-base) and
+`git log <fixed-point>..HEAD --oneline`. Confirm `git rev-parse <fixed-point>` resolves
+and the diff is non-empty. A bad ref or empty diff fails here, before any subagent starts.
 
-For each changed file:
-- Does each change trace to the stated goal?
-- Are there obvious bugs, edge cases, security issues?
-- Are names clear? Comments accurate?
-- Do tests cover the change?
+### 2. Find the spec
 
-Use the `code-reviewer` agent for systematic line-level review.
+In order: issue references in commit messages (`#123`, `Closes #45`); a path the user
+passed; a spec file under `docs/`, `specs/`, or a plan directory matching the branch or
+feature. If none is found, ask. If the user says there is none, skip the Spec pass and
+say so in the report.
+
+### 3. Find the standards sources
+
+Search the repo for every file that documents how code is written. `CODING_STANDARDS.md`,
+`CONTRIBUTING.md`, and `AGENTS.md` go on the list when present.
+
+On top of the repo's documents, the Standards axis carries a **smell baseline**: twelve
+Fowler code smells (*Refactoring*, ch. 3) that apply even when a repo documents nothing.
+Smells are always judgement calls ("possible Feature Envy"), never hard violations. A
+documented repo standard overrides the baseline: where it endorses something a smell
+would flag, suppress the smell. Skip anything tooling already enforces.
+
+- **Mysterious Name**: a name that doesn't reveal what it does or holds. → rename it; no honest name means the design is murky.
+- **Duplicated Code**: the same logic shape in more than one hunk or file. → extract and share it.
+- **Feature Envy**: a method that reaches into another object's data more than its own. → move it onto the data it envies.
+- **Data Clumps**: the same few fields or params travel together. → bundle them into one type.
+- **Primitive Obsession**: a primitive or string standing in for a domain concept. → give the concept its own small type.
+- **Repeated Switches**: the same `switch`/`if` cascade on one type recurs. → polymorphism, or one shared map.
+- **Shotgun Surgery**: one logical change forces scattered edits across many files. → gather what changes together.
+- **Divergent Change**: one module edited for several unrelated reasons. → split by reason to change.
+- **Speculative Generality**: abstraction, parameters, or hooks for needs the spec doesn't have. → delete; inline back.
+- **Message Chains**: long `a.b().c().d()` navigation. → hide the walk behind one method.
+- **Middle Man**: a class or function that mostly delegates onward. → cut it; call the target directly.
+- **Refused Bequest**: a subclass that ignores or overrides most of what it inherits. → composition instead.
+
+### 4. Pre-read
+
+Skim the description, the file tree of changes, and the tests (they
+state the behaviour being claimed). If scope looks wrong or the PR needs splitting,
+raise that first rather than spending time on line-level findings.
+
+### 5. Run both passes
+
+Run **Standards** and **Spec** as two parallel, read-only `explore` subagents, each with
+a fresh context. If subagents are not available, run them as two separate passes.
+
+- **Standards brief:** give the diff command, the commit list, the standards files from step 3, and the smell baseline pasted in full. Ask for: (a) each place the diff breaks a documented standard, citing file and rule; (b) any baseline smell, named, with the hunk quoted. Distinguish hard violations (documented standards) from judgement calls (smells). Under 400 words.
+- **Spec brief:** give the diff command, the commit list, and the spec text or path. Ask for: (a) requirements missing or partial; (b) behaviour not asked for (scope creep); (c) requirements that look implemented but look wrong. Quote the spec line for each finding. Under 400 words.
+
+### 6. Report
+
+Present `## Standards` and `## Spec`, verbatim or lightly cleaned. Do not merge or
+rerank across axes. End with the finding count per axis and the worst issue *within
+each axis*; never pick one winner across them. Use the `code-reviewer` agent when a
+systematic line-level review is also wanted.
 
 ## Output Categories
 
