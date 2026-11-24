@@ -53,6 +53,8 @@ Requires OpenCode V2. V1 is no longer supported — see [Installation](#installa
 | [idea-wizard](./skills/idea-wizard/SKILL.md) | "generate ideas", "improve project" | Brainstorm 30 ideas, filter and rank them, plan the best, and implement only the ones the user approves. |
 | [readme-reviser](./skills/readme-reviser/SKILL.md) | "update readme", "revise docs", "sync docs", "stale docs" | Add, correct, and remove documentation to match the current code, written in timeless voice. |
 | [ste-english](./skills/ste-english/SKILL.md) | "STE", "simplified technical english", "rewrite in STE" | Write or audit text in ASD-STE100 style: short sentences, simple verbs, a short substitution table. |
+| [codebase-design](./skills/codebase-design/SKILL.md) | Designing a module interface, placing a seam, deepening shallow modules | Deep-module vocabulary (module, interface, depth, seam, adapter), the deletion test, dependency categories, and design-it-twice with parallel subagents. |
+| [writing-for-agents](./skills/writing-for-agents/SKILL.md) | Creating or editing skills, commands, AGENTS.md, or docs agents read | Context pointers, context versus cognitive load, information hierarchy, completion criteria, leading words, pruning. |
 
 ### Agents (`agents/`)
 
@@ -74,6 +76,9 @@ opencode also ships built-in `build` and `plan` agents — referenced by some co
 | [code-reorganizer](./commands/code-reorganizer.md) | `planner` | Propose a reorganization plan for scattered code files. |
 | [walkthrough](./commands/walkthrough.md) | `plan` (built-in) | Walk through a PR/diff one behavioral topic at a time using `change-walkthrough`. |
 | [ste](./commands/ste.md) | current agent | Write or rewrite text in ASD-STE100 style using `ste-english`. |
+| [handoff](./commands/handoff.md) | current agent | Write a handoff document of the conversation to the OS temp directory for a fresh agent. |
+| [retro](./commands/retro.md) | current agent | Review a session and suggest improvements to the agent's environment (suggests only, no edits). |
+| [wait-what](./commands/wait-what.md) | current agent | Re-pitch the last message with the missing context, in STE and the project's vocabulary. |
 
 Launch `refactor` through the `subagent` tool rather than selecting it as the session's primary agent.
 
@@ -105,9 +110,9 @@ ok   [changelog-generator]
 ok   [agent: planner]
 ok   [command: test]
 
-registration: 34 skills, 3 agents, 6 commands
+registration: 36 skills, 3 agents, 9 commands
 
-Checked: 43  Errors: 0
+Checked: 48  Errors: 0
 ```
 
 Three phases run:
@@ -143,6 +148,12 @@ Original local skills, including `sota-haskell` and `sota-perl`, are MIT-license
 in their frontmatter. The externally adapted `sota-*` skills are CC BY 4.0. See
 [SOTA-ATTRIBUTION.md](./skills/SOTA-ATTRIBUTION.md) for source, modification,
 pinning, and refresh details.
+
+`debug-loop`, `pr-review`, `spec-to-plan`, `writing-for-agents`, `codebase-design`, and
+the `handoff`, `retro`, and `wait-what` commands adapt text from
+[mattpocock/skills](https://github.com/mattpocock/skills) (MIT, © 2026 Matt Pocock). See
+[MATTPOCOCK-ATTRIBUTION.md](./skills/MATTPOCOCK-ATTRIBUTION.md) for the pinned commit,
+the MIT notice, and the humanlayer/skills credit.
 
 `change-walkthrough` is an original MIT-licensed skill, inspired by the concept
 of `rekram1-node/skills`, not derived from its text.
