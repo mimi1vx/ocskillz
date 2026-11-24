@@ -274,6 +274,13 @@ func UserFrom(ctx context.Context) (*User, bool) {
 - Pass `ctx` down every blocking call: DB (`QueryContext`), HTTP
   (`http.NewRequestWithContext`), exec (`exec.CommandContext`). A blocking
   call without ctx on a request path is a HIGH leak/latency hazard.
+- **A per-call default timeout is applied unconditionally:** `ctx, cancel :=
+  context.WithTimeout(ctx, d)`. `WithDeadline` already keeps the parent's
+  deadline when it is sooner, so this *is* `min(d, remaining)`
+  (`sota-async-concurrency` rules/05). The anti-pattern is the special case
+  `if _, ok := ctx.Deadline(); ok { return ctx }`. Under an 8 h job context it
+  hands the query 8 h, not `d`. Measured 2026-11-15, go1.27.3: 8h0m0s against 30s.
+  A field session saw database calls wait out a proxy's 1 h read timeout this way.
 - `context.Background()` only in `main`, init paths, and tests
   (`t.Context()` in 1.24+); `context.TODO()` is a tracked refactor marker —
   audit lingering TODOs as LOW.
@@ -308,7 +315,7 @@ func UserFrom(ctx context.Context) (*User, bool) {
       `Z07`, `-0700` or `MST` element the result is UTC, so local input needs `ParseInLocation`)
 - [ ] **NaN/Infinity accepted from input; divide-by-zero and overflow at MinInt (§4) — MEDIUM,
       HIGH where the value gates money, limits or allocation** —
-      `grep -rlE 'strconv\.ParseFloat\(' --include='*.go' . | xargs grep -LE 'math\.Is(NaN|Inf)\('`
+      `grep --null -rlE 'strconv\.ParseFloat\(' --include='*.go' . | xargs -0 grep -LE 'math\.Is(NaN|Inf)\('`
       (files that parse floats and never test for non-finite values) ; then read integer
       `/`, `%`, negation and `time.Duration(n) *` sites on untrusted values for a guard
 - [ ] **Index or slice bound taken from a decoded field without a `len()` check (§4) — HIGH
@@ -318,12 +325,16 @@ func UserFrom(ctx context.Context) (*User, bool) {
 - [ ] **Context violations (§8)** —
       `grep -rnE '^[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+context\.Context[[:space:]]*(//.*)?$|struct[[:space:]]*\{.*[[:space:]]context\.Context' --include='*.go' .`
       (ctx in struct — MEDIUM);
-      `grep -rnE 'func [^(]*\([^)]*\bctx context\.Context' --include='*.go' . | grep -vE '\(ctx context\.Context'`
+      `grep -rnE 'func [^(]*\([^)]*\bctx context\.Context' --include='*.go' . | grep -vE '^[^:]+:[0-9]+:.*(\(ctx context\.Context)'`
       (ctx not first param); `grep -rnE 'context\.WithValue\([^,]+,[[:space:]]*("|[0-9]|(string|int)\()' --include='*.go' .` (a string, number or
       built-in-typed key; payloads stay manual); `grep -rn 'context.TODO()' --include='*.go' .` (LOW, should be tracked);
       `grep -rnE 'context\.Background\(\)' --include='*.go' . | grep -v 'main\|_test'`
       (suspicious mid-stack) ; manual: work that outlives a request uses
       `context.WithoutCancel(ctx)` with its own timeout, never the request ctx or `Background()`
+- [ ] **A default timeout skipped when the caller has a deadline (§8)** —
+      `grep -rnE 'if _, ok := [A-Za-z_]+\.Deadline\(\); ok' --include='*.go' .` ; read each branch:
+      returning the ctx unchanged lets a long job deadline remove the bound. Apply
+      `context.WithTimeout` unconditionally
 - [ ] **Blocking calls missing ctx variants (§8) — HIGH on request paths** —
       `grep -rnE '\.(Query|QueryRow|Exec)\(' --include='*.go' . | grep -v Context` ;
       `grep -rn 'http.Get(\|http.Post(' --include='*.go' .` ;

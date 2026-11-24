@@ -4,7 +4,7 @@ description: >-
   State-of-the-art LLM application engineering rules for BUILDING and AUDITING LLM-powered features. Use whenever building, modifying, or reviewing anything that calls a language model — chat features, RAG pipelines, agents and tool use, structured extraction, classification, summarization, embeddings/vector search, evals and regression gates, prompt or context engineering, model selection/routing, fine-tuning decisions, or LLM cost/latency/observability work. Trigger keywords: LLM, AI feature, prompt, system prompt, context window, RAG, retrieval, embeddings, vector DB, rerank, chunking, agent, tool use, MCP, multi-agent, evals, golden set, LLM-as-judge, fine-tuning, model selection, routing, structured output, JSON schema, prompt caching, token budget, counting tokens, instruction file size, tokenizer, hallucination, grounding. Covers build-quality only — for prompt-injection/agent-security use sota-code-security rules/08 and sota-sandboxing rules/05.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@4c4837e3f891b4194623e467fec6294df4ff8d0a
+  source: martinholovsky/SOTA-skills@d5425a76c6ea9c2416bd42d3f031b5407a1f781d
   adapted-for: opencode
 ---
 
@@ -39,7 +39,8 @@ live in [`sota-code-security` rules/08](../sota-code-security/rules/08-llm-ai-se
 [`sota-privacy-compliance`](../sota-privacy-compliance/SKILL.md). Reference them; don't re-derive them.
 
 **Freshness rule:** model names, prices, context limits, and spec revisions in
-these files were verified June 2026 and rot fast. When a decision hinges on a
+these files were verified as of 2026-09-26 (upstream's last full verification sweep; a section may
+carry a later date) and rot fast. When a decision hinges on a
 specific model/price/limit, re-verify against provider docs or the project's
 provider reference skill before encoding it. Write code
 version-agnostically: model IDs and parameters in config, never inline.
@@ -126,7 +127,7 @@ systemic themes — "no evals anywhere" is one systemic finding, not twenty).
 
 | File | Topics | Read this when... |
 |---|---|---|
-| [rules/01-evals.md](rules/01-evals.md) | Eval-first development, golden sets, assertion/rubric/pairwise evals, LLM-as-judge + judge validation, offline vs online, CI regression gates, production sampling into eval sets, error analysis, metric pitfalls (judge bias, contamination, **an arm blind to the treatment — its `+0.00` is structural, not a result**, and **a saturated measure — both arms at the ceiling is a fact about the instrument, never about the system**) | ...building ANY LLM feature (start here), changing a prompt/model, reviewing whether quality claims are real, setting up CI for an LLM repo |
+| [rules/01-evals.md](rules/01-evals.md) | Eval-first development, golden sets, assertion/rubric/pairwise evals, LLM-as-judge + judge validation, offline vs online, CI regression gates, production sampling into eval sets, error analysis, metric pitfalls (judge bias, contamination, **an arm blind to the treatment — its `+0.00` is structural, not a result**, and **a saturated measure — both arms at the ceiling is a fact about the instrument, never about the system**, and **two runs compared case by case, transitions counted each way, never a difference of totals**) | ...building ANY LLM feature (start here), changing a prompt/model, reviewing whether quality claims are real, setting up CI for an LLM repo |
 | [rules/02-prompt-context-engineering.md](rules/02-prompt-context-engineering.md) | System prompt structure, instruction placement, self-contained prompts (inline schemas vs. out-of-context references that degrade to fabrication), few-shot selection, context budget management, caching-aware prefix design, prompt versioning/testing, injection-safe template interpolation, structured output (schema/tool-based) + validation/repair, **whole-document rejection as a recall control (salvage the valid remainder and record the drop) and the constant column that means the reader names a key the model never emits**, prompt rot | ...writing or editing prompts/templates, extraction or classification features, diagnosing cost spikes or cache misses, anything that parses model output |
 | [rules/03-rag-retrieval.md](rules/03-rag-retrieval.md) | RAG vs long context vs fine-tuning, chunking strategies, embedding selection & versioning, hybrid retrieval (dense+lexical+rerank), query transformation, retrieval evals (recall@k, golden retrieval sets), grounding & citation, freshness/invalidation, index integrity (write-once security metadata, outlier quarantine, expiry filters), poisoning-resistant result shaping, agentic retrieval | ...building search/Q&A over documents, choosing a vector DB/embedding model, "the answers are wrong/stale", evaluating an existing RAG pipeline |
 | [rules/04-agents-tools.md](rules/04-agents-tools.md) | Workflow vs agent decision, tool design (descriptions, scope, idempotency, model-actionable errors), context management across turns (compaction, memory), MCP integration & spec status, multi-agent costs, human-in-the-loop gates, stopping conditions & budgets | ...anything with tool calls or loops, designing tool schemas, MCP servers/clients, multi-agent proposals, runaway-cost or stuck-agent debugging |

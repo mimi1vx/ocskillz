@@ -11,7 +11,7 @@ description: >-
   ty, ruff, pydantic, SQLAlchemy, venv.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@4c4837e3f891b4194623e467fec6294df4ff8d0a
+  source: martinholovsky/SOTA-skills@d5425a76c6ea9c2416bd42d3f031b5407a1f781d
   adapted-for: opencode
 ---
 

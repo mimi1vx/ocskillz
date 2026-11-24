@@ -226,7 +226,10 @@ verify: take the token from the header/form field, split it, recompute the HMAC
   from server config, never from `Host`/`X-Forwarded-Host`. Trust
   `X-Forwarded-Proto`/`-Host` only when your own proxy sets them and strips
   client copies (network-security guidance) — e.g. Django
-  `SECURE_PROXY_SSL_HEADER`/`USE_X_FORWARDED_HOST`, Express `trust proxy`.
+  `SECURE_PROXY_SSL_HEADER`/`USE_X_FORWARDED_HOST`, Express `trust proxy`. The inverse
+  fails too: behind a TLS-terminating proxy an app that ignores its proxy's header sees
+  `http`, so a Secure cookie, HSTS or HTTPS-only check keyed on the request scheme silently
+  switches off; behind the proxy, read the header from the proxy.
   Proxies, gateways and load balancers must pass `Origin` and `Sec-Fetch-*`
   through unchanged; one that strips them sends every request down the
   fallback path. OWASP: CSRF Prevention, Django Security cheat sheets.
@@ -466,8 +469,8 @@ File upload handling (formerly section 10) moved to [rules/21](21-file-uploads.m
 - [ ] **Framing-control defects — MEDIUM (HIGH on auth/consent pages)**: `grep -rnEi -- "http-equiv=[^>]*frame-ancestors|frame-ancestors[[:space:]]+(none|self)|ALLOW-FROM|top\.location[^=]*=[^=]|top[[:space:]]*!==?[[:space:]]*(window\.)?self" .` — meta or unquoted `frame-ancestors`, `ALLOW-FROM`, or JS frame-busting relied on (§5).
 - [ ] **Referrer widened, or token pages leak — MEDIUM**: `grep -rnEi -- "referrerpolicy=['\"]?(unsafe-url|origin-when-cross-origin|no-referrer-when-downgrade)|Referrer-Policy:[[:space:]]*(unsafe-url|no-referrer-when-downgrade|origin-when-cross-origin)" .`; and do reset/magic-link/callback pages send `no-referrer` (§6)?
 - [ ] **Path used as an app boundary — MEDIUM**: `grep -rnEi -- "cookie.*path['\"]?[[:space:]]*[:=][[:space:]]*['\"]?/[A-Za-z0-9_-]" .` — a path-scoped session cookie usually means several apps share one origin; they need separate hostnames (§7).
-- [ ] **Unpinned or unvetted vendor script — MEDIUM**: `grep -rnEi -- "<script[^>]*src=['\"]?https?://" . | grep -vi 'integrity='` — each remaining hit has a vetted owner/domain and content-change monitoring (§8).
-- [ ] **Tag manager runs arbitrary code — HIGH**: `grep -rlEi -- "googletagmanager\.com/gtm\.js" . | xargs -r grep -LEi -- "gtm\.blocklist[^]]*(customScripts|['\"]html['\"])"` — each file loads a container with no custom-code block; also confirm console MFA and a data-layer-only tag design (§8).
+- [ ] **Unpinned or unvetted vendor script — MEDIUM**: `grep -rnEi -- "<script[^>]*src=['\"]?https?://" . | grep -viE '^[^:]+:[0-9]+:.*(integrity=)'` — each remaining hit has a vetted owner/domain and content-change monitoring (§8).
+- [ ] **Tag manager runs arbitrary code — HIGH**: `grep --null -rlEi -- "googletagmanager\.com/gtm\.js" . | xargs -0 -r grep -LEi -- "gtm\.blocklist[^]]*(customScripts|['\"]html['\"])"` — each file loads a container with no custom-code block; also confirm console MFA and a data-layer-only tag design (§8).
 - [ ] **Vendor script "sandboxed" in a worker — MEDIUM**: `grep -rnEi -- "type=['\"]?text/partytown|<Partytown" .` — a vendor that must be contained runs in a separate-domain iframe instead; the worker keeps your origin (§8).
 - [ ] **Web cache deception, origin half — HIGH**: `curl -s -o /dev/null -w '%{http_code}\n' -b "$SESSION" https://HOST/account/x.css` (and `/account;x.css`) returns `404`/redirect, not `200` with the account page (§9).
 - [ ] **Path-normalisation disagreement — HIGH**: a test sends variants of a protected path (`/admin/`, `/ADMIN`, `/%61dmin`, `/x/../admin`, `/admin;x`) through CDN, proxy, WAF and app and asserts the same allow/deny at each — sent raw (`curl --path-as-is`), or the client itself collapses `/x/../admin` to `/admin` and the variant is never tested (§9).

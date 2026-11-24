@@ -139,7 +139,13 @@ class Money:
   needs `__dict__` — use `slots=True` + a manual cache or drop slots there).
 - `kw_only=True` for >3 fields or any boolean field — positional booleans are unreadable.
 - `field(default_factory=...)` for mutable defaults; `field(repr=False)` for secrets so they
-  don't hit logs.
+  don't hit logs (pydantic: `SecretStr`). **Neither hides the value in a pydantic
+  `ValidationError`.** Measured on pydantic 2.14.3, a `SecretStr` field failing `min_length` printed
+  `input_value='hunter2'`. `ConfigDict(hide_input_in_errors=True)` cleans `str(e)` and `repr(e)` only,
+  and only when set on the **outermost** model validated (a parent without it printed a nested
+  model's secret); `e.errors()` and `e.json()` still carried the value until called with
+  `include_input=False`. Anything that serialises errors (an API response, an error tracker) must
+  use that form: FastAPI's default 422 body echoed the password (0.162.5) — [rules/07](07-frameworks-testing.md) §1.
 
 ## 8. Enums
 
@@ -267,6 +273,15 @@ except StorageError:
   detectors in [rules/02](02-typing-correctness.md) §2a.
 - Naive datetimes: always `datetime.now(tz=timezone.utc)`; `utcnow()` is deprecated and naive
   (ruff DTZ).
+- **Ansible and Jinja run these semantics outside `.py` files**, where no linter looks. Measured
+  2026-11-21 on ansible-core 2.21.6: `now(utc=true)` is a *naive* UTC datetime and
+  `.timestamp()` reads a naive value as local time, so `now(utc=true).timestamp()` was off by the
+  UTC offset (−3599 s against `date +%s` at UTC+1; `now().timestamp()` within 1 s). In a `when:`
+  or `that:` expression a Jinja string literal turns `'\b'` into U+0008 (`'\s'`, `'\w'` stay two
+  characters), so an inline regex `(?!Post\b)` became another pattern and the guard failed a
+  correct config. Inside a `{{ }}` template value Ansible kept it two characters, but plain
+  jinja2 3.1.6 turns it into U+0008 there too, so outside Ansible assume both. Pass a regex in
+  through a variable, and compare epochs from an aware or a local datetime.
 - `zip(a, b, strict=True)` (3.10+) when silent truncation would hide a length-mismatch bug.
 - Shadowing builtins (`list`, `id`, `type`, `input`) — rename (ruff A).
 - String building in loops: collect + `"".join(parts)` (perf details [rules/06](06-performance.md)).
@@ -363,7 +378,7 @@ fail to correctly resolve its value") is a `UserWarning`, and a blanket `error` 
 ## Audit checklist
 
 - [ ] **Text I/O without an explicit encoding (§5, below a 3.15 floor) — MEDIUM** —
-      `grep -rnE '(open|read_text|write_text)\(' --include="*.py" src/ | grep -v 'encoding=' | grep -vE "['\"](rb|wb|ab|r\+b|w\+b)['\"]"`
+      `grep -rnE '(open|read_text|write_text)\(' --include="*.py" src/ | grep -vE '^[^:]+:[0-9]+:.*(encoding=)' | grep -vE "['\"](rb|wb|ab|r\+b|w\+b)['\"]"`
       (each hit reads or writes text in the locale encoding: cp1252 on many Windows hosts)
 - [ ] **Ruff covers most of this file — run first (§3: C4)** —
       `uvx ruff check --select B006,B008,B023,B904,E722,BLE,G,T20,DTZ,PTH,SIM,A,C4 --statistics .` ;
@@ -395,23 +410,33 @@ fail to correctly resolve its value") is a `UserWarning`, and a blanket `error` 
       `grep -rniE '(log|logger|logging)\.(debug|info|warning|error|exception|critical|log)\([^)]*(passw|secret|token|api_?key|credential)' --include="*.py" src/`
       (read the arguments: a credential passed to the call is the finding, while message
       text that only *names* one, such as "password reset for %s", also matches) ;
-      `grep -rniE '^[[:space:]]+[a-z_]*(passw|secret|token|api_?key)[a-z_]*[[:space:]]*:[[:space:]]*(str|bytes)([^[:alnum:]_]|$)' --include="*.py" src/ | grep -v 'repr=False'`
+      `grep -rniE '^[[:space:]]+[a-z_]*(passw|pwd|secret|token|api_?key|private_?key|credential|passphrase|signing_?key)[a-z_]*[[:space:]]*:[[:space:]]*(str|bytes|Optional\[str\]|Annotated\[str|"str"|str[[:space:]]*\|[[:space:]]*None)([^[:alnum:]_]|$)' --include='*.py' src/ | grep -v 'repr=False' | grep -viE '(:[0-9]+:.*(,[[:space:]]*(#.*)?$))|(:[0-9]+:([[:space:]]+[a-z_]*(passw|pwd|secret|token|api_?key|private_?key|credential|passphrase|signing_?key)[a-z_]*_(type|kind|env|var|alphabet|hash|hashed|digest|url|uri|endpoint|id|ids|name|names|path|file|dir|count|len|length|limit|ttl|expiry|expires|expires_at|header|prefix|field|scope|scopes|format|regex|pattern)[[:space:]]*:))'`
       (a class field typed plain `str`: a dataclass `repr` prints it — measured,
-      `Creds(user='bob', password='hunter2')` — so use `field(repr=False)` or `SecretStr`)
-- [ ] **Resource handling (§4)** — `grep -rn "= open(" --include="*.py" src/ | grep -v "with "`
+      `Creds(user='bob', password='hunter2')` — so use `field(repr=False)` or `SecretStr`;
+      line-based, so a `field(` split over lines reads as a hit; a parameter on its own line of a
+      multi-line signature (it ends in `,`) and a name ending `_type`, `_env`, `_hash`, `_url`, `_id`,
+      `_path` or the like are filtered out, while an annotated local such as `token: str = params[…]`
+      still matches) ;
+      `grep --null -rlE 'SecretStr' --include="*.py" src/ | xargs -0 -r grep -L 'hide_input_in_errors'`
+      (a pydantic model file with a `SecretStr` and no `hide_input_in_errors`: its validation
+      errors print the value, §7)
+- [ ] **Resource handling (§4)** — `grep -rn "= open(" --include="*.py" src/ | grep -vE '^[^:]+:[0-9]+:.*(with )'`
       (unmanaged file handles [MEDIUM]); `grep -rn "\.close()" --include="*.py" src/ | head`
       (manual close → with-able?) ; `grep -rnE '\.acquire\(\)' --include='*.py' --exclude-dir=.venv .`
       (a lock taken by hand, not `with lock:` [MEDIUM])
+- [ ] **Ansible/Jinja templates and playbooks** (§12): no `now(utc=true)` fed to `.timestamp()`
+      or compared with an epoch, and no backslash regex written inline in a `when:`/`that:`
+      expression (it arrives through a variable) [MEDIUM]
 - [ ] **datetime & os.path modernization** (§5, §12) — `uvx ruff check --select DTZ,PTH --statistics .` ;
       `grep -rn "utcnow()" --include="*.py" src/` (naive UTC [MEDIUM])
 - [ ] **Identity misuse & list.pop(0)** (§12, §9) —
       `grep -rn 'is "" \|is "\| is [0-9]' --include="*.py" src/` ;
       `grep -rn "\.pop(0)" --include="*.py" src/` (O(n) dequeue [perf])
-- [ ] **groupby without sort; hand-rolled itertools (§9) (manual review)** — `grep -rn "groupby(" --include="*.py" src/ | grep -v "sorted("` ;
+- [ ] **groupby without sort; hand-rolled itertools (§9) (manual review)** — `grep -rn "groupby(" --include="*.py" src/ | grep -vE '^[^:]+:[0-9]+:.*(sorted\()'` ;
       `grep -rnE 'def [a-z_]*(chunk|batch|flatten|window|pairwise)[a-z_]*\(' --include='*.py' --exclude-dir=.venv .`
       (a utils helper that itertools/`batched`/`pairwise` replaces [LOW])
 - [ ] **Dataclasses that are not frozen and slotted (§7) [LOW]** —
-      `grep -rnE '^[[:space:]]*@(dataclasses\.)?dataclass' --include='*.py' --exclude-dir=.venv . | grep -vE 'frozen=True.*slots=True|slots=True.*frozen=True'`
+      `grep -rnE '^[[:space:]]*@(dataclasses\.)?dataclass' --include='*.py' --exclude-dir=.venv . | grep -vE '^[^:]+:[0-9]+:.*(frozen=True.*slots=True|slots=True.*frozen=True)'`
       (each opt-out needs a reason, such as `cached_property` needing `__dict__`) ; a boolean field, or
       more than three fields, without `kw_only=True` is a read of the class
 - [ ] **Magic strings and enums compared to raw strings (§8) [LOW]** —
@@ -428,9 +453,9 @@ fail to correctly resolve its value") is a `UserWarning`, and a blanket `error` 
 - [ ] **Boolean/optional parameters frozen positionally — no `*` in the signature [MEDIUM]** (§13) —
       `grep -rnE 'def [a-z_]+\([^*)]*(flag|force|strict|verbose|dry_run)[^)]*\)' --include="*.py" src/`
 - [ ] **Deprecation by docstring only — invisible to type checkers and to runtime [MEDIUM]** (§13) —
-      `grep -rn -i 'deprecated' --include="*.py" src/ | grep -v '@deprecated' | grep -v 'DeprecationWarning' | grep -vE 'import[^#]*deprecated'`
+      `grep -rn -i 'deprecated' --include="*.py" src/ | grep -vE '^[^:]+:[0-9]+:.*(@deprecated)' | grep -v 'DeprecationWarning' | grep -vE 'import[^#]*deprecated'`
 - [ ] **Does the suite fail on warnings? [MEDIUM if absent]** (§13) —
-      `grep -qE 'filterwarnings|-W ?error' pyproject.toml setup.cfg pytest.ini tox.ini || echo "suite does not fail on warnings"`;
+      `command grep -qE 'filterwarnings|-W ?error' pyproject.toml setup.cfg pytest.ini tox.ini || echo "suite does not fail on warnings"`;
       a category-scoped `error::DeprecationWarning` with no blanket `"error"` misses `UserWarning`s
 - [ ] **__slots__ added to a class that subclasses something unslotted — no saving [INFO]** (§13) —
       `grep -rn -B3 '__slots__' --include="*.py" src/ | grep 'class .*('`
@@ -442,7 +467,7 @@ fail to correctly resolve its value") is a `UserWarning`, and a blanket `error` 
       (a money value typed or parsed as `float`)
 - [ ] **NaN/Infinity accepted from input, divide-by-zero unguarded (§12) — MEDIUM, HIGH where
       the number is a limit, price or quota** —
-      `grep -rlE '(float|Decimal)\([a-z_]' --include='*.py' src/ | xargs -r grep -LE 'isfinite|is_finite'`
+      `grep --null -rlE '(float|Decimal)\([a-z_]' --include='*.py' src/ | xargs -0 -r grep -LE 'isfinite|is_finite'`
       (files parsing numbers with no finiteness check) ;
-      `grep -rn 'json\.loads(' --include='*.py' src/ | grep -v 'parse_constant'`
+      `grep -rn 'json\.loads(' --include='*.py' src/ | grep -vE '^[^:]+:[0-9]+:.*(parse_constant)'`
       (JSON that accepts bare `NaN`) — then read each `/`, `//`, `%` on a caller value

@@ -81,7 +81,8 @@ measurement. "330 PRs" is a claim whose evidence has been thrown away, and "30" 
 harder to see: nothing truncated, nothing silent, no rule broken. The selector was reasonable
 and answered a question one step to the left of the one asked. Three in one session, a
 fourth field-reported 2026-09-26, a fifth 2026-10-22, a sixth and seventh from another
-report the same day, and an eighth from the session that took those in:
+report the same day, an eighth from the session that took those in, a ninth on 2026-11-01 and a
+tenth on 2026-11-07:
 
 | the question | the selector typed | what it actually returns |
 |---|---|---|
@@ -94,6 +95,7 @@ report the same day, and an eighth from the session that took those in:
 | "has *this* job already run" | an existence check by prefix glob, `compgen -G "r_${name}_*"` | **any** name that extends it: `r_short_*` also matches `r_short_regression_*`, so a 236-case job logged `HAVE` and never ran (field-reported 2026-10-22; reproduced in bash 5.3). Anchor the next character (`r_${name}_[0-9]*`) or test the exact path |
 | "is this branch still on the remote, and in sync" | `git branch -vv`, `%(upstream:track)` | your **local remote-tracking ref**, which a branch deleted on the remote leaves behind until `git fetch --prune`: an empty track reads as "in sync" for a branch that no longer exists. Ask the remote, `git ls-remote --heads origin <b>` (reproduced on git 2.55.0: `track=[]` with 0 remote refs, `[gone]` only after a prune; field-reported 2026-10-22: 8 of 10 "in sync" branches were gone). And a squash-merged branch's tip is never an ancestor of `main`, so `merge-base --is-ancestor` says "not merged" for every one: use the PR's state. A branch stacked on it has the same blind spot: `git merge-tree origin/main <child>` takes the old fork point as the base and reports the squashed commits as conflicts; pass `--merge-base=<old parent tip>` (reproduced 2026-11-01, git 2.55.0: rc 1 plain, rc 0 with it) |
 | "the commits since that day" | `git log --since=2026-10-24` | the commits since **that date at the current clock time**: git attaches the time of day you run it to a bare date, so the morning silently drops out, exit 0. Reproduced 2026-11-01, git 2.55.0, run at 22:23 over four commits made that day: 0 with the bare date, 4 with `'2026-10-24 00:00'` or `2026-10-24T00:00:00` (field-reported the same day: 2 of 19, read as "no work since the handoff"). Write the time, or select by commit: `<last-known-sha>..HEAD` |
+| "the distinct commits" (any distinct lines) | `sort -u -k2,3` | one line per distinct **key**: with `-k`, `-u` judges uniqueness on the key fields only, so two different lines whose keys match collapse into one, exit 0. Reproduced 2026-11-07 on BSD sort 2.3-Apple and GNU coreutils 9.7: 4 lines, 3 distinct, came out as 2 (field-reported the same day: two commits made in the same minute, 16 rows listed as 14). To dedupe whole lines in key order, sort with `sort -k2,3` and pipe the result into `uniq`. That works only because sort breaks a key tie on the whole line, which puts identical lines next to each other; add `-s` and a duplicate that was not adjacent in the input survives |
 
 `sort -V | tail -1` is the obvious way to get "the latest" and it is simply not "the
 default". Each of the three is the correct answer to a question nobody asked.
@@ -127,6 +129,16 @@ default". Each of the three is the correct answer to a question nobody asked.
   unused high port rather than a conventional alternative such as 2222 or 8022, which another
   VM may already hold. The remote-host side of trust on first use is
   [`sota-code-security` rules/04](../../sota-code-security/rules/04-cryptography.md).
+- **A health probe on a port answers for whoever holds it, so a server that failed to bind
+  passes it.** Field-reported 2026-11-22: a second gateway was launched on a port the host's own
+  nginx already held. The server failed to bind and exited during warm-up. `/readyz` returned 200
+  through nginx from the session's *other* gateway, a read-back of the launched PID passed while it
+  was still alive, and a "positive control" (a request expected to be refused) passed too, because
+  the other gateway refused it as well. `ss -lptn` then named nginx on the port and the launched PID
+  gone. After warm-up, check that the port's owner (`ss -lptn 'sport = :PORT'`,
+  `lsof -nP -iTCP:<port> -sTCP:LISTEN`) is your PID. Make the positive control one whose outcome
+  only your server can produce, such as a log line only it writes or a config value only it carries
+  ([`sota-code-security` rules/11](../../sota-code-security/rules/11-dead-path-diagnostics.md) §5).
 
 ## 5b. A filter that drops the file you named
 
@@ -196,20 +208,83 @@ shell running the loop, and the session died with exit 255 (field-reported 2026-
   the shell running it after the identical line passed locally — the mechanism behind
   [`rules/01`](01-safety-baseline.md) §3's platform split (field-reported 2026-10-24; that
   session's remote failure stays unconfirmed, since its retry changed two things at once).
+- **The opposite failure: the command line you match is the one the kernel shows, not the one
+  you typed.** Homebrew's framework Python on macOS re-execs through `Python.app`, so `python3
+  -I job.py` is listed as `…/Resources/Python.app/Contents/MacOS/Python -I job.py`. Then
+  `pgrep -f 'python3 -I'` prints nothing for a running job, while `pgrep -f 'job.py'` finds
+  it. `exec -a NAME` does the same to argv[0]. Measured 2026-11-15, python@3.14.8. A process can
+  also rewrite its command line **after** it starts (Perl `$0 = …`, `setproctitle`, the
+  `postgres:`/`nginx: worker` titles), and then a `while pgrep -f job.pl` waiter returns at once
+  while the job still runs (measured 2026-11-21, procps-ng on Debian: 0 matches, waiter back in
+  0 s, process alive): wait on its PID (`wait "$pid"`, `kill -0`) or its artefact. An empty
+  `pgrep` is an absence claim ([rules/06](06-ad-hoc-commands.md) §2): a field session read one
+  as "not running" and started a second writer.
 
 Kill by an identity you obtained **without** substring matching: `$!` saved at launch, a PID
 file, or the port's owner (`ss -lptn 'sport = :PORT'`, `lsof -ti :PORT`). If you must match,
 print the list with PIDs and PPIDs first (`ps -axo pid=,ppid=,command=`). Drop your own `$$`,
 your ancestors, and anything whose command line is your own command. Then act on PIDs.
 
+**`$!` names what `&` put in the background, and after a list that is not your command in bash.**
+In `cd dir && cmd &`, the whole `&&` list is the background job. bash runs it in a subshell, so
+`$!` is that bash and `cmd` is its child; zsh returns `cmd` itself. Measured 2026-11-23 with
+`cd /tmp && true && sleep 7 &`: bash 3.2.57 and 5.3.15 gave a `bash` PID whose child was the
+`sleep`, and zsh 5.9 gave the `sleep`. A field session recorded such a PID over `ssh` (a bash
+remote shell), read `/proc/<pid>/environ` for a variable set on the command, and found nothing,
+because the assignment lives in the child (field-reported 2026-11-22). Background the command
+alone, `cd dir && { cmd & echo $! > pid; }`, which gave the `sleep` in all three shells. Or confirm
+that the PID owns the port before acting on it.
+
+## 5d. A watch waits for the members it can see, and an empty population is already done
+
+A watch or wait command reads its population when it starts. If nothing has registered yet,
+it has nothing to wait for and returns at once.
+`gh pr checks <pr> --watch` on a PR whose CI has not registered a check returns immediately
+with `no checks reported on the '<branch>' branch` and **exit 1** (gh 2.103.2: in
+`pkg/cmd/pr/checks/checks.go` the empty set is an error raised before the watch loop starts;
+measured 2026-11-23 on a public PR with no checks). The loop then ends as soon as nothing *it
+has seen* is pending, so a workflow that registers later is not waited for. A field session
+saw a watch return with a check still `pending` (field-reported 2026-11-22).
+
+- **Under `>/dev/null 2>&1; next-command` the empty case is invisible.** It reads as a watch
+  that finished. The same session ran 13 watches that way and caught the empty one only
+  because it read the buckets separately.
+- **`mergeStateStatus` `CLEAN` is not evidence that a check ran.** It read `CLEAN` on a PR with
+  zero checks, both in that session and on the public PR above. It reports what the merge
+  requires, not what ran.
+- **Wait for the population you expect, with a bound, then take the verdict from a separate
+  read.** `want` is the number of check runs a merged PR of this repo shows:
+
+```bash
+want=10; n=0
+for i in $(seq 1 60); do           # 60 x 10 s: a CI that never starts is a failure, not a hang
+  n=$(gh pr checks "$pr" --json name --jq length 2>/dev/null) || n=0
+  [ "${n:-0}" -ge "$want" ] && break
+  sleep 10
+done
+[ "${n:-0}" -ge "$want" ] || { echo "only ${n:-0} of $want checks registered" >&2; exit 1; }
+gh pr checks "$pr" --watch --interval 15 >/dev/null 2>&1
+gh pr checks "$pr" --json name,bucket --jq '.[] | "\(.bucket) \(.name)"'   # the verdict
+```
+
+Measured 2026-11-23 under bash and zsh: with all 10 checks done it printed `10 pass` at exit 0;
+on the PR with none it printed `only 0 of 1 checks registered` at exit 1.
+
 ## Audit checklist
 
+- [ ] **Does a merge, release or deploy step trust a watch's return?** (§5d) A
+      `gh pr checks --watch` that ran before CI registered a check exits 1 at once, and one that
+      ran before a later workflow registered returns with that workflow unseen. Discarding its
+      output and chaining with `;` makes both look finished, and `mergeStateStatus` `CLEAN`
+      holds with zero checks. Wait for the expected number of checks with a bound, then read
+      the buckets in a separate command.
 - [ ] **Does any kill or wait select processes by command-line substring?** (§5c) This means
       `pkill -f`, `pgrep -f`, `ps … | grep`, or a loop over `/proc/*/cmdline`. Each one
       matches the selecting shell, and in an agent harness or under `ssh host '…'` its parent
       too, whenever the plain pattern appears in their argv. Sweep for the shape with
       `grep -nE '(pkill|pgrep) -f|/proc/\*/cmdline|ps [^|]*\| *grep' <file>`, and act on PIDs taken
-      from `$!`, a PID file or a port.
+      from `$!` (of a lone command: after `a && cmd &`, bash's `$!` is a subshell), a PID file or a port. The same selection also misses a target whose argv[0]
+      was rewritten (framework Python, `exec -a`), so an empty result never means "not running".
 
 - [ ] **A search filter next to a named file** (§5b): does any `grep` command combine
       `--include` with an explicitly named file the glob does not match? The named file
@@ -221,9 +296,9 @@ your ancestors, and anything whose command line is your own command. Then act on
       is not *default* (`sort -V | tail -1` returns a backports kernel), *apparent size* is
       not *blocks freed*, *not backing a running container* is not *reclaimable*, *a pod
       matching the selector* is not *this Deployment's pod* (`kubectl logs deploy/X`), *the
-      process on a forwarded port* is not *the VM you started* (`lsof -nP -iTCP:<port> -sTCP:LISTEN`), *a
+      process on a forwarded port* is not *the VM you started* (`lsof -nP -iTCP:<port> -sTCP:LISTEN`), *a health probe on a port* is not *the server you just started* (check the port's owner after warm-up), *a
       path* is not *the volume* (`pwd -P`), a *prefix glob* is not *this name* (`X_*` matches `X_other_*`), and a
-      *remote-tracking ref* is not *the remote* (`git ls-remote --heads`, not `%(upstream:track)`), and a *bare date* is not *midnight* (`git log --since=YYYY-MM-DD` takes the current clock time: write `'YYYY-MM-DD 00:00'` or a commit range). Nothing is
+      *remote-tracking ref* is not *the remote* (`git ls-remote --heads`, not `%(upstream:track)`), and a *bare date* is not *midnight* (`git log --since=YYYY-MM-DD` takes the current clock time: write `'YYYY-MM-DD 00:00'` or a commit range), and a *distinct key* is not *a distinct line* (`sort -u -k…` keeps one line per key: dedupe with `sort -k… | uniq`, never with `-s`). Nothing is
       truncated and the exit status is 0, so the only tell is a value that cannot belong to
       the subject; read one full record before trusting the aggregate.
 - [ ] **Counts taken from a listing tool** (§5): does the command carry a `--limit`/

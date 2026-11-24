@@ -4,9 +4,9 @@ The externally sourced `sota-*` skills in this directory are adapted from
 **SOTA Engineering Skills** by Martin Holovsky:
 
 - Source: https://github.com/martinholovsky/SOTA-skills
-- Imported commit: `4c4837e3f891b4194623e467fec6294df4ff8d0a`
+- Imported commit: `d5425a76c6ea9c2416bd42d3f031b5407a1f781d`
 - License: [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
-- Upstream license text and warranty disclaimer: https://github.com/martinholovsky/SOTA-skills/blob/4c4837e3f891b4194623e467fec6294df4ff8d0a/LICENSE
+- Upstream license text and warranty disclaimer: https://github.com/martinholovsky/SOTA-skills/blob/d5425a76c6ea9c2416bd42d3f031b5407a1f781d/LICENSE
 
 Adapted skills: `sota-code-security`, `sota-data-engineering`,
 `sota-llm-engineering`, `sota-ml-engineering`, `sota-observability`,
@@ -38,7 +38,8 @@ its rule files.
    commit; exclude `sota-perl` and `sota-typescript`.
 3. Reapply the local integration policies and canonical ownership boundaries.
 4. Preserve the Python defaults and established-project exception.
-5. Restore refs to newly imported skills and scrub upstream-repo internals.
+5. Restore refs to newly imported skills and scrub upstream-repo internals,
+   including replacing references to upstream's root verification stamp with the concrete date.
 6. Update the imported commit above and in each imported `SKILL.md`.
 7. Run `./scripts/validate-skills.sh` and check local Markdown links before
    accepting the refresh.

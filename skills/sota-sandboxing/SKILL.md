@@ -3,7 +3,7 @@ name: sota-sandboxing
 description: State-of-the-art sandboxing and isolation engineering (2026). Use when designing isolation for untrusted code, untrusted input parsing, multi-tenant workloads, or AI/agent execution — and when auditing existing systems for isolation gaps. Covers least privilege, defense in depth, isolation boundary selection (VM/microVM/gVisor/container/process/WASM), Linux primitives (namespaces, cgroups v2, seccomp-bpf, Landlock, AppArmor/SELinux, capabilities), Docker/OCI and Kubernetes hardening, privilege separation and broker patterns, subprocess hygiene, and agent tool/egress scoping. Trigger keywords — sandboxing, sandbox, isolation, least privilege, container hardening, container escape, seccomp, Landlock, namespaces, gVisor, Kata, Firecracker, microVM, pod security, untrusted code, untrusted input processing, risky parser, privilege separation, WASM sandbox, V8 isolate, agent code execution, egress allowlist, multi-tenant isolation.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@4c4837e3f891b4194623e467fec6294df4ff8d0a
+  source: martinholovsky/SOTA-skills@d5425a76c6ea9c2416bd42d3f031b5407a1f781d
   adapted-for: opencode
 ---
 

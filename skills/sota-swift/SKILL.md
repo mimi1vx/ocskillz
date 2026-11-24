@@ -3,7 +3,7 @@ name: sota-swift
 description: State-of-the-art Swift engineering rules (Swift 6 language mode) for writing or auditing Swift on ANY target — server-side services (Vapor, Hummingbird, SwiftNIO), CLIs, libraries, packages and apps. Covers optionals and error handling, value types and API design, Swift 6 data-race safety (Sendable, actors, isolation, cancellation), ARC and retain cycles, unsafe pointers and strict memory safety, security (CryptoKit/swift-crypto, Codable and NSKeyedUnarchiver, SQLKit raw SQL, Process, path traversal, NIOSSL/AsyncHTTPClient TLS), server hardening (auth middleware, cookie defaults, release builds), performance, and SwiftPM supply chain (Package.resolved, plugins and macros, SBOM). Trigger keywords - Swift, SwiftPM, Package.swift, Package.resolved, Vapor, Hummingbird, SwiftNIO, async/await, actor, Sendable, @MainActor, Task, Codable, ARC, weak self, Unsafe pointer, Swift Testing, XCTest, SwiftLint, swift-format, server-side Swift. Use for BOTH building and auditing Swift code.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@4c4837e3f891b4194623e467fec6294df4ff8d0a
+  source: martinholovsky/SOTA-skills@d5425a76c6ea9c2416bd42d3f031b5407a1f781d
   adapted-for: opencode
 ---
 

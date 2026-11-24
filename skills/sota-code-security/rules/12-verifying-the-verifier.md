@@ -50,8 +50,10 @@ fail) own the general doctrine. What this file adds is the targeted procedure
 for a **security control**:
 
 1. Replace the control's body with the permissive no-op — `return []`,
-   `return True`, `pass`.
-2. Run the suite.
+   `return True`, `pass`. Do it as a file edit in a disposable copy or worktree, and revert by edit:
+   an inject-and-revert shell chain sent to the background can leave the mutant in place
+   ([`sota-testing` rules/06](../../sota-testing/rules/06-property-fuzzing-mutation.md) §6.3).
+2. Run the suite, in the foreground.
 3. **Nothing fails ⇒ that control is untested**, regardless of how many tests
    name it. Report it as a finding, not as a coverage note.
 
@@ -179,7 +181,10 @@ produce *an* outcome at all. With it, the mechanism reproduced on the first run.
   proof's control first showed a session still held after its peer died. The cause was the
   harness's own pending request, which re-opened it. Without the control, the write-up would have
   claimed a stronger leak than the code has. A second control, a fresh scheduler reaching a live
-  peer, had to pass before "the legitimate peer received nothing" counted.
+  peer, had to pass before "the legitimate peer received nothing" counted. **And the arms share
+  nothing the first one spends** — a deadline, a quota, a cache, a counter, a token: measured
+  2026-11-21, a .NET timeout pair built on one 8 s job token read 0 ms in its second arm because
+  the first had used up the 8 s; with a token per arm it read 301 ms. Build each arm's inputs fresh.
 
 ### 1a.2 A reproduction has three outcomes, and only the sink proves the second
 
@@ -211,7 +216,16 @@ found. Rate it as hardening only when reading every caller shows no entry point 
 the state. Where the called function *is* the exported API — a library, or a fuzz harness on
 an exported function — the direct call is the public path.
 
-Source: Google's Mantis toolkit (Apache-2.0) reproduction gates; adopted 2026-10-02.
+**An exploit script's own verdict is the claimant's report, not an observation.** A PoC that
+prints `VULNERABLE` from its own logic — after the status code it expected, the string it
+searched for — reports what its author believed would follow: the party under evaluation
+supplying the evidence ([`rules/15`](15-instruments-and-guards.md) §2). Observe the effect the script claims, from outside
+it: the file written, the row read, the process spawned. Two more ways a run proves less than
+it prints: **stubbed collaborators** (a mocked auth layer, a fake database, a disabled
+middleware) make it *reached in isolation*, as above, whatever the script says; and for a
+memory-safety defect, **read the sanitizer report, not the exit code** — a timeout, an OOM kill or an assertion in your own harness exits non-zero too, and only the report names the class and the frame.
+
+Source: Google's Mantis toolkit (Apache-2.0) reproduction gates, adopted 2026-10-02; the paragraph above, the knostic/OpenAnt intake (ideas only), 2026-11-22.
 
 ## 1b. Where the probe lives decides whether it survives
 
@@ -392,6 +406,15 @@ one?** Construct it: inject a package with a live advisory, write the violating 
 banned crate. A sibling `cargo deny` probe was already immune, because it banned a crate the
 workspace certainly uses: a fact about the project, not about its current problems.
 
+**A third construction with the same decay: the reference that moves with the subject.** Replacing a gate's hand-kept expected
+list with one derived from the code it checks (§1c's advice, and the right fix for drift) also
+removes an independent witness. Every probe that edits the code, such as renaming the thing the
+list names, now changes both sides at once and passes by construction: the gate is a
+[tautological test](../../sota-testing/rules/02-test-design-quality.md) for that fault. Before
+the swap, list the faults the hand list was the only witness for, and move each to a check
+between two sources written independently (what a loader asks for against what the source
+declares), watched to fail. Field-reported 2026-11-15, caught before the swap.
+
 Otherwise, **pin the mutation to the threshold**: measure the subject at probe time, compute
 what it takes to cross from wherever it is, clamp, and print both numbers so a later reader
 sees what the probe did.
@@ -422,7 +445,9 @@ n=$(awk 'END{print NR}' "$f"); need=$(( LIMIT - n + 1 ))
       triggering state, plus a control arm?** (§1a.2) A build failure, exit 127, a missing
       input or a wrapper crash is *not attempted*; a marker written before launch proves only
       the launch. Is any direct-call-harness crash still marked *needs verification* until
-      a public path is found or every caller has been read?
+      a public path is found or every caller has been read? Does any "reproduced" rest on the
+      PoC's own printed verdict, on stubbed collaborators, or on an exit code where a
+      sanitizer report exists (§1a.2)?
 - [ ] **Does any probe mutate by a fixed delta *smaller than the cap it must cross*?** (§1d)
       That, not "a numeric threshold", is the shape that decays: the probe's strength is the
       subject's current slack, so improving the subject disarms it while the mutation still
@@ -435,6 +460,9 @@ n=$(awk 'END{print NR}' "$f"); need=$(( LIMIT - n + 1 ))
       ignore list, dropping an exclusion or re-enabling a failing test proves something only
       while a real problem is suppressed, and silently stops proving anything the day it is
       fixed. Inject the bad state the probe needs.
+- [ ] **Did a gate's expected list become derived from the code it checks?** (§1d) Then every
+      probe that edits that code now passes by construction. Name the faults the hand list
+      witnessed and give each a check between two independently written sources, watched to fail.
 
 - [ ] **Mutation probe run on security-critical paths** — control body replaced
       with the permissive no-op, with the dependency forced present and the

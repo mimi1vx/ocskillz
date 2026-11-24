@@ -285,6 +285,21 @@ readonly SCRIPT_NAME=${0##*/}
 readonly DEFAULT_REGION=${REGION:-eu-central-1}
 ```
 
+## 4a. jq inside a script: two traps that exit 0
+
+- **A code point in a jq regex is `\x{HHHH}`, never `\uHHHH`.** jq's regex engine (Oniguruma)
+  does not read `\u0000` in a pattern as a code point: `gsub("[\\u0000-\\u001f]"; "")`
+  turned `x`, ESC, `[31my` into `x`, ESC, `y`, keeping the ESC and deleting the harmless text,
+  and `"[\\u0080-\\u009f]"` rewrote the plain text `Opus 5.5` as `???? ?.?` (jq 1.7.1 and
+  1.8.2, measured 2026-11-10). `"[\\x{0000}-\\x{001f}]"` matches the intended range. A
+  `\uHHHH` in a jq *string literal* is fine; only the pattern misreads it.
+- **`x?` on a wrong type yields no value, and no value ends the program at exit 0.**
+  `jq -n '{a:"s"} | (.a.b?) as $x | "LINE"'` prints nothing; inside an array the slot vanishes
+  and every later field shifts left (`[(.cw.size? | tostring), .product]` gave
+  `["antigravity"]` for `{"cw":"x","product":"antigravity"}`). Give every optional access that
+  feeds `as $v` or an array slot a fallback: `(.a.b? // null)`. Both measured on jq 1.7.1 and
+  1.8.2, field-reported 2026-11-10: a status line printed a blank line on a wrongly typed payload.
+
 ## 5. Globbing pitfalls and never parsing ls
 
 - A glob that matches nothing stays **literal**: `rm ./*.tmp` with no matches tries to
@@ -342,6 +357,10 @@ reproduces a Linux agent, and `docker run --rm debian sh -c '…'` reproduces da
 
 ## Audit checklist
 
+- [ ] **jq regexes and optional accesses** (§4a): a `\uHHHH` inside a `test`/`match`/`sub`/`gsub`
+      pattern is a finding (write `\x{HHHH}`); an `x?` feeding `as $v` or an array slot with no
+      `// fallback` is a finding wherever the input can carry a wrong type.
+
 - [ ] **A heredoc whose payload contains its own delimiter?** (§3e) The nested shape — a second
       opener of the same delimiter before the first one closed — is mechanical:
       ``awk -v q="'" 'BEGIN{re="<<-?[" q "\"]?[A-Za-z_]+"} {for(k in open) if(open[k] && $0==k){open[k]=0; next}} match($0,re){d=substr($0,RSTART,RLENGTH); sub(/^<<-?/,"",d); sub(/^[^A-Za-z_]/,"",d); if(open[d]) print FILENAME":"NR": second <<"d" opened before the first one closed"; open[d]=1}' <file>``
@@ -379,7 +398,7 @@ reproduces a Linux agent, and `docker run --rm debian sh -c '…'` reproduces da
       `$$`-suffixed paths → HIGH (race), must be `mktemp`.
 - [ ] Cleanup (§3): every `mktemp` has a reachable `trap ... EXIT`; cleanup function is
       idempotent and preserves `$?`.
-- [ ] ERR trap without errtrace (§3): `grep -rlE "trap .*ERR" --include='*.sh' . | xargs grep -LE
+- [ ] ERR trap without errtrace (§3): `grep --null -rlE "trap .*ERR" --include='*.sh' . | xargs -0 grep -LE
       'set -[a-zA-Z]*E|set -o errtrace'` lists files whose ERR trap misses function failures
       (bash; in a `#!/bin/sh` script the ERR trap itself is the defect).
 - [ ] `grep -rn 'echo .*\$' --include='*.sh'` — variable data through `echo` (SC2028 area);
@@ -389,4 +408,4 @@ reproduces a Linux agent, and `docker run --rm debian sh -c '…'` reproduces da
 - [ ] Glob loops without nullglob/failglob or `[[ -e $f ]]` guard (§5); `for f in *` without the `./` prefix, so a file named `-rf` becomes an option.
 - [ ] A pasteable command with an unquoted glob as a flag value (`--include=*.sh`, `-name *.py`), or an absence never positive-controlled (§5) — zsh `NOMATCH` aborts it and it reads as no-match.
 - [ ] **A bare `**` in a bash script or a pasteable command** (§5a): `grep -nE "(^|[[:space:]=])[^[:space:]'\"]*[*][*](/|\$|[[:space:]])" <file>` — bash matches one level unless `shopt -s globstar` (bash ≥ 4.0) is set; use `find`, `git ls-files` or `grep -r --include`.
-- [ ] **Zero-padded numbers in arithmetic** (§5a): `grep -lE 'date \+%[mdHMSj]' <file> | xargs -r grep -LE '10#|#0[}]'` names a script that reads a zero-padded field and never strips (`${v#0}`) or bases (`10#$v`) one — file-level, so where it does, still check each value reaching `$(( ))`; it fails only on `08` and `09`.
+- [ ] **Zero-padded numbers in arithmetic** (§5a): `grep --null -lE 'date \+%[mdHMSj]' <file> | xargs -0 -r grep -LE '10#|#0[}]'` names a script that reads a zero-padded field and never strips (`${v#0}`) or bases (`10#$v`) one — file-level, so where it does, still check each value reaching `$(( ))`; it fails only on `08` and `09`.

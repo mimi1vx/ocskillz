@@ -3,7 +3,8 @@
 Scope: the sibling of [`rules/06`](06-ad-hoc-commands.md). That file is about a verification command returning the
 **wrong answer**; this one is about a verification command with **side effects** — it
 destroys what it was inspecting, or exhausts a resource nobody budgets. §3 and §4 continue
-[`rules/06`](06-ad-hoc-commands.md)'s section numbering. [`rules/06`](06-ad-hoc-commands.md) §2's
+[`rules/06`](06-ad-hoc-commands.md)'s section numbering. §6 covers a command
+you hand someone else to paste, whose side effects land in their shell. [`rules/06`](06-ad-hoc-commands.md) §2's
 discipline — state the traversal, print the denominator, control the sweep — is assumed.
 
 **The unifying property:** "I am only checking something" bounds nothing. A read-only
@@ -84,6 +85,26 @@ fault in the installation. Field-reported 2026-10-25: 21 reports in one session 
 broken. **Say so before launching crash reproductions**, and attribute a report afterwards by its
 launch time against the script's modification time (`stat -f '%Sm' -t '%H:%M:%S' <script>` on macOS,
 `stat -c %y` on Linux) and its stack against the script's last statement.
+
+## 3c. A symlink to a directory redirects `mv`, `ln -s` and `rm -r link/` into its target
+
+A path that "should not exist yet" is often a symlink an earlier session made. Then the command
+acts on the directory it points at, not on the name you typed. Measured 2026-11-23 with `link → real`,
+on macOS (BSD `mv`/`ln`/`rm`) and GNU coreutils 9.7 (Debian container):
+
+| Command | What happened |
+|---|---|
+| `mv src link` | `src` moved **into** `real/` (`real/src`), on both |
+| `ln -s other link` | the new link was created **inside** `real/` (`real/other`), on both; `ln -sfn other link` replaced the link |
+| `rm -r link/` (trailing slash) | macOS deleted **`real` itself** at exit 0, leaving `link` dangling; GNU deleted `real`'s **contents**, then refused the link (`Not a directory`, exit 1) |
+| `rm -r link` (no slash) | only the link went, on both |
+
+Before any `mv`, `ln`, `cp` or `rm` on a path that may already exist, run `ls -ld -- <path>` and
+`readlink -- <path>` on the source **and** the destination. Replace a link with `ln -sfn`, remove
+one by naming it without a trailing slash, and copy, compare and count before deleting the only
+real folder. Field-reported 2026-11-23: a "move the agent memory into the repository" step ran `mv`
+onto a path that was already a symlink, and the `rm -r` that followed deleted the only real copy of
+a project's notes.
 
 ## 4. The loop you left running exhausts the process table — and takes cleanup with it
 
@@ -187,8 +208,47 @@ agent shells may give a closed stdin instead, so check `ls -l /dev/fd/0` rather 
 - **A command that hangs with no CPU is waiting for input until shown otherwise.** Read the
   command for a bare reader before blaming the work.
 
+## 6. A command you hand to a human is a new command
+
+A block written for someone else to paste has not been run, even when every command in it
+has been run. Field-reported 2026-11-16 (one hand-off, two defects). The agent's own probes
+used `wget -q -T 5` and failed fast. The block it wrote for the operator used `wget -qO-` with
+no timeout, and the operator was left with no output and no exit code. It was **retyped for a
+human** rather than copied. Retyping rebuilds the command from memory, dropping the flags that
+were learned the hard way and adding affordances that are hazards of their own:
+
+**A `#` is not a comment in interactive zsh** unless `setopt interactivecomments` is set, and
+zsh leaves it off by default. Some configurations turn it on, so the author's own terminal may
+not show the problem. Measured 2026-11-16 with zsh 5.9 (`PS1= zsh -f -i < block`), on this
+library's maintainer machine, whose login zsh also has the option off:
+
+| pasted line | interactive zsh, option off |
+|---|---|
+| `# pick a pod, then:` | `command not found: #` |
+| `# pick a pod (e.g. pod-0), then:` | `no matches found: (e.g. pod-0),` |
+| `# note: first check; echo RAN` | `command not found: #`, then **`RAN`**: the text after `;` executes |
+| `echo a # trailing note; echo RAN` | prints `a # trailing note`, then **`RAN`**: a trailing note becomes arguments |
+| `ls /missing # (why)` | `unknown file attribute: h`: `(why)` is a glob qualifier, and `ls` never ran |
+
+Controls: the same text run as a script (`zsh -f file`), or with `setopt interactivecomments`
+first, gives no errors, and bash 3.2 `--norc -i` treats every line as a comment. So a
+handed-over line like `# then; kubectl delete …` **runs the delete** in a stock interactive zsh.
+
+- **Copy the command you ran and verified; never retype it.** Keep its timeouts, its
+  `</dev/null` (§5) and its flags, and give each step a visible exit status that it still returns
+  (`; rc=$?; echo "rc=$rc"; exit "$rc"` — a bare trailing `echo` makes the step's status its own 0,
+  [rules/01](01-safety-baseline.md) §2).
+  If you could not run it yourself, say so in the hand-off. When a failed attempt is
+  expensive, rehearse first (a dry run, or the same command against a copy).
+- **No `#` inside a block meant for pasting**, neither on its own line nor after a command. Put
+  the prose outside the fence. Failing that, make the block's first line
+  `setopt interactivecomments 2>/dev/null` (a silent no-op in bash).
+
 ## Audit checklist
 
+- [ ] **No `mv`, `ln -s` or `rm -r` acts on a path that may be a symlink to a directory without
+      checking it first** (§3c): `ls -ld --` and `readlink --` were run on source and destination;
+      links are replaced with `ln -sfn` and removed without a trailing slash.
 - [ ] **Crash reproductions announced, and their artifacts attributed** (§3b): before a session
       runs programs that abort on purpose, the operator is told that crash reports will appear
       (`ls -lt ~/Library/Logs/DiagnosticReports/ | head`, `coredumpctl list`). A report found
@@ -214,3 +274,7 @@ agent shells may give a closed stdin instead, so check `ls -l /dev/fd/0` rather 
       (`cat >`, `read` without `-t`, a tool with an empty file argument) with nothing
       redirected in? In an agent shell whose stdin is an open socket it blocks until the
       timeout. Add `</dev/null`.
+- [ ] **Commands handed to a human** (§6): each one is copied from a command that was run,
+      with its timeouts and flags intact and an exit status per step, or is marked as not
+      run. The paste block holds no `#` text, on its own line or after a command, unless its
+      first line sets `interactivecomments`.

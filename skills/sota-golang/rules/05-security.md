@@ -16,7 +16,8 @@ misconfiguration are entirely yours.
 - **Regexes as a control** (allowlist, routing, redaction). Stdlib `regexp` is RE2: matching
   is linear in input length, and backreferences/lookaround do not compile. Four rules:
   **escape** caller text spliced into a pattern with `regexp.QuoteMeta` (stdlib since Go 1) —
-  unescaped, `.`/`|` rewrite the rule, and `MustCompile` panics on a pattern that fails to parse;
+  unescaped, `.`/`|` rewrite the rule, and `MustCompile` panics on a pattern that fails to parse
+  (staticcheck SA1000 flags a constant one at lint time, before it panics at startup);
   **anchor** — `MatchString`/`Match` find a match *anywhere* and there is no full-match method,
   so wrap as `^(?:…)$` (`^a|b$` accepts `a…` and `…b`). `$` is end-of-text (`\z`-like) with no
   trailing-newline slack, but `(?m)` makes `^`/`$` line anchors, so `"ok\n;evil"` passes;
@@ -344,7 +345,8 @@ account takeover).
 // BAD — predictable; applies to math/rand and math/rand/v2 alike
 token := strconv.FormatInt(mrand.Int63(), 36)
 
-// GOOD — Go 1.24+: ready-made secret string (RFC 4648 base32, ≥128 bits)
+// GOOD — Go 1.24+: ready-made secret string (26 base32 chars, 130 bits: the
+// short-lived-token floor; long-lived API keys take the 32-byte Read below)
 token := rand.Text()                  // crypto/rand.Text
 
 // GOOD — raw bytes; Read never errors and always fills b entirely
@@ -433,8 +435,8 @@ Supply chain and vulnerability management (formerly section 8) moved to
 - [ ] **Directory listing from an unwrapped `FileServer` (§4) — MEDIUM** —
       `grep -rnE 'http\.FileServer(FS)?\((http\.(Dir|FS)|os\.DirFS)\(' --include='*.go' .`
 - [ ] **Unpinged pool; pool-level prepared statements (§2) — LOW, MEDIUM behind a
-      transaction-mode pooler** — `grep -rlE 'sql\.Open(DB)?\(' --include='*.go' . | xargs grep -L 'Ping'` ;
-      `grep -rnE '(db|DB|pool)\.Prepare(Context)?\(' --include='*.go' .` ; pool limits left at the unlimited default (§2): `grep -rlE 'sql\.Open(DB)?\(' --include='*.go' . | xargs -r grep -L 'SetMaxOpenConns'` — read each hit, the setter may live in another file
+      transaction-mode pooler** — `grep --null -rlE 'sql\.Open(DB)?\(' --include='*.go' . | xargs -0 grep -L 'Ping'` ;
+      `grep -rnE '(db|DB|pool)\.Prepare(Context)?\(' --include='*.go' .` ; pool limits left at the unlimited default (§2): `grep --null -rlE 'sql\.Open(DB)?\(' --include='*.go' . | xargs -0 -r grep -L 'SetMaxOpenConns'` — read each hit, the setter may live in another file
 - [ ] **SSRF: outbound request to a caller-chosen URL (§4c) — HIGH, CRITICAL on a cloud host
       with a metadata endpoint** —
       `grep -rnE '(Get|Post|Head|PostForm|NewRequest|NewRequestWithContext)\(.*(r\.(URL|Form|PostForm|Header)|FormValue\(|Query\(\))' --include='*.go' .`
@@ -444,7 +446,7 @@ Supply chain and vulnerability management (formerly section 8) moved to
 - [ ] **Regex escaping, anchoring & engine (§1) — HIGH** —
       ``grep -rnE 'regexp2?\.(MustCompile|Compile|MatchString|Match)\((fmt\.Sprintf|.*["`] \+ [A-Za-z_]|.*[A-Za-z0-9_)] \+ ["`])' --include='*.go' . | grep -v QuoteMeta``
       (pattern built from data, not escaped) ; ``grep -rnE 'Compile\(`\^[^(`]*\|' --include='*.go' .``
-      (`^a|b$` — alternation escapes the anchors) ; `grep -rl 'regexp2\.' --include='*.go' . | xargs -r grep -L 'MatchTimeout'`
+      (`^a|b$` — alternation escapes the anchors) ; `grep --null -rl 'regexp2\.' --include='*.go' . | xargs -0 -r grep -L 'MatchTimeout'`
       (files on the backtracking engine that never set `MatchTimeout`)
 - [ ] **TLS (§6) — CRITICAL/HIGH** — `grep -rn 'InsecureSkipVerify' --include='*.go' .` ;
       `grep -rnE 'MinVersion:\s*tls\.VersionTLS1[01]' --include='*.go' .` ;
@@ -472,12 +474,12 @@ Supply chain and vulnerability management (formerly section 8) moved to
 - [ ] **Output encoding / XSS — HIGH** (§1) —
       `grep -rn 'text/template' --include='*.go' . | grep -iv _test` (HTML rendered via
       text/template?);
-      `grep -rnE 'template\.(HTML|JS|URL|CSS|HTMLAttr)\(' --include='*.go' . | grep -viE 'saniti[sz]e'` (escaping bypass with no sanitizer on the same line)
+      `grep -rnE 'template\.(HTML|JS|URL|CSS|HTMLAttr)\(' --include='*.go' . | grep -viE '^[^:]+:[0-9]+:.*(saniti[sz]e)'` (escaping bypass with no sanitizer on the same line)
 - [ ] **Dynamic code evaluation from input (§4d) — CRITICAL when the text is caller-supplied,
       HIGH otherwise** —
       `grep -rnE '(template\.New\([^)]*\)|[Tt]mpl|[Tt]emplate)\.Parse\([A-Za-z_]|interp\.New\(|goja\.New\(|plugin\.Open\(|MethodByName\(|expr\.Eval\(' --include='*.go' .`
       (template text or a call target from a variable; embedded interpreter) ;
-      `grep -rn 'expr\.Compile(' --include='*.go' . | grep -v 'expr\.Env('` (no declared env)
+      `grep -rn 'expr\.Compile(' --include='*.go' . | grep -vE '^[^:]+:[0-9]+:.*(expr\.Env\()'` (no declared env)
 - [ ] **unsafe / cgo (§7) — HIGH for new `unsafe.Pointer` arithmetic** — `grep -rn 'unsafe.Pointer\|go:linkname\|reflect.SliceHeader\|reflect.StringHeader' --include='*.go' .` ;
       `grep -rln 'import "C"' --include='*.go' .` ; `git grep -n 'CGO_ENABLED=1'` (each cgo use justified, in one package)
 - [ ] **--- Temp files and permissions (§4a) ---** —

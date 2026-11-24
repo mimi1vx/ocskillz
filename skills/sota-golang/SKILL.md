@@ -3,7 +3,7 @@ name: sota-golang
 description: State-of-the-art Go engineering rules (supported Go releases) for writing new Go code or auditing existing Go code. Covers error handling, interface/package design, goroutine and channel correctness, net/http hardening, security (SQL, exec, path traversal, CSPRNG, TLS, supply chain), performance (pprof, allocations, GC, PGO), and tooling/CI. Trigger keywords - Go, golang, goroutine, channel, go.mod, errgroup, context.Context, pprof, govulncheck, net/http, slog. Use for BOTH building Go services/libraries/CLIs and reviewing or auditing Go codebases.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@4c4837e3f891b4194623e467fec6294df4ff8d0a
+  source: martinholovsky/SOTA-skills@d5425a76c6ea9c2416bd42d3f031b5407a1f781d
   adapted-for: opencode
 ---
 

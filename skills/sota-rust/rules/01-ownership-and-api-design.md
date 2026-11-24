@@ -336,14 +336,14 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
       (`clippy::or_fun_call`).
 - [ ] Raw primitive IDs in public signatures (§3): `rg 'fn .*\b(id|user|key)\w*: (u32|u64|i64|String)'`.
 - [ ] **Typestate transition that leaves the old state usable (§4) — Low** —
-      `grep -rlw 'PhantomData' --include='*.rs' . | xargs -r grep -nE 'fn [a-z_][a-z0-9_]*\(&(mut )?self[^)]*\)[[:space:]]*->[^{;]*[A-Z][A-Za-z0-9_]*<[A-Z]'` lists, in files with state-parameterised types, methods that take
+      `grep --null -rlw 'PhantomData' --include='*.rs' . | xargs -0 -r grep -nE 'fn [a-z_][a-z0-9_]*\(&(mut )?self[^)]*\)[[:space:]]*->[^{;]*[A-Z][A-Za-z0-9_]*<[A-Z]'` lists, in files with state-parameterised types, methods that take
       `&self`/`&mut self` and return a generic type (single-line signatures only; a getter such as
       `-> Option<String>` prints too). A method returning
       the same type in another state must take `self` by value; one that takes `&self`/`&mut self`
       leaves the previous state callable. A runtime `enum` is not a
       finding where states are dynamic, numerous or serialized.
 - [ ] **Builders (§5) — Low** —
-      `grep -rnE 'fn build\(&?(mut )?self\)' --include='*.rs' . | grep -v 'Result<'` lists
+      `grep -rnE 'fn build\(&?(mut )?self\)' --include='*.rs' . | grep -vE '^[^:]+:[0-9]+:.*(Result<)'` lists
       infallible `build()`s: one that unwraps, expects or panics on a missing or invalid field
       should return `Result<T, BuildError>` or take the field in `T::builder(required)`. Also:
       one builder mixing `self` and `&mut self` setters; a constructor past ~4 parameters with no
@@ -355,7 +355,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
       (scaled to minor units by a truncating cast: `(19.99 * 100.0) as i64` is `1998`)
 - [ ] **NaN/Infinity and overflow at the extremes (§3) — MEDIUM, HIGH when the value gates a
       limit, a price or a timeout** —
-      `grep -rnE '[^_[:alnum:]]from_secs_f(32|64)\(|\*[[:space:]]*1_?000_?000_?000' --include='*.rs' . ; grep -rlE 'parse::<f(32|64)>|:[[:space:]]*f(32|64)[[:space:]]*=[^;]*\.parse\(' --include='*.rs' . | xargs -r grep -L 'is_finite' | xargs -r grep -HnE 'parse::<f(32|64)>|:[[:space:]]*f(32|64)[[:space:]]*=[^;]*\.parse\('`
+      `grep --null -rnE '[^_[:alnum:]]from_secs_f(32|64)\(|\*[[:space:]]*1_?000_?000_?000' --include='*.rs' . ; grep -rlE 'parse::<f(32|64)>|:[[:space:]]*f(32|64)[[:space:]]*=[^;]*\.parse\(' --include='*.rs' . | xargs -0 -r grep --null -L 'is_finite' | xargs -0 -r grep -HnE 'parse::<f(32|64)>|:[[:space:]]*f(32|64)[[:space:]]*=[^;]*\.parse\('`
       — the first lists panicking `Duration` float constructors and seconds-to-nanoseconds `*`
       scaling, and the second lists float parses in files that never call `is_finite`. It works
       at file level, so a file with one `is_finite` hides the rest: read each parse site. Then
@@ -378,7 +378,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
       rustc's `unreachable_pub` (allow-by-default) lists `pub` items that should be
       `pub(crate)`.
 - [ ] Multi-crate repo without `[workspace.dependencies]` (§9) → version drift;
-      `cargo tree -d` to find duplicate dependency versions.
+      `cargo tree -d` to find duplicate dependency versions (in an audited checkout, with
+      `RUSTC_WRAPPER=` and a pinned `RUSTC`: it runs the repo's wrapper, [rules/07](07-tooling-ci.md) §4a).
 - [ ] Clippy gates for this file's concerns (§1): `clippy::needless_pass_by_value`,
       `clippy::trivially_copy_pass_by_ref`, `clippy::large_enum_variant`,
       `clippy::rc_buffer`, `clippy::mutable_key_type`.

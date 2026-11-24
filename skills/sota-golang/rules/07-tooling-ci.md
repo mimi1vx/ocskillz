@@ -18,7 +18,10 @@ go build ./...                           # catches main-package breakage tests m
 ```
 
 Pin tool versions (see §4); cache `~/go/pkg/mod` and golangci-lint cache, keyed and counted per your CI and supply-chain controls (a cache must never let a gate skip work it should have run).
-A repo missing `-race` or govulncheck in CI: HIGH audit finding.
+A repo missing `-race` or govulncheck in CI: HIGH audit finding. Files gated to another OS
+(`//go:build`, or a `_windows.go`/`_darwin.go` name with no build line) are never compiled on the
+host: run `GOOS=<os> go vet ./...` and `golangci-lint run` once per such OS (measured 2026-11-21,
+go1.27.3: host vet reported only the darwin file's error, `GOOS=windows` only the windows one).
 
 **Code that uses the escape hatch (`unsafe`, cgo) runs its tests under the runtime checker.**
 `-race`, `-msan` and `-asan` imply `-gcflags=all=-d=checkptr` unless it is set explicitly
@@ -352,7 +355,7 @@ tool (             // 1.24+: tool dependencies, versioned & sum-verified
       (v1 keys a v2 binary rejects, or tests not linted at all) ; `golangci-lint config verify` ;
       read every `exclusions.rules` entry: no `path:` means it applies to production code too
 - [ ] **Escape hatch without its runtime checker (§1) — HIGH** —
-      `grep -rqE -- '-race|-asan|-msan|cgocheck2|checkptr' .github/workflows/ Makefile 2>/dev/null || grep -rlE 'unsafe\.Pointer|^import "C"' --include='*.go' .`
+      `command grep -rqE -- '-race|-asan|-msan|cgocheck2|checkptr' .github/workflows/ Makefile 2>/dev/null || command grep -rlE 'unsafe\.Pointer|^import "C"' --include='*.go' .`
       (lists the unsafe/cgo files only when no CI line runs a checker: nothing checks them) ; the checker
       lines themselves: `grep -rnE -- '-race|-asan|-msan|cgocheck2|checkptr' .github/workflows/ Makefile 2>/dev/null`
 - [ ] **Suppression hygiene** (§2) — `grep -rnE '//[[:space:]]+nolint' --include='*.go' .`
@@ -372,7 +375,7 @@ tool (             // 1.24+: tool dependencies, versioned & sum-verified
       (library left at, or copied to, a permissive default) ; the gofmt multi-line
       `CheckOrigin` (body's first line `return true`):
       `grep -rnA1 -E 'CheckOrigin:[[:space:]]*func\([^)]*\)[[:space:]]*bool[[:space:]]*\{[[:space:]]*$' --include='*.go' . | grep -E -- '-[0-9]+-[[:space:]]*return[[:space:]]+true[[:space:]]*$'` ;
-      `grep -rlE 'gin\.(Default|New)\(' --include='*.go' . | xargs -r grep -L 'SetTrustedProxies'`
+      `grep --null -rlE 'gin\.(Default|New)\(' --include='*.go' . | xargs -0 -r grep -L 'SetTrustedProxies'`
       (gin engine trusting every proxy). Single-line shapes only: a multi-line `cors.Options{`
       or `jwt.Parse(` call needs reading
 - [ ] **Fuzz targets prove reach (§3) — MEDIUM for a parser of untrusted bytes** — each

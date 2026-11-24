@@ -80,7 +80,7 @@ def handle(e):
   - secrets wrapped in types whose `toString`/`repr` is masked and whose value is reachable
     only through one explicitly named accessor (Pydantic `SecretStr.get_secret_value()`,
     Rust `secrecy`'s `expose_secret()`), so every read of the secret is greppable
-    (in-memory handling: key-management guidance). OWASP: Code Review Guide v2.
+    (in-memory handling and what each language prints by default: key-management guidance). OWASP: Code Review Guide v2.
 - **Log injection (CWE-117)**: strip/escape CR/LF and control chars from
   user-controlled values before logging (forged entries, log-parser exploits —
   and never let user input reach a log4j-style lookup/format string: log
@@ -449,7 +449,7 @@ resources :x without only:/except: | spring-boot-starter-data-rest | @Repository
       HIGH: `grep -rnE '(finally|default|else)[^a-zA-Z]*[:{>-][^}]*return[[:space:]]+(true|True|ALLOW|Allow|PERMIT)|default[[:space:]]*->[[:space:]]*(true|ALLOW|PERMIT)' .`
 - [ ] **Are log lines free of raw payloads, raw session IDs and unbounded user strings, with
       stack traces, paths and host names only in the restricted sink (§2)?** MEDIUM:
-      `grep -rnE '(log|logger|logging)\.[a-z]+\(.*(session_?id|session\.getId\(\)|sessionid|request\.body|req\.body|raw_?payload)' . | grep -viE 'hash|hmac|sha256'` — and confirm a length cap in the logger configuration.
+      `grep -rnE '(log|logger|logging)\.[a-z]+\(.*(session_?id|session\.getId\(\)|sessionid|request\.body|req\.body|raw_?payload)' . | grep -viE '^[^:]+:[0-9]+:.*(hash|hmac|sha256)'` — and confirm a length cap in the logger configuration.
 - [ ] **Does security logging run server-side, with client- or partner-supplied log events
       validated as untrusted input and every sink in a log inventory (§2)?** MEDIUM. Client
       log intake routes to read: `grep -rnE '["'"'"'][^"'"'"']*/(client-?logs?|logs?|logging|telemetry)(/[a-z]*)?["'"'"']' .`
@@ -468,7 +468,7 @@ resources :x without only:/except: | spring-boot-starter-data-rest | @Repository
       output, not the source: `grep -rniE '<!--.*(todo|fixme|password|secret|api[_-]?key|internal|/admin|debug)|(//|/\*).*(todo|fixme|password|secret|api[_-]?key|internal)' .`
 - [ ] **Are full sensitive values masked in the UI until revealed, in-memory plaintext wiped
       after use, and nothing sensitive sent by SMS (§5)?** MEDIUM:
-      `grep -rnE '\{[^}]*\.(ssn|iban|account_?number|card_?number|pan|tax_?id|national_?id)[^}]*\}' . | grep -viE 'mask|redact|last4|reveal'` ; `grep -rniE '(sms|messages\.create|sendSms|send_sms|publish\(.*PhoneNumber).*(balance|account_?number|iban|ssn|diagnos|password|date_of_birth|dob)' .`
+      `grep -rnE '\{[^}]*\.(ssn|iban|account_?number|card_?number|pan|tax_?id|national_?id)[^}]*\}' . | grep -viE '^[^:]+:[0-9]+:.*(mask|redact|last4|reveal)'` ; `grep -rniE '(sms|messages\.create|sendSms|send_sms|publish\(.*PhoneNumber).*(balance|account_?number|iban|ssn|diagnos|password|date_of_birth|dob)' .`
 - [ ] **Is encryption placed where it protects (§5)** — no client-side "encryption" or
       encrypted URL IDs standing in for access control, message-level encryption across
       untrusted TLS-terminating hops, nothing unencrypted on public content-addressed

@@ -3,7 +3,7 @@ name: sota-privacy-compliance
 description: State-of-the-art privacy and compliance engineering guidance for building privacy-respecting systems and auditing existing code for privacy/compliance gaps. Use when work involves privacy, GDPR, PII, personal data, consent, data retention, deletion, DSAR (data subject access requests), SOC 2, ISO 27001, HIPAA, PCI DSS, compliance evidence, data residency/sovereignty, data classification, anonymization/pseudonymization, breach notification, or EU AI Act obligations — whether designing new data flows, implementing user-rights features (export/delete), preparing for an audit, or reviewing a codebase for places personal data is over-collected, under-protected, retained forever, or impossible to delete.
 license: CC-BY-4.0
 metadata:
-  source: martinholovsky/SOTA-skills@4c4837e3f891b4194623e467fec6294df4ff8d0a
+  source: martinholovsky/SOTA-skills@d5425a76c6ea9c2416bd42d3f031b5407a1f781d
   adapted-for: opencode
 ---
 
@@ -24,7 +24,8 @@ lives in wiki pages does not.
 
 > **This is engineering guidance, not legal advice.** Regulations change, vary by
 > jurisdiction, and turn on facts about your business that code review cannot see.
-> Regulatory facts below were verified against primary sources as of June 2026 —
+> Regulatory facts below were verified against primary sources as of the library's
+> last full verification sweep (2026-09-26; a section may carry a later date) —
 > re-verify deadlines and statuses before relying on them, and route legal
 > interpretation (lawful basis selection, contract terms, breach reportability
 > decisions) to qualified counsel or your DPO. This skill tells you how to build

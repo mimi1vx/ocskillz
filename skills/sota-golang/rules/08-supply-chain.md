@@ -69,7 +69,7 @@ code that runs at build time, adopting a dependency, and GODEBUG overrides (§2)
 - Don't `replace` to forks silently — audit `replace` directives (MEDIUM:
   hidden fork drift; CRITICAL if pointing at an unreviewed repo).
 - Secrets: never in code/env-committed files; load via env/secret manager at
-  start; `slog.LogValuer` redaction (`rules/04 §5`).
+  start; a redacting type for secret fields (`rules/04 §5`; `slog.LogValuer` alone still leaks).
 
 ## 2. GODEBUG: security behaviour set by go.mod
 
@@ -104,7 +104,7 @@ prints it for a main package — empty means current defaults.
       `GOFLAGS=-mod=mod` in CI — the §1 list) ; `go mod verify` ;
       `govulncheck ./...` ; `go mod tidy && git diff --exit-code go.mod go.sum`
 - [ ] **Frozen install thawed in CI (§1) — HIGH (it is in CI); a thawed install with checksum verification also off (`GOSUMDB=off`, a wildcard `GONOSUMDB`) is the same HIGH with no backstop** —
-      `grep -rnE -- '-mod=mod|go get |go mod tidy|go (install|run) [^[:space:]]+@' .github/workflows/ Makefile Dockerfile 2>/dev/null | grep -v 'git diff --exit-code'`
+      `grep -rnE -- '-mod=mod|go get |go mod tidy|go (install|run) [^[:space:]]+@' .github/workflows/ Makefile Dockerfile 2>/dev/null | grep -vE '^[^:]+:[0-9]+:.*(git diff --exit-code)'`
       (every hit is a step that may rewrite or bypass go.mod/go.sum) ; `ls -d vendor 2>/dev/null`
       (present: CI needs `go mod vendor` then `git diff --exit-code vendor/`)
 - [ ] **cgo binary without a build-time SBOM (§1) — MEDIUM, HIGH for a deployed service** —
@@ -120,4 +120,4 @@ prints it for a main package — empty means current defaults.
       `grep -rnE '^godebug|^//go:debug|GODEBUG|(tlssha1|tlsmlkem|tlssecpmlkem|x509[a-z0-9]+|httpmuxgo121|(tar|zip)insecurepath)=' --include='go.mod' --include='go.work' --include='*.go' --include='Dockerfile*' --include='*.y*ml' --include='*.env' --include='*.service' --include='Makefile' .`
       ; `grep -E '^go ' go.mod` (below the toolchain's minor = older GODEBUG defaults)
 - [ ] **Secrets in repo (§1)** —
-      `grep -rniE '(api[_-]?key|secret|password|token)[a-z0-9_]*"?[[:space:]]*(:=|=|:)[[:space:]]*"[A-Za-z0-9+/_-]{16,}"' --include='*.go' .`
+      `command grep -rniE '(api[_-]?key|secret|password|token)[a-z0-9_]*"?[[:space:]]*(:=|=|:)[[:space:]]*"[A-Za-z0-9+/_-]{16,}"' --include='*.go' .`
