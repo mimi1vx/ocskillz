@@ -2,6 +2,8 @@
 name: spec-to-plan
 description: "Transform project descriptions and feature requests into comprehensive specifications and actionable task lists. Use when the user wants to: (1) Create a specification from a project/feature description, (2) Generate a detailed plan with task breakdown, (3) Clarify requirements before implementation, (4) Convert ideas into structured development plans with progress tracking. Works with or without existing codebase files."
 license: MIT
+metadata:
+  adapted-from: mattpocock/skills@abeeaf9 (grilling, to-tickets)
 ---
 
 # Spec-to-Plan Skill
@@ -13,9 +15,9 @@ This skill guides the process of transforming project descriptions into clear sp
 The skill follows a five-phase workflow:
 
 1. **Create Initial Specification** - Analyze the feature/project description
-2. **Clarify Questions** - Identify and resolve all ambiguities
+2. **Clarify Questions** - Work the design tree in frontier rounds until no ambiguity remains
 3. **Generate Markdown Spec** - Produce detailed specification document (presented as `spec.md` in chat)
-4. **Create Comprehensive Todo** - Break down into implementable tasks
+4. **Create Comprehensive Todo** - Break down into vertical-slice tasks with blocking edges
 5. **Output Plan Markdown** - Generate final `plan.md` with progress tracking (presented in chat)
 
 **Final deliverables:** Both specification and plan content are provided as markdown in the conversation.
@@ -48,10 +50,29 @@ Load the prompt template from `references/phase1_spec_prompt.md` and fill in the
 
 ## Phase 2: Clarify Questions
 
-Ask all clarification questions at once. After receiving answers:
-- If more questions persist, ask them
-- Continue until no ambiguities remain
-- Do NOT assume any requirements beyond explicitly described details
+Interview the user relentlessly until you reach a shared understanding. Map the
+request as a **design tree**: every decision branches into the decisions that hang
+off it. Work the tree in **rounds**.
+
+The **frontier** is every decision whose prerequisites are already settled: the
+questions you can ask now without guessing at answers you haven't heard. Ask the
+whole frontier in one round, numbered, each with your recommended answer, then wait
+for the answers.
+
+```
+❓ **Q1** - **<question title>**: <question body, may include multiple choices>
+
+➡️ <your recommended answer>
+```
+
+- Word each question so "yes" accepts your recommended answer.
+- Each answered round reshapes the tree. Recompute the frontier and ask the next round. A question that depends on another question still open belongs to a later round.
+- **Facts are your job, decisions are the user's.** When a question needs a fact from the environment (files, tools, config), look it up yourself, or dispatch an `explore` subagent with a fresh context; don't block on it. Only questions downstream of the pending fact wait. Put each decision to the user.
+- Do NOT assume any requirements beyond explicitly described details.
+
+**Done when** the frontier is empty (every branch visited, nothing silently assumed)
+and the user confirms you have reached a shared understanding. Do not act before
+that confirmation.
 
 **Scope control:**
 - Ask the user about desired depth and scope when uncertain
@@ -80,12 +101,33 @@ Generate a detailed task breakdown that includes:
 - Status tracking with emojis (🟩 Done, 🟨 In Progress, 🟥 To Do)
 - Overall progress percentage at the top
 - Confirmed decisions section
-- Modular, minimal steps
+- Modular, minimal steps, cut as vertical slices (below)
 - Important implementation details
 - File-level changes (Add/Modify/Keep sections)
 - Progress calculations
 - Acceptance criteria, each with its verification and expected result
 - Coverage review
+
+**Tasks are tracer-bullet vertical slices.** Each task cuts a narrow but complete
+path through every layer it touches (schema, API, UI, tests), never a horizontal
+slice of one layer. Each task:
+
+- is demoable or verifiable on its own;
+- fits in a single fresh context window;
+- comes after any prefactoring that makes it easy ("make the change easy, then make the easy change");
+- lists the tasks that **block** it, or "None (can start immediately)".
+
+Use the project's domain vocabulary in task titles. Avoid file paths and code
+snippets inside task descriptions beyond the File-level Changes section; they go
+stale fast.
+
+**Wide refactors are the exception.** One mechanical change (rename a column, retype
+a shared symbol) whose blast radius fans across the codebase breaks thousands of call
+sites at once, so no vertical slice can land green. Sequence it as **expand–contract**:
+*expand* (add the new form beside the old so nothing breaks), *migrate* the call
+sites in batches sized by blast radius (per package or directory, each blocked by the
+expand), then *contract* (delete the old form once no caller remains, blocked by
+every migrate batch).
 
 **Verification plan.** Map every acceptance criterion to an automated test,
 command, or reproducible procedure, plus its expected result
@@ -135,9 +177,9 @@ Both the specification and plan are provided as markdown content in the conversa
 - If no files → work from description or ask for project details
 
 **Question iteration:**
-- Ask comprehensive questions in each round
+- Ask the whole frontier in each round, with a recommended answer for each
 - Wait for all answers before proceeding
-- Continue asking until complete clarity is achieved
+- Continue until the frontier is empty and the user confirms
 
 **Scope management:**
 - Always ask about desired depth when uncertain

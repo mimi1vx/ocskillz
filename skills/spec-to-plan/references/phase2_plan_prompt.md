@@ -15,6 +15,7 @@ Requirements for the plan:
 - Include dynamic tracking of overall progress percentage (at top).
 - Do NOT add extra scope or unnecessary complexity beyond explicitly clarified details.
 - Steps should be modular, elegant, minimal, and integrate seamlessly within the existing codebase.
+- Cut steps as vertical slices: each is verifiable on its own, fits one context window, and names the steps that block it.
 - Include important implementation details within the plan.
 - List files and parts of files that need to be changed.
 - Map every acceptance criterion to a test, command, or reproducible procedure and its expected result.
@@ -34,20 +35,21 @@ Markdown Template Example:
 
 ## Tasks
 
-- [ ] 🟥 **Step 1: Setup authentication module**
-  - [ ] 🟥 Create authentication service class
-  - [ ] 🟥 Implement JWT token handling
-  - [ ] 🟥 Connect service to existing database schema
+- [ ] 🟥 **Step 1: Login with valid credentials (end to end)**
+  - **Blocked by:** None (can start immediately)
+  - [ ] 🟥 Auth service and JWT handling
+  - [ ] 🟥 Login endpoint and page wired together
+  - [ ] 🟥 Test: valid credentials return a session
 
-- [ ] 🟥 **Step 2: Develop frontend login UI**
-  - [ ] 🟥 Design login page component (React)
-  - [ ] 🟥 Integrate component with auth endpoints
-  - [ ] 🟥 Add form validation and error handling
+- [ ] 🟥 **Step 2: Reject bad credentials with form feedback**
+  - **Blocked by:** Step 1
+  - [ ] 🟥 Invalid-credential path in the endpoint
+  - [ ] 🟥 Form validation and error display
 
-- [ ] 🟥 **Step 3: Add user session management**
-  - [ ] 🟥 Set up session cookies securely
-  - [ ] 🟥 Implement session renewal logic
-  - [ ] 🟥 Handle session expiry and logout process
+- [ ] 🟥 **Step 3: Session renewal, expiry, and logout**
+  - **Blocked by:** Step 1
+  - [ ] 🟥 Secure session cookies
+  - [ ] 🟥 Renewal, expiry, and logout handling
 
 ## Acceptance Criteria & Verification
 
